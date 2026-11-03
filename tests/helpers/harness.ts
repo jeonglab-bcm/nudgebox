@@ -15,13 +15,27 @@ import { FakeGitHub } from "./fake-github.ts";
 export const ORIGIN = "https://gh.bioinfolder.com";
 export const WEBHOOK_SECRET = "test-webhook-secret";
 
+/** One request the app made to the LLM (SPEC 12). */
+export type LlmCall = { system: string; user: string };
+
 export type Pushed = { endpoint: string; payload: { title: string; body: string; url?: string } };
 
-export async function start(opts: { staleDays?: number; oldDays?: number; now?: () => Date } = {}) {
+/** `llm: false` starts the app with no LLM configured (SPEC 12: no Summarize). */
+export async function start(opts: { staleDays?: number; oldDays?: number; now?: () => Date; llm?: false } = {}) {
 	const dir = mkdtempSync(join(tmpdir(), "ghd-"));
 	const github = new FakeGitHub();
 	const pushed: Pushed[] = [];
 	const gone = new Set<string>(); // push endpoints that answer 410 Gone
+	// in-memory stand-in for llm.bioinfolder.com: records prompts, answers "summary N"
+	const llm = { calls: [] as LlmCall[], failNext: false };
+	const summarize = async (prompt: LlmCall) => {
+		llm.calls.push(prompt);
+		if (llm.failNext) {
+			llm.failNext = false;
+			throw Object.assign(new Error("upstream unavailable"), { status: 503 });
+		}
+		return `- summary ${llm.calls.length}`;
+	};
 	const app: App = createApp({
 		config: { orgs: ["jeonglab-bcm", "hyunhwan-bcm"], staleDays: opts.staleDays ?? 3, oldDays: opts.oldDays ?? 30, timezone: "America/Chicago" },
 		origin: ORIGIN,
@@ -36,6 +50,7 @@ export async function start(opts: { staleDays?: number; oldDays?: number; now?: 
 			pushed.push({ endpoint: sub.endpoint, payload });
 		},
 		now: opts.now ?? (() => new Date()),
+		summarize: opts.llm === false ? undefined : summarize,
 	});
 	const server: Server = createServer(app.handler);
 	await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
@@ -84,6 +99,11 @@ export async function start(opts: { staleDays?: number; oldDays?: number; now?: 
 		return req(un ? "/api/unhide" : "/api/hide", { as, method: "POST", body: JSON.stringify({ kind, repo, number }) });
 	}
 
+	/** SPEC 12: the Summarize button. */
+	async function summary(as: string, kind: "pr" | "issue", repo: string, number: number) {
+		return req("/api/summarize", { as, method: "POST", body: JSON.stringify({ kind, repo, number }) });
+	}
+
 	async function webhook(event: string, payload: unknown, secret = WEBHOOK_SECRET) {
 		const body = JSON.stringify(payload);
 		const sig = "sha256=" + createHmac("sha256", secret).update(body).digest("hex");
@@ -104,7 +124,7 @@ export async function start(opts: { staleDays?: number; oldDays?: number; now?: 
 		server.close();
 		rmSync(dir, { recursive: true, force: true });
 	};
-	return { app, github, pushed, gone, base, dir, req, link, inbox, issues, hide, webhook, subscribe, close };
+	return { app, github, llm, pushed, gone, base, dir, req, link, inbox, issues, hide, summary, webhook, subscribe, close };
 }
 
 /** "owner/repo#n" ids per section, for compact assertions. */

@@ -63,7 +63,14 @@ async function fakeGitHub(opts: { allowMergeCommit?: boolean; prState?: string; 
 				case "PUT /repos/jeonglab-bcm/labbot/pulls/12/merge": return ok({ merged: true });
 				case "POST /repos/jeonglab-bcm/labbot/pulls/12/reviews": return ok({ id: 1 });
 				case "POST /repos/jeonglab-bcm/labbot/issues/12/comments": return ok({ id: 2 }, 201);
-				case "GET /repos/jeonglab-bcm/labbot/pulls/12": return ok({ head: { sha: "abc123" } });
+				case "GET /repos/jeonglab-bcm/labbot/pulls/12": return ok({ head: { sha: "abc123" }, body: "Adds outloud tools." });
+				// SPEC 12: what a summary reads
+				case "GET /repos/jeonglab-bcm/labbot/pulls/12/files": return ok([{ filename: "src/mail.ts", patch: "@@ -1 +1 @@\n+send()" }, { filename: "logo.png" }]);
+				case "GET /repos/jeonglab-bcm/labbot/pulls/12/reviews": return ok([{ user: { login: "hwan" }, body: "Needs a test." }, { user: { login: "hwan" }, body: "" }]);
+				case "GET /repos/jeonglab-bcm/labbot/pulls/12/comments": return ok([{ user: { login: "hwan" }, body: "Typo here.", path: "src/mail.ts" }]);
+				case "GET /repos/jeonglab-bcm/labbot/issues/12/comments": return ok([{ user: { login: "kelly" }, body: "Ready for another look." }]);
+				case "GET /repos/jeonglab-bcm/labbot/issues/80": return ok({ body: "Crashes on empty ROIs." });
+				case "GET /repos/jeonglab-bcm/labbot/issues/80/comments": return ok([{ user: { login: "jorge" }, body: "Same here." }]);
 				case "GET /repos/jeonglab-bcm/labbot/actions/runs":
 					return ok({ total_count: 3, workflow_runs: [{ id: 101, conclusion: "failure" }, { id: 102, conclusion: "success" }, { id: 103, conclusion: "timed_out" }] });
 				case "POST /repos/jeonglab-bcm/labbot/actions/runs/101/rerun-failed-jobs":
@@ -181,6 +188,24 @@ test("actions use the person's token; merge follows the repo's allowed method", 
 		assert.equal(writes.find((s) => s.path.endsWith("/comments"))!.body.body, "LGTM");
 		assert.deepEqual(writes.filter((s) => s.path.includes("rerun")).map((s) => s.path),
 			["/repos/jeonglab-bcm/labbot/actions/runs/101/rerun-failed-jobs", "/repos/jeonglab-bcm/labbot/actions/runs/103/rerun-failed-jobs"]);
+	} finally {
+		f.close();
+	}
+});
+
+test("12. summary content is read with the App's token: description, diffs, reviews, comments", async () => {
+	const f = await fakeGitHub();
+	try {
+		const pr = await f.gh.prContent("jeonglab-bcm/labbot", 12);
+		assert.equal(pr.body, "Adds outloud tools.");
+		assert.deepEqual(pr.files, [{ path: "src/mail.ts", patch: "@@ -1 +1 @@\n+send()" }, { path: "logo.png", patch: "" }]);
+		assert.deepEqual(pr.comments, [
+			{ author: "kelly", body: "Ready for another look." },
+			{ author: "hwan", body: "Needs a test." }, // empty review bodies are dropped
+			{ author: "hwan", body: "src/mail.ts: Typo here." },
+		]);
+		assert.deepEqual(await f.gh.issueContent("jeonglab-bcm/labbot", 80), { body: "Crashes on empty ROIs.", comments: [{ author: "jorge", body: "Same here." }] });
+		assert.ok(f.seen.filter((s) => s.path.startsWith("/repos/")).every((s) => s.auth === "token inst-tok"));
 	} finally {
 		f.close();
 	}

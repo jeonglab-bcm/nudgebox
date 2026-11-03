@@ -14,6 +14,7 @@ import { readFileSync } from "node:fs";
 import webpush from "web-push";
 import { parse } from "yaml";
 import { createApp } from "./app.ts";
+import { createSummarizer } from "./llm.ts";
 import { OctokitGitHub } from "./octokit-github.ts";
 import { publicOnly } from "./public.ts";
 
@@ -47,6 +48,13 @@ const github = new OctokitGitHub({
 	log,
 });
 
+// SPEC 12: AI summary through the lab LLM, only when Nudgebox has its own bif_ token
+const llmKey = process.env.LLM_API_KEY;
+const summarize = llmKey
+	? createSummarizer({ baseUrl: String(cfg.llm?.baseUrl ?? "https://llm.bioinfolder.com/v1"), model: String(cfg.llm?.model ?? "qwen3.8-flash-next"), apiKey: llmKey })
+	: undefined;
+log(summarize ? `AI summary on (${cfg.llm?.model ?? "qwen3.8-flash-next"})` : "AI summary off: no LLM_API_KEY");
+
 const app = createApp({
 	config,
 	origin,
@@ -61,6 +69,7 @@ const app = createApp({
 	},
 	now: () => new Date(),
 	log,
+	summarize,
 });
 
 const host = process.env.LISTEN_HOST ?? "0.0.0.0";

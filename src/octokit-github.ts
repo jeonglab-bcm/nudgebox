@@ -9,7 +9,7 @@
  *   permissions.
  */
 import { App, Octokit } from "octokit";
-import type { Checks, GitHubPort, Issue, PullRequest, ReviewDecision, UserTokens } from "./github.ts";
+import type { Checks, GitHubPort, Issue, ItemContent, PullRequest, ReviewDecision, UserTokens } from "./github.ts";
 
 export interface OctokitGitHubOptions {
 	appId: string;
@@ -247,6 +247,40 @@ export class OctokitGitHub implements GitHubPort {
 		);
 		const i = r.repository?.issueOrPullRequest;
 		return i && i.__typename === "Issue" && i.state === "OPEN" ? toIssue(i) : null;
+	}
+
+	/** SPEC 12: what a PR summary reads. Conversation comments, then reviews, then line comments. */
+	async prContent(repo: string, number: number): Promise<ItemContent> {
+		const [owner, name] = repo.split("/");
+		const o = await this.installationFor(owner);
+		const q = { owner, repo: name, per_page: 100 };
+		const [{ data: pr }, files, comments, reviews, lines] = await Promise.all([
+			o.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", { owner, repo: name, pull_number: number }),
+			o.paginate("GET /repos/{owner}/{repo}/pulls/{pull_number}/files", { ...q, pull_number: number }),
+			o.paginate("GET /repos/{owner}/{repo}/issues/{issue_number}/comments", { ...q, issue_number: number }),
+			o.paginate("GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews", { ...q, pull_number: number }),
+			o.paginate("GET /repos/{owner}/{repo}/pulls/{pull_number}/comments", { ...q, pull_number: number }),
+		]);
+		const who = (c: { user?: { login: string } | null }) => c.user?.login ?? "ghost";
+		return {
+			body: pr.body ?? "",
+			files: files.map((f) => ({ path: f.filename, patch: f.patch ?? "" })),
+			comments: [
+				...comments.map((c) => ({ author: who(c), body: c.body ?? "" })),
+				...reviews.filter((r) => r.body).map((r) => ({ author: who(r), body: r.body })),
+				...lines.map((c) => ({ author: who(c), body: `${c.path}: ${c.body}` })),
+			],
+		};
+	}
+
+	async issueContent(repo: string, number: number): Promise<ItemContent> {
+		const [owner, name] = repo.split("/");
+		const o = await this.installationFor(owner);
+		const [{ data: issue }, comments] = await Promise.all([
+			o.request("GET /repos/{owner}/{repo}/issues/{issue_number}", { owner, repo: name, issue_number: number }),
+			o.paginate("GET /repos/{owner}/{repo}/issues/{issue_number}/comments", { owner, repo: name, issue_number: number, per_page: 100 }),
+		]);
+		return { body: issue.body ?? "", comments: comments.map((c) => ({ author: c.user?.login ?? "ghost", body: c.body ?? "" })) };
 	}
 
 	// -- actions as the person -----------------------------------------------

@@ -9,3 +9,8 @@ staleDays: 3          # SPEC 7.3: a PR with no activity for this many days is st
 oldDays: 30           # SPEC 5: no activity this long folds a PR/issue into "Old" (quiet)
 timezone: America/Chicago
 digestHour: 9         # daily stale digest at/after 09:00 in that timezone
+# SPEC 12: AI summary. The key is LLM_API_KEY in .env (a bif_ token from
+# portal.bioinfolder.com/tokens); without it there is no Summarize button.
+llm:
+  baseUrl: https://llm.bioinfolder.com/v1
+  model: qwen3.8-flash-next

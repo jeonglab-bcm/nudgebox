@@ -69,6 +69,29 @@ async function setHidden(kind, item, hide) {
 	} else toast(`Failed (${status})`);
 }
 
+// SPEC 12: AI summaries shown on this page, by "kind:repo#n" (kept across re-renders)
+const summaries = new Map();
+const plain = (s) => s.replace(/\*\*(.+?)\*\*/g, "$1").replace(/`([^`]+)`/g, "$1");
+
+function summaryBox(kind, item) {
+	const s = summaries.get(`${kind}:${item.repo}#${item.number}`);
+	if (!s) return null;
+	const lines = s.split("\n").map((l) => l.trim()).filter(Boolean);
+	return el("div", { class: "summary" }, el("ul", {}, lines.map((l) => el("li", {}, plain(l.replace(/^[-*•]\s*/, ""))))));
+}
+
+async function summarize(kind, item) {
+	const { status, data: d } = await api("/api/summarize", { kind, repo: item.repo, number: item.number });
+	if (status === 200) {
+		summaries.set(`${kind}:${item.repo}#${item.number}`, d.summary);
+		render();
+	} else toast(d.error || `Summary failed (${status})`);
+}
+
+const summarizeButton = (kind, item) => (data[kind]?.summarize
+	? el("button", { onclick: busy(async (e) => { e.target.textContent = "Summarizing…"; await summarize(kind, item); e.target.textContent = "Summarize"; }) }, "Summarize")
+	: null);
+
 function prRow(pr, opts = {}) {
 	const mine = pr.author.toLowerCase() === data.login.toLowerCase();
 	const [ct, cc] = CHECKS[pr.checks] || CHECKS.none;
@@ -81,11 +104,13 @@ function prRow(pr, opts = {}) {
 			rv ? el("span", { class: `chip ${rv[1]}` }, rv[0]) : null,
 			el("span", { class: `chip ${cc}` }, ct),
 			pr.mergeable === "CONFLICTING" ? el("span", { class: "chip bad" }, "conflicts") : null),
+		summaryBox("pr", pr),
 		el("div", { class: "actions" },
 			!mine ? el("button", { onclick: busy(() => doAction(pr, "approve")) }, "Approve") : null,
 			el("button", { class: mine && ready(pr) ? "primary" : "", onclick: busy(() => confirm(`Merge ${pr.repo}#${pr.number}?\n\n${pr.title}`) && doAction(pr, "merge", { confirm: true })) }, "Merge"),
 			pr.checks === "failure" ? el("button", { onclick: busy(() => doAction(pr, "rerun")) }, "Re-run failed") : null,
 			el("button", { onclick: busy(async () => { const b = prompt(`Comment on ${pr.repo}#${pr.number}`); if (b && b.trim()) await doAction(pr, "comment", { body: b }); }) }, "Comment"),
+			summarizeButton("pr", pr),
 			el("button", { onclick: busy(() => setHidden("pr", pr, !opts.hidden)) }, opts.hidden ? "Unhide" : "Hide")));
 }
 
@@ -97,7 +122,8 @@ function issueRow(i, opts = {}) {
 			i.comments ? el("span", { class: "chip" }, `${i.comments} comment${i.comments > 1 ? "s" : ""}`) : null,
 			i.assignees.length ? el("span", { class: "chip" }, `→ ${i.assignees.join(", ")}`) : null,
 			i.labels.map((l) => el("span", { class: "chip label" }, l))),
-		el("div", { class: "actions" }, el("button", { onclick: busy(() => setHidden("issue", i, !opts.hidden)) }, opts.hidden ? "Unhide" : "Hide")));
+		summaryBox("issue", i),
+		el("div", { class: "actions" }, summarizeButton("issue", i), el("button", { onclick: busy(() => setHidden("issue", i, !opts.hidden)) }, opts.hidden ? "Unhide" : "Hide")));
 }
 
 function fold(title, items, row) {

@@ -36,18 +36,29 @@ Jeong Lab members with a lab (Keycloak) login. Each person sees their own view.
 
 ## 5. The inbox (main page)
 
-One list, phone-friendly, in four sections, in this order:
+A switch at the top chooses **PRs** or **Issues** (issues: section 11).
 
-| Section | A PR is here when |
+PRs are grouped by status, shown as **tabs across the top**, each with a count:
+
+| Tab | A PR is here when |
 |---|---|
 | **Needs you** | a review is requested from you (or a team you are in); or it is your PR and it is ready to merge (checks passed, not blocked, approved or no review required); or it is your PR and changes were requested; or it is your PR and it has merge conflicts |
 | **Waiting on others** | it is your PR and it waits for a review or for running checks |
 | **CI failing** | any visible PR whose latest checks failed (yours first) |
-| **Everything else** | every other open, visible PR |
+| **All** | every open, visible PR (the three above plus everything else) |
 
-A PR appears once, in the first section that matches. Each row shows repo, number,
-title, author, age, review state, checks state, and draft status. Sorted newest
-activity first within a section.
+A PR belongs to the first status that matches. A **repo filter** next to the tabs
+narrows every tab to one repository. Each row shows repo, number, title, author,
+age, review state, checks state, and draft status. Newest activity first.
+
+**Old and hidden (both per person, both quiet):**
+
+- A PR with no activity for `oldDays` days (`config.yaml`, default 30) moves to an
+  **Old** group at the bottom, folded by default.
+- **Hide** on a row hides that PR for you until something new happens on it (a
+  comment, push, review or CI change bumps its activity time); then it is back by
+  itself. Hidden PRs are listed in a folded **Hidden** group with **Unhide**.
+- Old and hidden PRs send no push and are left out of the stale digest.
 
 ## 6. Actions
 
@@ -74,6 +85,8 @@ gone is removed. Triggers:
    PRs they author or are asked to review with no activity for `staleDays` days.
    `staleDays` is set in `config.yaml` (default 3).
 
+Hidden and old items (section 5) send nothing. Issue notifications: section 11.
+
 No Slack, no email.
 
 ## 8. Freshness
@@ -90,4 +103,21 @@ The vhost and sidecar live in `bioinfolder-srv`; this repo holds the app.
 
 ## 10. Out of scope (for now)
 
-Issues, Slack/Alpy, email, self-hosted runner health, stacked-PR tools, a native app.
+Slack/Alpy, email, self-hosted runner health, stacked-PR tools, a native app, acting
+on issues.
+
+## 11. Issues
+
+- **Issues** (the switch at the top) lists every open issue (not PRs) in the
+  repositories you can see (same rule as section 4), newest activity first, with the
+  same repo filter, **Hide**, **Old** and **Hidden** behaviour as PRs.
+- **Read-only**: nothing on an issue can be changed from here (Hide is only your view).
+- **Push** (unless the issue is hidden or old for you), to linked lab members who can
+  see the repo:
+  1. **Assigned to you.**
+  2. **@mentioned** in the issue's text or a new comment.
+  3. **A new comment on an issue you opened or are assigned to.**
+
+  Never for your own action (your own comment, assigning yourself). One push per
+  event per person, even if several triggers match.
+- Kept current like PRs: webhooks (`issues`, `issue_comment`) plus the 10-minute sync.

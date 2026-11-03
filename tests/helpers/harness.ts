@@ -17,13 +17,13 @@ export const WEBHOOK_SECRET = "test-webhook-secret";
 
 export type Pushed = { endpoint: string; payload: { title: string; body: string; url?: string } };
 
-export async function start(opts: { staleDays?: number; now?: () => Date } = {}) {
+export async function start(opts: { staleDays?: number; oldDays?: number; now?: () => Date } = {}) {
 	const dir = mkdtempSync(join(tmpdir(), "ghd-"));
 	const github = new FakeGitHub();
 	const pushed: Pushed[] = [];
 	const gone = new Set<string>(); // push endpoints that answer 410 Gone
 	const app: App = createApp({
-		config: { orgs: ["jeonglab-bcm", "hyunhwan-bcm"], staleDays: opts.staleDays ?? 3, timezone: "America/Chicago" },
+		config: { orgs: ["jeonglab-bcm", "hyunhwan-bcm"], staleDays: opts.staleDays ?? 3, oldDays: opts.oldDays ?? 30, timezone: "America/Chicago" },
 		origin: ORIGIN,
 		github,
 		webhookSecret: WEBHOOK_SECRET,
@@ -65,7 +65,23 @@ export async function start(opts: { staleDays?: number; now?: () => Date } = {})
 	async function inbox(as: string) {
 		const r = await req("/api/inbox", { as });
 		if (r.status !== 200) throw new Error(`inbox ${r.status}: ${await r.text()}`);
-		return (await r.json()) as { sections: { id: string; prs: { repo: string; number: number }[] }[] };
+		return (await r.json()) as {
+			sections: { id: string; prs: { repo: string; number: number }[] }[];
+			old: { repo: string; number: number }[];
+			hidden: { repo: string; number: number }[];
+		};
+	}
+
+	/** SPEC 11: the Issues tab. */
+	async function issues(as: string) {
+		const r = await req("/api/issues", { as });
+		if (r.status !== 200) throw new Error(`issues ${r.status}: ${await r.text()}`);
+		return (await r.json()) as { items: { repo: string; number: number }[]; old: { repo: string; number: number }[]; hidden: { repo: string; number: number }[] };
+	}
+
+	/** SPEC 5: Hide / Unhide one PR or issue for `as`. */
+	async function hide(as: string, kind: "pr" | "issue", repo: string, number: number, un = false) {
+		return req(un ? "/api/unhide" : "/api/hide", { as, method: "POST", body: JSON.stringify({ kind, repo, number }) });
 	}
 
 	async function webhook(event: string, payload: unknown, secret = WEBHOOK_SECRET) {
@@ -88,7 +104,7 @@ export async function start(opts: { staleDays?: number; now?: () => Date } = {})
 		server.close();
 		rmSync(dir, { recursive: true, force: true });
 	};
-	return { app, github, pushed, gone, base, dir, req, link, inbox, webhook, subscribe, close };
+	return { app, github, pushed, gone, base, dir, req, link, inbox, issues, hide, webhook, subscribe, close };
 }
 
 /** "owner/repo#n" ids per section, for compact assertions. */

@@ -70,3 +70,19 @@ llm-proxy's unpublished trusted `:8081` in bioinfolder-srv.
 Node 24 runs TypeScript directly when it uses only erasable syntax
 (`erasableSyntaxOnly` in tsconfig enforces it), so the image runs `node src/server.ts`
 and tsx/typescript stay dev-only.
+
+## 2026-11-03: Tabs, hiding old PRs, and issues (after first use)
+
+First use: AURORA's only open PR was in the inbox but buried under ~40 others in one
+long list. Dr. Jeong's answers:
+
+- Status tabs (Needs you · Waiting · CI failing · All) plus a repo filter, rather than
+  one tab per repo (too many repos for a row of tabs on a phone).
+- Auto-fold PRs with no activity for 30 days into "Old"; configurable.
+- Hide = until something changes, not a fixed snooze, so nothing is lost silently.
+- Hidden and old items send no push and skip the stale digest.
+- Issues: a separate tab, all open issues, **read-only**; push when assigned,
+  @mentioned, or someone comments on an issue you opened or are assigned to.
+
+The App needs the `issues` webhook event added (it already has Issues: read, so no
+installation has to re-approve).

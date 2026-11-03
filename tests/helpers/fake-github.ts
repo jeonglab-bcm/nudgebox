@@ -3,12 +3,13 @@
  * users, repo access, teams and PRs here, and read back what the app asked GitHub
  * to do. No network.
  */
-import type { GitHubPort, PullRequest, UserTokens } from "../../src/github.ts";
+import type { GitHubPort, Issue, PullRequest, UserTokens } from "../../src/github.ts";
 
 export type Call = { op: string; token?: string; repo?: string; number?: number; body?: string };
 
 export class FakeGitHub implements GitHubPort {
 	prs = new Map<string, PullRequest>(); // key "owner/repo#n"
+	issues = new Map<string, Issue>(); // key "owner/repo#n"
 	access = new Map<string, Set<string>>(); // github login -> repos it can see
 	teams = new Map<string, string[]>(); // github login -> "org/team" slugs
 	codes = new Map<string, string>(); // oauth code -> github login
@@ -35,6 +36,20 @@ export class FakeGitHub implements GitHubPort {
 		return full;
 	}
 
+	addIssue(i: Partial<Issue> & Pick<Issue, "repo" | "number" | "author">): Issue {
+		const full: Issue = {
+			title: `Issue ${i.number}`,
+			url: `https://github.com/${i.repo}/issues/${i.number}`,
+			assignees: [],
+			labels: [],
+			comments: 0,
+			updatedAt: new Date().toISOString(),
+			...i,
+		};
+		this.issues.set(`${full.repo}#${full.number}`, full);
+		return full;
+	}
+
 	grant(login: string, ...repos: string[]) {
 		const s = this.access.get(login) ?? new Set();
 		repos.forEach((r) => s.add(r));
@@ -47,7 +62,7 @@ export class FakeGitHub implements GitHubPort {
 		return login;
 	}
 
-	private issue(login: string): UserTokens {
+	private mint(login: string): UserTokens {
 		this.issued++;
 		return {
 			login,
@@ -61,12 +76,12 @@ export class FakeGitHub implements GitHubPort {
 		const login = this.codes.get(code);
 		if (!login) throw Object.assign(new Error("bad_verification_code"), { status: 400 });
 		this.calls.push({ op: "exchangeCode" });
-		return this.issue(login);
+		return this.mint(login);
 	}
 
 	async refresh(refreshToken: string): Promise<UserTokens> {
 		this.calls.push({ op: "refresh" });
-		return this.issue(refreshToken.split(":")[1]);
+		return this.mint(refreshToken.split(":")[1]);
 	}
 
 	async reposForUser(token: string): Promise<string[]> {
@@ -84,6 +99,15 @@ export class FakeGitHub implements GitHubPort {
 	async pullRequest(repo: string, number: number): Promise<PullRequest | null> {
 		const p = this.prs.get(`${repo}#${number}`);
 		return p ? { ...p } : null;
+	}
+
+	async openIssues(): Promise<Issue[]> {
+		return [...this.issues.values()].map((i) => ({ ...i }));
+	}
+
+	async issue(repo: string, number: number): Promise<Issue | null> {
+		const i = this.issues.get(`${repo}#${number}`);
+		return i ? { ...i } : null;
 	}
 
 	private act(op: string, token: string, repo: string, number: number, body?: string) {

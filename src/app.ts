@@ -19,6 +19,7 @@ import { verifySignature } from "./webhook.ts";
 export interface Config {
 	orgs: string[]; // accounts the GitHub App is installed on
 	staleDays: number; // SPEC 7.3
+	oldDays?: number; // SPEC 5: no activity this long -> "Old" (default 30)
 	timezone: string; // for the 09:00 digest
 }
 

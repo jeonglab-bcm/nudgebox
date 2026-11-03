@@ -9,7 +9,7 @@
  *   permissions.
  */
 import { App, Octokit } from "octokit";
-import type { Checks, GitHubPort, PullRequest, ReviewDecision, UserTokens } from "./github.ts";
+import type { Checks, GitHubPort, Issue, PullRequest, ReviewDecision, UserTokens } from "./github.ts";
 
 export interface OctokitGitHubOptions {
 	appId: string;
@@ -201,6 +201,14 @@ export class OctokitGitHub implements GitHubPort {
 		);
 		const p = r.repository?.pullRequest;
 		return p && p.state === "OPEN" ? toPullRequest(p) : null;
+	}
+
+	async openIssues(): Promise<Issue[]> {
+		throw new Error("not implemented");
+	}
+
+	async issue(_repo: string, _number: number): Promise<Issue | null> {
+		throw new Error("not implemented");
 	}
 
 	// -- actions as the person -----------------------------------------------

@@ -23,6 +23,18 @@ export interface PullRequest {
 	mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
 }
 
+export interface Issue {
+	repo: string; // "owner/name"
+	number: number;
+	title: string;
+	url: string;
+	author: string; // GitHub login
+	assignees: string[]; // GitHub logins
+	labels: string[];
+	comments: number;
+	updatedAt: string; // ISO time of the last activity
+}
+
 export interface UserTokens {
 	login: string;
 	accessToken: string;
@@ -40,6 +52,8 @@ export interface GitHubPort {
 	// data, using the App's installation tokens
 	openPullRequests(): Promise<PullRequest[]>;
 	pullRequest(repo: string, number: number): Promise<PullRequest | null>;
+	openIssues(): Promise<Issue[]>; // open issues only, never PRs (SPEC 11)
+	issue(repo: string, number: number): Promise<Issue | null>; // null when closed, gone or a PR
 	// actions, as the person (errors carry GitHub's `status` and message)
 	merge(token: string, repo: string, number: number): Promise<void>;
 	approve(token: string, repo: string, number: number): Promise<void>;

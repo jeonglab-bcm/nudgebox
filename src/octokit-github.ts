@@ -19,6 +19,7 @@ export interface OctokitGitHubOptions {
 	accounts: string[]; // installation accounts to read, e.g. ["jeonglab-bcm", "hyunhwan-bcm"]
 	apiUrl?: string; // default https://api.github.com (tests point this at a fake)
 	webUrl?: string; // default https://github.com (OAuth token endpoint)
+	log?: (msg: string) => void;
 }
 
 const PR_FIELDS = `
@@ -114,6 +115,7 @@ export class OctokitGitHub implements GitHubPort {
 			}
 		}
 		const id = this.installations.get(key);
+		if (!id) this.installations.clear(); // re-list next time: it may have been installed since
 		if (!id) fail(404, `the GitHub App is not installed on ${account}`);
 		return (await this.app.getInstallationOctokit(id)) as unknown as Octokit;
 	}
@@ -175,7 +177,18 @@ export class OctokitGitHub implements GitHubPort {
 
 	async openPullRequests(): Promise<PullRequest[]> {
 		const out: PullRequest[] = [];
-		for (const account of this.opts.accounts) out.push(...(await searchOpenPullRequests(await this.installationFor(account), account)));
+		for (const account of this.opts.accounts) {
+			let o: Octokit;
+			try {
+				o = await this.installationFor(account);
+			} catch (e) {
+				// one account without the App must not hide every other account's PRs
+				if ((e as { status?: number }).status !== 404) throw e;
+				this.opts.log?.(`skipping ${account}: ${(e as Error).message}`);
+				continue;
+			}
+			out.push(...(await searchOpenPullRequests(o, account)));
+		}
 		return out;
 	}
 

@@ -44,6 +44,7 @@ const github = new OctokitGitHub({
 	clientId: need("GITHUB_CLIENT_ID"),
 	clientSecret: need("GITHUB_CLIENT_SECRET"),
 	accounts: config.orgs,
+	log,
 });
 
 const app = createApp({

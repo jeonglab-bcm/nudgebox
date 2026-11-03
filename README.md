@@ -8,8 +8,16 @@ browser and an iPhone home screen, with push notifications.
 
 ## Status
 
-Spec and acceptance tests only. The tests define the app and all fail until it is
-built (`src/app.ts` is a stub).
+The app passes all acceptance tests against a fake GitHub. Not deployed yet: the real
+GitHub adapter (Octokit), the server entry point and the Docker/nginx setup come next.
+
+| Path | What |
+|---|---|
+| `src/app.ts` | HTTP routes, linking GitHub, actions, webhooks, push, sync and stale digest |
+| `src/inbox.ts` | which section a PR is in (SPEC 5) |
+| `src/store.ts` | SQLite: linked people (tokens sealed), PRs, devices, notified marks |
+| `src/github.ts` | the interface to GitHub |
+| `public/` | the web app: page, script, service worker, manifest, icons |
 
 ## Tests
 

@@ -47,8 +47,10 @@ What is missing is one view behind the lab's own login, on Mac and iPhone.
 - **Web Push** with the `web-push` library (VAPID). iOS supports Web Push for web apps
   added to the Home Screen since iOS 16.4 (WebKit, "Web Push for Web Apps on iOS and
   iPadOS", 2023); Safari on macOS since 16. No App Store app needed.
-- **SQLite** (`better-sqlite3`): one file, enough for a lab; easy to back up with the
-  rest of anjanda.
+- **SQLite** (`node:sqlite`, built into Node 24): one file, enough for a lab; easy to
+  back up with the rest of anjanda. Chosen over `better-sqlite3` while building
+  (2026-11-02): no native module to compile, and it ran without an experimental
+  warning on Node 24.18.
 - **Keycloak via the oauth2-proxy sidecar**: the pattern every bioinfolder app uses.
 - **Webhooks plus a 10-minute sync**: GitHub does not retry failed deliveries
   automatically, so a periodic sync is the safety net.

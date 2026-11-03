@@ -43,7 +43,7 @@ PRs are grouped by status, shown as **tabs across the top**, each with a count:
 | Tab | A PR is here when |
 |---|---|
 | **Needs you** | a review is requested from you (or a team you are in); or it is your PR and it is ready to merge (checks passed, not blocked, approved or no review required); or it is your PR and changes were requested; or it is your PR and it has merge conflicts |
-| **Waiting on others** | it is your PR and it waits for a review or for running checks |
+| **WIP** | it is your PR and it is a draft, or it waits for a review or for running checks |
 | **CI failing** | any visible PR whose latest checks failed (yours first) |
 | **All** | every open, visible PR (the three above plus everything else) |
 

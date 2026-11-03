@@ -76,7 +76,7 @@ and tsx/typescript stay dev-only.
 First use: AURORA's only open PR was in the inbox but buried under ~40 others in one
 long list. Dr. Jeong's answers:
 
-- Status tabs (Needs you · Waiting · CI failing · All) plus a repo filter, rather than
+- Status tabs (Needs you · WIP · CI failing · All; "WIP" was "Waiting", renamed as clearer) plus a repo filter, rather than
   one tab per repo (too many repos for a row of tabs on a phone).
 - Auto-fold PRs with no activity for 30 days into "Old"; configurable.
 - Hide = until something changes, not a fixed snooze, so nothing is lost silently.

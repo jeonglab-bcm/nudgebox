@@ -27,6 +27,8 @@ export async function start(opts: { staleDays?: number; now?: () => Date } = {})
 		origin: ORIGIN,
 		github,
 		webhookSecret: WEBHOOK_SECRET,
+		vapidPublicKey: "BTestVapidPublicKey-not-a-real-key-0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJ",
+		githubClientId: "Iv1.test",
 		encryptionKey: randomBytes(32),
 		dbPath: join(dir, "ghd.sqlite"),
 		push: async (sub, payload) => {

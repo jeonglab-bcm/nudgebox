@@ -10,7 +10,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { GitHubPort, PullRequest } from "./github.ts";
+import type { GitHubPort, Issue, PullRequest } from "./github.ts";
 import { Store, type LinkedUser } from "./store.ts";
 import { seal, unseal } from "./crypto.ts";
 import { buildInbox, isMine, reviewRequested, type Viewer } from "./inbox.ts";
@@ -136,7 +136,35 @@ export function createApp(opts: AppOptions): App {
 		return { viewer: { login: u.login, teams: a.teams }, repos: a.repos };
 	}
 
-	const visible = (repos: Set<string>) => (p: PullRequest) => repos.has(p.repo.toLowerCase());
+	const visible = (repos: Set<string>) => (p: { repo: string }) => repos.has(p.repo.toLowerCase());
+	const inConfig = (repo: string) => config.orgs.some((o) => o.toLowerCase() === repo.split("/")[0].toLowerCase());
+	const newest = (a: { updatedAt: string }, b: { updatedAt: string }) => b.updatedAt.localeCompare(a.updatedAt);
+
+	type Kind = "pr" | "issue";
+	type Item = { repo: string; number: number; updatedAt: string };
+
+	/** SPEC 5: "hidden" (Hide, until new activity), "old" (idle oldDays) or null. */
+	function quietness(kind: Kind, item: Item, hidden: Map<string, string>): "hidden" | "old" | null {
+		const at = hidden.get(`${kind}:${item.repo}#${item.number}`);
+		if (at && Date.parse(item.updatedAt) <= Date.parse(at)) return "hidden";
+		if (opts.now().getTime() - Date.parse(item.updatedAt) > (config.oldDays ?? 30) * DAY_MS) return "old";
+		return null;
+	}
+
+	const isQuiet = (lab: string, kind: Kind, item: Item) => quietness(kind, item, store.hiddenFor(lab)) !== null;
+
+	/** Split visible items into the live list and the folded Old / Hidden groups. */
+	function fold<T extends Item>(lab: string, kind: Kind, items: T[]) {
+		const hidden = store.hiddenFor(lab);
+		const out = { live: [] as T[], old: [] as T[], hidden: [] as T[] };
+		for (const i of items) {
+			const q = quietness(kind, i, hidden);
+			(q === "hidden" ? out.hidden : q === "old" ? out.old : out.live).push(i);
+		}
+		out.old.sort(newest);
+		out.hidden.sort(newest);
+		return out;
+	}
 
 	// -- push --------------------------------------------------------------------
 
@@ -177,7 +205,9 @@ export function createApp(opts: AppOptions): App {
 				}
 			}
 		}
-		for (const lab of targets) await notify(lab, { title: "Review requested", body: `${short(pr)}: ${pr.title} (by ${pr.author})`, url: pr.url });
+		for (const lab of targets) {
+			if (!isQuiet(lab, "pr", pr)) await notify(lab, { title: "Review requested", body: `${short(pr)}: ${pr.title} (by ${pr.author})`, url: pr.url });
+		}
 	}
 
 	async function onChecks(repo: string, numbers: number[]) {
@@ -187,9 +217,71 @@ export function createApp(opts: AppOptions): App {
 			if (!store.markOnce(`ci:${repo}#${n}@${pr.headSha}`, opts.now().toISOString())) continue;
 			const word = pr.checks === "success" ? "passed" : "failed";
 			for (const u of store.usersByLogin(pr.author)) {
+				if (isQuiet(u.labUser, "pr", pr)) continue;
 				await notify(u.labUser, { title: `CI ${word}`, body: `${short(pr)}: checks ${word}. ${pr.title}`, url: pr.url });
 			}
 		}
+	}
+
+	// -- issues (SPEC 11) --------------------------------------------------------
+
+	async function refreshIssue(repo: string, number: number): Promise<Issue | null> {
+		const i = await github.issue(repo, number);
+		if (i) store.putIssue(i);
+		else store.deleteIssue(repo, number);
+		return i;
+	}
+
+	/** GitHub logins @mentioned in a text (not e-mail addresses or paths). */
+	function mentions(text: unknown): string[] {
+		if (typeof text !== "string") return [];
+		return [...text.matchAll(/(?:^|[^A-Za-z0-9_`/.@-])@([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))\b/g)].map((m) => m[1]);
+	}
+
+	/** One push per person, first matching reason wins; never the person who acted. */
+	async function notifyIssue(issue: Issue, sender: string, reasons: [string, string[]][], extra: string) {
+		const done = new Set<string>();
+		for (const [title, logins] of reasons) {
+			for (const login of logins) {
+				if (login.toLowerCase() === sender.toLowerCase()) continue;
+				for (const u of store.usersByLogin(login)) {
+					if (done.has(u.labUser)) continue;
+					done.add(u.labUser);
+					try {
+						const { repos } = await viewOf(u);
+						if (!repos.has(issue.repo.toLowerCase()) || isQuiet(u.labUser, "issue", issue)) continue;
+					} catch (e) {
+						log(`access check for ${u.labUser} failed: ${(e as Error).message}`);
+						continue;
+					}
+					await notify(u.labUser, { title, body: `${short(issue)}: ${issue.title}${extra}`, url: issue.url });
+				}
+			}
+		}
+	}
+
+	async function onIssueEvent(repo: string, payload: any) {
+		const n = payload.issue?.number;
+		if (!Number.isInteger(n)) return;
+		const gone = ["closed", "deleted", "transferred"].includes(payload.action);
+		const issue = gone ? (store.deleteIssue(repo, n), null) : await refreshIssue(repo, n);
+		if (!issue) return;
+		const sender = payload.sender?.login ?? "";
+		if (payload.action === "assigned" && payload.assignee?.login) {
+			await notifyIssue(issue, sender, [["Assigned to you", [payload.assignee.login]]], "");
+		} else if (payload.action === "opened") {
+			await notifyIssue(issue, sender, [["You were mentioned", mentions(payload.issue?.body)]], ` (by ${issue.author})`);
+		}
+	}
+
+	async function onIssueComment(repo: string, payload: any) {
+		const issue = await refreshIssue(repo, payload.issue.number);
+		if (!issue || payload.action !== "created") return;
+		const sender = payload.comment?.user?.login ?? payload.sender?.login ?? "";
+		await notifyIssue(issue, sender, [
+			["You were mentioned", mentions(payload.comment?.body)],
+			["New comment", [issue.author, ...issue.assignees]],
+		], ` (comment by ${sender})`);
 	}
 
 	async function onWebhook(event: string, payload: any) {
@@ -197,7 +289,7 @@ export function createApp(opts: AppOptions): App {
 		if (!repo) return;
 		// The App is public (GitHub requires that to install it on both an org and a user
 		// account), so strangers can install it too: ignore every account not in config.
-		if (!config.orgs.some((o) => o.toLowerCase() === repo.split("/")[0].toLowerCase())) return;
+		if (!inConfig(repo)) return;
 		if (event === "pull_request") {
 			const n = payload.pull_request?.number ?? payload.number;
 			const pr = payload.action === "closed" ? (store.deletePr(repo, n), null) : await refreshPr(repo, n);
@@ -206,6 +298,10 @@ export function createApp(opts: AppOptions): App {
 			await refreshPr(repo, payload.pull_request.number);
 		} else if (event === "issue_comment" && payload.issue?.pull_request) {
 			await refreshPr(repo, payload.issue.number);
+		} else if (event === "issue_comment") {
+			await onIssueComment(repo, payload);
+		} else if (event === "issues") {
+			await onIssueEvent(repo, payload);
 		} else if (event === "check_suite" && payload.action === "completed") {
 			await onChecks(repo, (payload.check_suite.pull_requests ?? []).map((p: { number: number }) => p.number));
 		} else if (event === "check_run" && payload.action === "completed") {
@@ -338,7 +434,25 @@ export function createApp(opts: AppOptions): App {
 		if (method === "GET" && path === "/api/inbox") {
 			const u = linked(lab);
 			const { viewer, repos } = await viewOf(u);
-			return send(res, 200, { login: u.login, ...buildInbox(store.prs().filter(visible(repos)), viewer) });
+			const f = fold(lab, "pr", store.prs().filter(visible(repos)));
+			return send(res, 200, { login: u.login, ...buildInbox(f.live, viewer), old: f.old, hidden: f.hidden });
+		}
+		if (method === "GET" && path === "/api/issues") {
+			const { repos } = await viewOf(linked(lab));
+			const f = fold(lab, "issue", store.issues().filter(visible(repos)));
+			return send(res, 200, { items: f.live.sort(newest), old: f.old, hidden: f.hidden });
+		}
+		if (method === "POST" && (path === "/api/hide" || path === "/api/unhide")) {
+			const b = await json(req);
+			if (b.kind !== "pr" && b.kind !== "issue") throw new HttpError(400, "kind must be pr or issue");
+			const { repos } = await viewOf(linked(lab));
+			const item = typeof b.repo === "string" && Number.isInteger(b.number)
+				? (b.kind === "pr" ? store.pr(b.repo, b.number) : store.issue(b.repo, b.number)) : undefined;
+			if (!item || !repos.has(item.repo.toLowerCase())) throw new HttpError(404, "not found");
+			const key = `${item.repo}#${item.number}`;
+			if (path === "/api/hide") store.hide(lab, b.kind, key, opts.now().toISOString());
+			else store.unhide(lab, b.kind, key);
+			return send(res, 200, { ok: true });
 		}
 		if (method === "POST" && path === "/api/unlink") {
 			store.deleteUser(lab);
@@ -382,7 +496,9 @@ export function createApp(opts: AppOptions): App {
 	// -- jobs --------------------------------------------------------------------
 
 	async function sync() {
-		store.replacePrs(await github.openPullRequests());
+		const [prs, issues] = await Promise.all([github.openPullRequests(), github.openIssues()]);
+		store.replacePrs(prs.filter((p) => inConfig(p.repo)));
+		store.replaceIssues(issues.filter((i) => inConfig(i.repo)));
 	}
 
 	async function runStaleDigest() {
@@ -392,7 +508,7 @@ export function createApp(opts: AppOptions): App {
 		for (const u of store.users()) {
 			try {
 				const { viewer, repos } = await viewOf(u);
-				const stale = store.prs().filter(visible(repos))
+				const stale = fold(u.labUser, "pr", store.prs().filter(visible(repos))).live // hidden and old stay quiet
 					.filter((p) => (isMine(p, viewer) || reviewRequested(p, viewer)) && Date.parse(p.updatedAt) <= cutoff)
 					.sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
 				if (!stale.length || !store.markOnce(`stale:${u.labUser}:${day}`, now.toISOString())) continue;

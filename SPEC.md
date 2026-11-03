@@ -1,4 +1,4 @@
-# gh.bioinfolder.com — spec
+# Nudgebox (gh.bioinfolder.com) — spec
 
 One inbox for the lab's open pull requests, on a Mac browser and an iPhone home
 screen, with push notifications. Change this file by PR; the reasons are in

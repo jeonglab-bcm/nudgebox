@@ -205,7 +205,7 @@ async function setupPush() {
 		if (isIOS && !standalone) {
 			btn.hidden = false;
 			btn.textContent = "Notifications?";
-			btn.onclick = () => toast("On iPhone: Share → Add to Home Screen, then open Lab PRs from the Home Screen.");
+			btn.onclick = () => toast("On iPhone: Share → Add to Home Screen, then open Nudgebox from the Home Screen.");
 		}
 		return;
 	}

@@ -35,9 +35,9 @@ const here = `http://${ip}:${port}`;
 const state = randomBytes(16).toString("hex");
 
 const manifest = {
-	name: "Jeong Lab PRs",
+	name: "Jeong Lab Nudgebox", // renamed from "Jeong Lab PRs" on 2026-11-03
 	url: SITE,
-	description: "gh.bioinfolder.com: one inbox for the lab's open pull requests, with iPhone/Mac push.",
+	description: "Nudgebox (gh.bioinfolder.com): the lab's GitHub inbox for PRs and issues, with iPhone/Mac push.",
 	hook_attributes: { url: `${SITE}/webhook`, active: true },
 	redirect_url: `${here}/created`,
 	callback_urls: [`${SITE}/auth/github/callback`],

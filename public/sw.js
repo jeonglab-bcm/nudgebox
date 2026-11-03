@@ -1,6 +1,6 @@
 // Service worker: shows push notifications and opens the PR when one is tapped (SPEC 7).
 self.addEventListener("push", (event) => {
-	let data = { title: "Lab PRs", body: "", url: "/" };
+	let data = { title: "Nudgebox", body: "", url: "/" };
 	try {
 		data = { ...data, ...event.data.json() };
 	} catch {}

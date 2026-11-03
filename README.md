@@ -1,7 +1,7 @@
-# gh-dashboard
+# gh-dashboard (Nudgebox)
 
-**gh.bioinfolder.com**: one inbox for the Jeong Lab's open pull requests, on a Mac
-browser and an iPhone home screen, with push notifications.
+**Nudgebox** at **gh.bioinfolder.com**: the Jeong Lab's GitHub inbox for pull requests
+and issues, on a Mac browser and an iPhone home screen, with push notifications.
 
 - What it does: [`SPEC.md`](SPEC.md)
 - Why it is built this way: [`docs/decisions.md`](docs/decisions.md)

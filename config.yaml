@@ -1,0 +1,10 @@
+# gh.bioinfolder.com settings. Secrets are NOT here: they come from .env (see .env.example).
+origin: https://gh.bioinfolder.com
+# Accounts the lab's GitHub App is installed on. Who sees which repo is decided by each
+# person's own GitHub access (SPEC 4), so hyunhwan-bcm shows only for its owner.
+orgs:
+  - jeonglab-bcm
+  - hyunhwan-bcm
+staleDays: 3          # SPEC 7.3: a PR with no activity for this many days is stale
+timezone: America/Chicago
+digestHour: 9         # daily stale digest at/after 09:00 in that timezone

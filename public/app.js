@@ -2,6 +2,8 @@
 // Issues: /api/issues (SPEC 11). Old and Hidden fold at the bottom. Push setup (SPEC 7).
 // PR/issue text comes from GitHub and is untrusted: everything goes in via textContent.
 const $ = (s) => document.querySelector(s);
+// this script's own version (its ?v= hash); the server reports the current one
+const VERSION = new URL(import.meta.url).searchParams.get("v");
 const main = $("#main");
 
 // view state; remembered per device (a convenience only, so failures are ignored)
@@ -150,6 +152,10 @@ async function load() {
 	}
 	if (pr.status !== 200) {
 		main.replaceChildren(el("p", { class: "empty" }, pr.data.error || `Could not load (${pr.status})`));
+		return;
+	}
+	if (VERSION && pr.data.version && pr.data.version !== VERSION) {
+		location.reload(); // a newer version was deployed while this page was open
 		return;
 	}
 	$("nav").hidden = false;

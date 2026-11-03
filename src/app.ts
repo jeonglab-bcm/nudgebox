@@ -7,7 +7,7 @@
  * and the static web-app files (no data in them).
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { GitHubPort, Issue, PullRequest } from "./github.ts";
@@ -84,6 +84,10 @@ export function createApp(opts: AppOptions): App {
 	const store = new Store(opts.dbPath);
 	const log = opts.log ?? (() => {});
 	const access = new Map<string, { repos: Set<string>; teams: string[]; at: number }>();
+	// Cloudflare overrides our no-store with a 4 h browser cache for .js, so the page asks
+	// for the script under a name that changes whenever its content does.
+	const scriptVersion = createHash("sha256").update(readFileSync(join(PUBLIC_DIR, "app.js"))).digest("hex").slice(0, 12);
+	const indexHtml = readFileSync(join(PUBLIC_DIR, "index.html"), "utf8").replace('src="/app.js"', `src="/app.js?v=${scriptVersion}"`);
 	let work: Promise<void> = Promise.resolve();
 	const later = (fn: () => Promise<void>) => {
 		work = work.then(fn).catch((e) => log(`background work failed: ${e?.message ?? e}`));
@@ -410,7 +414,7 @@ export function createApp(opts: AppOptions): App {
 		if (method !== "GET") sameOrigin(req);
 
 		if (method === "GET" && (path === "/" || path === "/index.html")) {
-			return send(res, 200, readFileSync(join(PUBLIC_DIR, "index.html")), "text/html; charset=utf-8");
+			return send(res, 200, indexHtml, "text/html; charset=utf-8");
 		}
 		if (method === "GET" && path === "/auth/github") {
 			const state = randomBytes(24).toString("base64url");
@@ -435,7 +439,9 @@ export function createApp(opts: AppOptions): App {
 			const u = linked(lab);
 			const { viewer, repos } = await viewOf(u);
 			const f = fold(lab, "pr", store.prs().filter(visible(repos)));
-			return send(res, 200, { login: u.login, ...buildInbox(f.live, viewer), old: f.old, hidden: f.hidden });
+			// `version` lets an open page (e.g. the Home Screen app, which never reloads by
+			// itself) notice a newer deploy and reload.
+			return send(res, 200, { login: u.login, version: scriptVersion, ...buildInbox(f.live, viewer), old: f.old, hidden: f.hidden });
 		}
 		if (method === "GET" && path === "/api/issues") {
 			const { repos } = await viewOf(linked(lab));

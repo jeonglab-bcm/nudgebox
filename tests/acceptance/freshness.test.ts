@@ -89,7 +89,14 @@ test("9. the installable web app: page, manifest, service worker with push", asy
 	try {
 		const page = await t.req("/", { as: "hyunhwanj" });
 		assert.equal(page.status, 200);
-		assert.match(await page.text(), /<link rel="manifest" href="\/manifest.webmanifest"/);
+		const html = await page.text();
+		assert.match(html, /<link rel="manifest" href="\/manifest.webmanifest"/);
+		// the script URL changes with its content, so no cache can serve an old one
+		const src = html.match(/src="(\/app\.js\?v=[0-9a-f]{12})"/)?.[1];
+		assert.ok(src, "page must load /app.js?v=<content hash>");
+		assert.equal((await t.req(src!, { as: "hyunhwanj" })).status, 200);
+		const inboxVersion = (await (await t.req("/api/inbox", { as: "hyunhwanj" })).json()).version;
+		assert.equal(`/app.js?v=${inboxVersion}`, src, "the inbox reports the same version the page loads");
 		const m = await (await t.req("/manifest.webmanifest", { as: "hyunhwanj" })).json();
 		assert.equal(m.display, "standalone");
 		assert.ok(m.name && m.icons?.length);

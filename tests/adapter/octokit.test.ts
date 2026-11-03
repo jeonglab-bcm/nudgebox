@@ -12,6 +12,12 @@ import { OctokitGitHub, toPullRequest } from "../../src/octokit-github.ts";
 
 type Seen = { method: string; path: string; auth: string; body: any };
 
+const ISSUE = {
+	number: 80, title: "ROI export breaks", url: "https://github.com/jeonglab-bcm/labbot/issues/80", updatedAt: "2026-11-03T10:00:00Z", state: "OPEN",
+	author: { login: "kelly" }, repository: { nameWithOwner: "jeonglab-bcm/labbot" },
+	assignees: { nodes: [{ login: "hwan" }] }, labels: { nodes: [{ name: "bug" }] }, comments: { totalCount: 3 },
+};
+
 const NODE = {
 	number: 12, title: "Add email tools", url: "https://github.com/jeonglab-bcm/labbot/pull/12", isDraft: false,
 	updatedAt: "2026-11-02T15:00:00Z", headRefOid: "abc123", state: "OPEN", mergeable: "MERGEABLE", reviewDecision: "REVIEW_REQUIRED",
@@ -39,7 +45,12 @@ async function fakeGitHub(opts: { allowMergeCommit?: boolean; prState?: string; 
 				case "POST /app/installations/11/access_tokens": return ok({ token: "inst-tok", expires_at: new Date(Date.now() + 3600e3).toISOString() }, 201);
 				case "GET /users/jeonglab-bcm": return ok({ login: "jeonglab-bcm", type: "Organization" });
 				case "POST /graphql":
+					if (body.query.includes("search(") && body.variables.q.startsWith("is:issue")) return ok({ data: { search: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [ISSUE] } } });
 					if (body.query.includes("search(")) return ok({ data: { search: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [NODE, {}] } } });
+					if (body.query.includes("issueOrPullRequest")) {
+						const n = body.variables.n;
+						return ok({ data: { repository: { issueOrPullRequest: n === 80 ? { __typename: "Issue", ...ISSUE, state: opts.prState === "MERGED" ? "CLOSED" : "OPEN" } : { __typename: "PullRequest" } } } });
+					}
 					return ok({ data: { repository: { pullRequest: { ...NODE, state: opts.prState ?? "OPEN" } } } });
 				case "POST /login/oauth/access_token":
 					if (body.code === "bad") return ok({ error: "bad_verification_code", error_description: "The code passed is incorrect or expired." });
@@ -85,6 +96,24 @@ test("open PRs are read with the App's installation token and mapped", async () 
 		assert.match(gql.body.variables.q, /is:pr is:open org:jeonglab-bcm/);
 	} finally {
 		f.close();
+	}
+});
+
+test("open issues are read with the App's token and mapped; PR numbers are not issues", async () => {
+	const f = await fakeGitHub();
+	const closed = await fakeGitHub({ prState: "MERGED" });
+	try {
+		assert.deepEqual(await f.gh.openIssues(), [{
+			repo: "jeonglab-bcm/labbot", number: 80, title: "ROI export breaks", url: ISSUE.url, author: "kelly",
+			assignees: ["hwan"], labels: ["bug"], comments: 3, updatedAt: "2026-11-03T10:00:00.000Z",
+		}]);
+		assert.match(f.seen.find((s) => s.body?.variables?.q?.startsWith("is:issue"))!.body.variables.q, /is:issue is:open org:jeonglab-bcm/);
+		assert.equal((await f.gh.issue("jeonglab-bcm/labbot", 80))?.number, 80);
+		assert.equal(await f.gh.issue("jeonglab-bcm/labbot", 12), null); // #12 is a PR
+		assert.equal(await closed.gh.issue("jeonglab-bcm/labbot", 80), null);
+	} finally {
+		f.close();
+		closed.close();
 	}
 });
 

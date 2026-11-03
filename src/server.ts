@@ -29,7 +29,7 @@ function need(name: string): string {
 }
 
 const cfg = parse(readFileSync(process.env.CONFIG ?? "config.yaml", "utf8"));
-const config = { orgs: cfg.orgs as string[], staleDays: Number(cfg.staleDays ?? 3), timezone: String(cfg.timezone ?? "America/Chicago") };
+const config = { orgs: cfg.orgs as string[], staleDays: Number(cfg.staleDays ?? 3), oldDays: Number(cfg.oldDays ?? 30), timezone: String(cfg.timezone ?? "America/Chicago") };
 const origin = String(cfg.origin);
 const digestHour = Number(cfg.digestHour ?? 9);
 

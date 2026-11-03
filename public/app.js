@@ -1,7 +1,14 @@
-// gh.bioinfolder.com front end: renders /api/inbox, runs the four actions, manages push.
-// PR text comes from GitHub and is untrusted: everything goes in via textContent.
+// gh.bioinfolder.com front end. PRs: status tabs + repo filter over /api/inbox (SPEC 5);
+// Issues: /api/issues (SPEC 11). Old and Hidden fold at the bottom. Push setup (SPEC 7).
+// PR/issue text comes from GitHub and is untrusted: everything goes in via textContent.
 const $ = (s) => document.querySelector(s);
 const main = $("#main");
+
+// view state; remembered per device (a convenience only, so failures are ignored)
+const saved = (() => { try { return JSON.parse(localStorage.getItem("ghd-view") || "{}"); } catch { return {}; } })();
+const view = { kind: saved.kind || "pr", tab: saved.tab || "needs_you", repo: saved.repo || "" };
+const remember = () => { try { localStorage.setItem("ghd-view", JSON.stringify(view)); } catch {} };
+let data = { pr: null, issue: null, login: "" };
 
 function el(tag, attrs = {}, ...kids) {
 	const e = document.createElement(tag);
@@ -23,8 +30,7 @@ function toast(msg) {
 
 async function api(path, body) {
 	const r = await fetch(path, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {});
-	const data = await r.json().catch(() => ({}));
-	return { status: r.status, data };
+	return { status: r.status, data: await r.json().catch(() => ({})) };
 }
 
 function age(iso) {
@@ -36,26 +42,35 @@ function age(iso) {
 
 const CHECKS = { success: ["checks passed", "ok"], failure: ["checks failed", "bad"], pending: ["checks running", "warn"], none: ["no checks", ""] };
 const REVIEW = { APPROVED: ["approved", "ok"], CHANGES_REQUESTED: ["changes requested", "bad"], REVIEW_REQUIRED: ["review required", "warn"] };
-
+const PR_TABS = [["needs_you", "Needs you"], ["waiting", "Waiting"], ["ci_failing", "CI failing"], ["all", "All"]];
 // mirrors readyToMerge in src/inbox.ts: only then is Merge the highlighted button
 const ready = (pr) => !pr.draft && pr.mergeable !== "CONFLICTING" && ["success", "none"].includes(pr.checks) && [null, "APPROVED"].includes(pr.reviewDecision);
+const byRepo = (xs) => (view.repo ? xs.filter((x) => x.repo === view.repo) : xs);
+const busy = (fn) => async (e) => {
+	e.target.disabled = true;
+	try { await fn(); } finally { e.target.disabled = false; }
+};
 
 async function doAction(pr, action, extra = {}) {
-	const { status, data } = await api(`/api/prs/${action}`, { repo: pr.repo, number: pr.number, ...extra });
+	const { status, data: d } = await api(`/api/prs/${action}`, { repo: pr.repo, number: pr.number, ...extra });
 	if (status === 200) {
 		toast({ merge: "Merged", approve: "Approved", rerun: "Re-running failed checks", comment: "Comment posted" }[action]);
 		setTimeout(load, 1500);
-	} else toast(data.error || `Failed (${status})`);
+	} else toast(d.error || `Failed (${status})`);
 }
 
-function row(pr, me) {
-	const mine = pr.author.toLowerCase() === me.toLowerCase();
+async function setHidden(kind, item, hide) {
+	const { status } = await api(hide ? "/api/hide" : "/api/unhide", { kind, repo: item.repo, number: item.number });
+	if (status === 200) {
+		toast(hide ? "Hidden until something new happens" : "Back in the list");
+		load();
+	} else toast(`Failed (${status})`);
+}
+
+function prRow(pr, opts = {}) {
+	const mine = pr.author.toLowerCase() === data.login.toLowerCase();
 	const [ct, cc] = CHECKS[pr.checks] || CHECKS.none;
 	const rv = REVIEW[pr.reviewDecision];
-	const busy = (fn) => async (e) => {
-		e.target.disabled = true;
-		try { await fn(); } finally { e.target.disabled = false; }
-	};
 	return el("div", { class: "pr" },
 		el("div", { class: "top" }, el("a", { class: "title", href: pr.url, target: "_blank", rel: "noopener" }, pr.title)),
 		el("div", { class: "meta" },
@@ -68,28 +83,81 @@ function row(pr, me) {
 			!mine ? el("button", { onclick: busy(() => doAction(pr, "approve")) }, "Approve") : null,
 			el("button", { class: mine && ready(pr) ? "primary" : "", onclick: busy(() => confirm(`Merge ${pr.repo}#${pr.number}?\n\n${pr.title}`) && doAction(pr, "merge", { confirm: true })) }, "Merge"),
 			pr.checks === "failure" ? el("button", { onclick: busy(() => doAction(pr, "rerun")) }, "Re-run failed") : null,
-			el("button", { onclick: busy(async () => { const b = prompt(`Comment on ${pr.repo}#${pr.number}`); if (b && b.trim()) await doAction(pr, "comment", { body: b }); }) }, "Comment")));
+			el("button", { onclick: busy(async () => { const b = prompt(`Comment on ${pr.repo}#${pr.number}`); if (b && b.trim()) await doAction(pr, "comment", { body: b }); }) }, "Comment"),
+			el("button", { onclick: busy(() => setHidden("pr", pr, !opts.hidden)) }, opts.hidden ? "Unhide" : "Hide")));
+}
+
+function issueRow(i, opts = {}) {
+	return el("div", { class: "pr" },
+		el("div", { class: "top" }, el("a", { class: "title", href: i.url, target: "_blank", rel: "noopener" }, i.title)),
+		el("div", { class: "meta" },
+			el("span", {}, `${i.repo.split("/")[1]}#${i.number}`), "·", el("span", {}, i.author), "·", el("span", {}, age(i.updatedAt)),
+			i.comments ? el("span", { class: "chip" }, `${i.comments} comment${i.comments > 1 ? "s" : ""}`) : null,
+			i.assignees.length ? el("span", { class: "chip" }, `→ ${i.assignees.join(", ")}`) : null,
+			i.labels.map((l) => el("span", { class: "chip label" }, l))),
+		el("div", { class: "actions" }, el("button", { onclick: busy(() => setHidden("issue", i, !opts.hidden)) }, opts.hidden ? "Unhide" : "Hide")));
+}
+
+function fold(title, items, row) {
+	if (!items.length) return null;
+	return el("details", { class: "fold" }, el("summary", {}, `${title} (${items.length})`), items.map(row));
+}
+
+function render() {
+	const kindData = data[view.kind];
+	if (!kindData) return;
+	for (const b of $("#kind").children) b.classList.toggle("on", b.dataset.k === view.kind);
+
+	// repo filter: every repo with something in this view (live, old or hidden)
+	const all = view.kind === "pr" ? [...kindData.sections.flatMap((s) => s.prs), ...kindData.old, ...kindData.hidden] : [...kindData.items, ...kindData.old, ...kindData.hidden];
+	const repos = [...new Set(all.map((x) => x.repo))].sort((a, b) => a.split("/")[1].localeCompare(b.split("/")[1], undefined, { sensitivity: "base" }));
+	if (view.repo && !repos.includes(view.repo)) view.repo = "";
+	const sel = $("#repo");
+	sel.replaceChildren(el("option", { value: "" }, "All repos"), ...repos.map((r) => el("option", { value: r, selected: r === view.repo }, r.split("/")[1])));
+
+	const tabs = $("#tabs");
+	main.replaceChildren();
+	if (view.kind === "pr") {
+		const live = Object.fromEntries(kindData.sections.map((s) => [s.id, byRepo(s.prs)]));
+		live.all = byRepo(kindData.sections.flatMap((s) => s.prs)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+		tabs.hidden = false;
+		tabs.replaceChildren(...PR_TABS.map(([id, name]) =>
+			el("button", { class: id === view.tab ? "on" : "", onclick: () => { view.tab = id; remember(); render(); } }, name, el("span", { class: "n" }, live[id].length))));
+		const list = live[view.tab] || [];
+		if (!list.length) main.append(el("p", { class: "empty" }, "Nothing here"));
+		list.forEach((p) => main.append(prRow(p)));
+		main.append(fold("Old: no activity for 30+ days", byRepo(kindData.old), (p) => prRow(p)) || "",
+			fold("Hidden", byRepo(kindData.hidden), (p) => prRow(p, { hidden: true })) || "");
+	} else {
+		tabs.hidden = true;
+		const list = byRepo(kindData.items);
+		if (!list.length) main.append(el("p", { class: "empty" }, "No open issues"));
+		list.forEach((i) => main.append(issueRow(i)));
+		main.append(fold("Old: no activity for 30+ days", byRepo(kindData.old), (i) => issueRow(i)) || "",
+			fold("Hidden", byRepo(kindData.hidden), (i) => issueRow(i, { hidden: true })) || "");
+	}
+	main.append(el("div", { class: "actions", style: "margin-top:24px" }, el("button", { onclick: unlink }, "Disconnect GitHub")));
 }
 
 async function load() {
-	const { status, data } = await api("/api/inbox");
-	main.replaceChildren();
-	if (status === 409 && data.link) {
-		main.append(el("div", { class: "notice" },
-			el("p", {}, "Connect your GitHub account once so the inbox can show the PRs you can see, and so actions run as you."),
-			el("a", { class: "btn primary", href: data.link }, "Connect GitHub")));
+	const [pr, issue] = await Promise.all([api("/api/inbox"), api("/api/issues")]);
+	if (pr.status === 409 && pr.data.link) {
+		$("nav").hidden = true;
+		main.replaceChildren(el("div", { class: "notice" },
+			el("p", {}, "Connect your GitHub account once so the inbox can show the PRs and issues you can see, and so actions run as you."),
+			el("a", { class: "btn primary", href: pr.data.link }, "Connect GitHub")));
 		return;
 	}
-	if (status !== 200) {
-		main.append(el("p", { class: "empty" }, data.error || `Could not load (${status})`));
+	if (pr.status !== 200) {
+		main.replaceChildren(el("p", { class: "empty" }, pr.data.error || `Could not load (${pr.status})`));
 		return;
 	}
-	for (const s of data.sections) {
-		main.append(el("h2", {}, s.title, el("span", { class: "n" }, s.prs.length)));
-		if (!s.prs.length) main.append(el("div", { class: "empty" }, "Nothing here"));
-		for (const pr of s.prs) main.append(row(pr, data.login));
-	}
-	main.append(el("div", { class: "actions" }, el("button", { onclick: unlink }, "Disconnect GitHub")));
+	$("nav").hidden = false;
+	data = { pr: pr.data, issue: issue.status === 200 ? issue.data : { items: [], old: [], hidden: [] }, login: pr.data.login };
+	const seg = $("#kind").children;
+	seg[0].textContent = `PRs ${pr.data.sections.reduce((n, s) => n + s.prs.length, 0)}`;
+	seg[1].textContent = `Issues ${data.issue.items.length}`;
+	render();
 	setupPush();
 }
 
@@ -98,6 +166,19 @@ async function unlink() {
 	await api("/api/unlink", {});
 	load();
 }
+
+$("#kind").addEventListener("click", (e) => {
+	const k = e.target.closest("button")?.dataset.k;
+	if (!k || k === view.kind) return;
+	view.kind = k;
+	remember();
+	render();
+});
+$("#repo").addEventListener("change", (e) => {
+	view.repo = e.target.value;
+	remember();
+	render();
+});
 
 // -- push (SPEC 7) ---------------------------------------------------------------
 const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
@@ -108,9 +189,11 @@ function b64url(s) {
 	return Uint8Array.from(raw, (c) => c.charCodeAt(0));
 }
 
+let pushReady = false;
 async function setupPush() {
+	if (pushReady || !("serviceWorker" in navigator)) return;
+	pushReady = true;
 	const btn = $("#push");
-	if (!("serviceWorker" in navigator)) return;
 	const reg = await navigator.serviceWorker.register("/sw.js");
 	if (!("PushManager" in window)) {
 		if (isIOS && !standalone) {
@@ -133,8 +216,8 @@ async function setupPush() {
 			return;
 		}
 		if ((await Notification.requestPermission()) !== "granted") return toast("Notifications were not allowed");
-		const { data } = await api("/api/push/key");
-		const s = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64url(data.publicKey) });
+		const { data: k } = await api("/api/push/key");
+		const s = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64url(k.publicKey) });
 		const { status } = await api("/api/push/subscribe", s.toJSON());
 		btn.textContent = status === 201 ? "Notifications on" : "Turn on notifications";
 		toast(status === 201 ? "Notifications are on for this device" : "Could not turn on notifications");

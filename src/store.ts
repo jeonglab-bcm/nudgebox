@@ -3,7 +3,7 @@
  * and "already notified" marks. One file; tokens are stored sealed (crypto.ts).
  */
 import { DatabaseSync } from "node:sqlite";
-import type { PullRequest } from "./github.ts";
+import type { Issue, PullRequest } from "./github.ts";
 import type { PushSubscription } from "./app.ts";
 
 export interface LinkedUser {
@@ -27,6 +27,9 @@ export class Store {
 			CREATE TABLE IF NOT EXISTS prs (key TEXT PRIMARY KEY, json TEXT NOT NULL);
 			CREATE TABLE IF NOT EXISTS devices (endpoint TEXT PRIMARY KEY, lab_user TEXT NOT NULL, json TEXT NOT NULL, created TEXT NOT NULL);
 			CREATE TABLE IF NOT EXISTS notified (key TEXT PRIMARY KEY, at TEXT NOT NULL);
+			CREATE TABLE IF NOT EXISTS issues (key TEXT PRIMARY KEY, json TEXT NOT NULL);
+			CREATE TABLE IF NOT EXISTS hidden (lab_user TEXT NOT NULL, kind TEXT NOT NULL, key TEXT NOT NULL,
+				hidden_at TEXT NOT NULL, PRIMARY KEY (lab_user, kind, key));
 		`);
 	}
 
@@ -104,6 +107,53 @@ export class Store {
 
 	prs(): PullRequest[] {
 		return (this.db.prepare("SELECT json FROM prs").all() as { json: string }[]).map((r) => JSON.parse(r.json));
+	}
+
+	// -- issues ---------------------------------------------------------------
+
+	replaceIssues(issues: Issue[]) {
+		this.db.exec("BEGIN");
+		try {
+			this.db.exec("DELETE FROM issues");
+			for (const i of issues) this.putIssue(i);
+			this.db.exec("COMMIT");
+		} catch (e) {
+			this.db.exec("ROLLBACK");
+			throw e;
+		}
+	}
+
+	putIssue(i: Issue) {
+		this.db.prepare("INSERT OR REPLACE INTO issues VALUES (?, ?)").run(`${i.repo}#${i.number}`, JSON.stringify(i));
+	}
+
+	deleteIssue(repo: string, number: number) {
+		this.db.prepare("DELETE FROM issues WHERE key = ?").run(`${repo}#${number}`);
+	}
+
+	issue(repo: string, number: number): Issue | undefined {
+		const r = this.db.prepare("SELECT json FROM issues WHERE key = ?").get(`${repo}#${number}`) as { json: string } | undefined;
+		return r && JSON.parse(r.json);
+	}
+
+	issues(): Issue[] {
+		return (this.db.prepare("SELECT json FROM issues").all() as { json: string }[]).map((r) => JSON.parse(r.json));
+	}
+
+	// -- per-person Hide (SPEC 5) --------------------------------------------
+
+	hide(labUser: string, kind: string, key: string, at: string) {
+		this.db.prepare("INSERT OR REPLACE INTO hidden VALUES (?, ?, ?, ?)").run(labUser, kind, key, at);
+	}
+
+	unhide(labUser: string, kind: string, key: string) {
+		this.db.prepare("DELETE FROM hidden WHERE lab_user = ? AND kind = ? AND key = ?").run(labUser, kind, key);
+	}
+
+	/** "kind:owner/repo#n" -> when it was hidden, for one person. */
+	hiddenFor(labUser: string): Map<string, string> {
+		const rows = this.db.prepare("SELECT kind, key, hidden_at FROM hidden WHERE lab_user = ?").all(labUser) as { kind: string; key: string; hidden_at: string }[];
+		return new Map(rows.map((r) => [`${r.kind}:${r.key}`, r.hidden_at]));
 	}
 
 	// -- push devices ---------------------------------------------------------

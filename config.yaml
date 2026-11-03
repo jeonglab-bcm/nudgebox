@@ -6,5 +6,6 @@ orgs:
   - jeonglab-bcm
   - hyunhwan-bcm
 staleDays: 3          # SPEC 7.3: a PR with no activity for this many days is stale
+oldDays: 30           # SPEC 5: no activity this long folds a PR/issue into "Old" (quiet)
 timezone: America/Chicago
 digestHour: 9         # daily stale digest at/after 09:00 in that timezone

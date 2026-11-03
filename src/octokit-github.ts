@@ -9,7 +9,7 @@
  *   permissions.
  */
 import { App, Octokit } from "octokit";
-import type { Checks, GitHubPort, PullRequest, ReviewDecision, UserTokens } from "./github.ts";
+import type { Checks, GitHubPort, Issue, PullRequest, ReviewDecision, UserTokens } from "./github.ts";
 
 export interface OctokitGitHubOptions {
 	appId: string;
@@ -31,6 +31,28 @@ const PR_FIELDS = `
 		... on Team { slug organization { login } }
 	} } }
 	commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }`;
+
+const ISSUE_FIELDS = `
+	number title url updatedAt state
+	author { login }
+	repository { nameWithOwner }
+	assignees(first: 20) { nodes { login } }
+	labels(first: 20) { nodes { name } }
+	comments { totalCount }`;
+
+export function toIssue(n: any): Issue {
+	return {
+		repo: n.repository.nameWithOwner,
+		number: n.number,
+		title: n.title,
+		url: n.url,
+		author: n.author?.login ?? "ghost",
+		assignees: (n.assignees?.nodes ?? []).map((a: { login: string }) => a.login),
+		labels: (n.labels?.nodes ?? []).map((l: { name: string }) => l.name),
+		comments: n.comments?.totalCount ?? 0,
+		updatedAt: new Date(n.updatedAt).toISOString(),
+	};
+}
 
 function checksOf(state: string | undefined | null): Checks {
 	if (state === "SUCCESS") return "success";
@@ -64,23 +86,27 @@ export function toPullRequest(n: any): PullRequest {
 	};
 }
 
-/** Every open PR in one account (org or user), through GraphQL search. */
-export async function searchOpenPullRequests(o: Octokit, account: string): Promise<PullRequest[]> {
+/** Every open PR or issue in one account (org or user), through GraphQL search. */
+async function searchOpen<T>(o: Octokit, account: string, kind: "pr" | "issue", map: (n: any) => T): Promise<T[]> {
 	const { data: acct } = await o.request("GET /users/{username}", { username: account });
-	const q = `is:pr is:open ${acct.type === "Organization" ? "org" : "user"}:${account} archived:false`;
-	const out: PullRequest[] = [];
+	const q = `is:${kind} is:open ${acct.type === "Organization" ? "org" : "user"}:${account} archived:false`;
+	const fragment = kind === "pr" ? `... on PullRequest { ${PR_FIELDS} }` : `... on Issue { ${ISSUE_FIELDS} }`;
+	const out: T[] = [];
 	let after: string | null = null;
 	do {
 		const r: any = await o.graphql(
 			`query($q: String!, $after: String) { search(type: ISSUE, query: $q, first: 50, after: $after) {
-				pageInfo { hasNextPage endCursor } nodes { ... on PullRequest { ${PR_FIELDS} } } } }`,
+				pageInfo { hasNextPage endCursor } nodes { ${fragment} } } }`,
 			{ q, after },
 		);
-		out.push(...r.search.nodes.filter((n: any) => n?.number).map(toPullRequest));
+		out.push(...r.search.nodes.filter((n: any) => n?.number).map(map));
 		after = r.search.pageInfo.hasNextPage ? r.search.pageInfo.endCursor : null;
 	} while (after);
 	return out;
 }
+
+export const searchOpenPullRequests = (o: Octokit, account: string) => searchOpen(o, account, "pr", toPullRequest);
+export const searchOpenIssues = (o: Octokit, account: string) => searchOpen(o, account, "issue", toIssue);
 
 function fail(status: number, message: string): never {
 	throw Object.assign(new Error(message), { status });
@@ -175,8 +201,16 @@ export class OctokitGitHub implements GitHubPort {
 
 	// -- data (installation tokens) ------------------------------------------
 
-	async openPullRequests(): Promise<PullRequest[]> {
-		const out: PullRequest[] = [];
+	openPullRequests(): Promise<PullRequest[]> {
+		return this.eachAccount(searchOpenPullRequests);
+	}
+
+	openIssues(): Promise<Issue[]> {
+		return this.eachAccount(searchOpenIssues);
+	}
+
+	private async eachAccount<T>(read: (o: Octokit, account: string) => Promise<T[]>): Promise<T[]> {
+		const out: T[] = [];
 		for (const account of this.opts.accounts) {
 			let o: Octokit;
 			try {
@@ -187,7 +221,7 @@ export class OctokitGitHub implements GitHubPort {
 				this.opts.log?.(`skipping ${account}: ${(e as Error).message}`);
 				continue;
 			}
-			out.push(...(await searchOpenPullRequests(o, account)));
+			out.push(...(await read(o, account)));
 		}
 		return out;
 	}
@@ -201,6 +235,18 @@ export class OctokitGitHub implements GitHubPort {
 		);
 		const p = r.repository?.pullRequest;
 		return p && p.state === "OPEN" ? toPullRequest(p) : null;
+	}
+
+	async issue(repo: string, number: number): Promise<Issue | null> {
+		const [owner, name] = repo.split("/");
+		const o = await this.installationFor(owner);
+		const r: any = await o.graphql(
+			`query($owner: String!, $name: String!, $n: Int!) { repository(owner: $owner, name: $name) {
+				issueOrPullRequest(number: $n) { __typename ... on Issue { ${ISSUE_FIELDS} } } } }`,
+			{ owner, name, n: number },
+		);
+		const i = r.repository?.issueOrPullRequest;
+		return i && i.__typename === "Issue" && i.state === "OPEN" ? toIssue(i) : null;
 	}
 
 	// -- actions as the person -----------------------------------------------

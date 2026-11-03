@@ -46,7 +46,7 @@ test("5. inbox sections and order, for hwan", async () => {
 		g.addPr({ repo: MINE, number: 4, author: "hwan", reviewDecision: null, checks: "success", updatedAt: ago(1) }); // no review required
 		g.addPr({ repo: LAB, number: 5, author: "hwan", reviewDecision: "CHANGES_REQUESTED", checks: "success", updatedAt: ago(20) });
 		g.addPr({ repo: LAB, number: 6, author: "hwan", reviewDecision: "APPROVED", checks: "success", mergeable: "CONFLICTING", updatedAt: ago(25) });
-		// Waiting on others
+		// WIP
 		g.addPr({ repo: LAB, number: 7, author: "hwan", reviewDecision: "REVIEW_REQUIRED", checks: "success", updatedAt: ago(30) });
 		g.addPr({ repo: LAB, number: 8, author: "hwan", reviewDecision: "APPROVED", checks: "pending", updatedAt: ago(2) });
 		// CI failing: mine first, then others

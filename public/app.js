@@ -44,7 +44,7 @@ function age(iso) {
 
 const CHECKS = { success: ["checks passed", "ok"], failure: ["checks failed", "bad"], pending: ["checks running", "warn"], none: ["no checks", ""] };
 const REVIEW = { APPROVED: ["approved", "ok"], CHANGES_REQUESTED: ["changes requested", "bad"], REVIEW_REQUIRED: ["review required", "warn"] };
-const PR_TABS = [["needs_you", "Needs you"], ["waiting", "Waiting"], ["ci_failing", "CI failing"], ["all", "All"]];
+const PR_TABS = [["needs_you", "Needs you"], ["waiting", "WIP"], ["ci_failing", "CI failing"], ["all", "All"]];
 // mirrors readyToMerge in src/inbox.ts: only then is Merge the highlighted button
 const ready = (pr) => !pr.draft && pr.mergeable !== "CONFLICTING" && ["success", "none"].includes(pr.checks) && [null, "APPROVED"].includes(pr.reviewDecision);
 const byRepo = (xs) => (view.repo ? xs.filter((x) => x.repo === view.repo) : xs);

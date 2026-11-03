@@ -3,7 +3,7 @@ import type { PullRequest } from "./github.ts";
 
 export const SECTIONS = [
 	{ id: "needs_you", title: "Needs you" },
-	{ id: "waiting", title: "Waiting on others" },
+	{ id: "waiting", title: "WIP" },
 	{ id: "ci_failing", title: "CI failing" },
 	{ id: "everything_else", title: "Everything else" },
 ] as const;

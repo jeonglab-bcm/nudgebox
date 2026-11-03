@@ -86,3 +86,11 @@ long list. Dr. Jeong's answers:
 
 The App needs the `issues` webhook event added (it already has Issues: read, so no
 installation has to re-approve).
+
+## 2026-11-03: Named "Nudgebox"
+
+"Lab PRs" stopped fitting once issues were added. Dr. Jeong wanted something with
+character that still reads as an inbox, and chose **Nudgebox** (the box that nudges
+you: the needs-you tab plus push). "Octobox" was avoided: it is an existing GitHub
+notifications product. The GitHub App is renamed to match; the repo name and the
+gh.bioinfolder.com address stay.

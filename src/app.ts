@@ -69,8 +69,12 @@ const STATIC: Record<string, string> = {
 };
 
 class HttpError extends Error {
-	constructor(public status: number, message: string, public extra: object = {}) {
+	status: number;
+	extra: object;
+	constructor(status: number, message: string, extra: object = {}) {
 		super(message);
+		this.status = status;
+		this.extra = extra;
 	}
 }
 

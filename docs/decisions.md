@@ -54,3 +54,19 @@ What is missing is one view behind the lab's own login, on Mac and iPhone.
 - **Keycloak via the oauth2-proxy sidecar**: the pattern every bioinfolder app uses.
 - **Webhooks plus a 10-minute sync**: GitHub does not retry failed deliveries
   automatically, so a periodic sync is the safety net.
+
+## 2026-11-02: Two listeners, so identity can only come from the sidecar
+
+The app trusts `X-Forwarded-*` from the Keycloak sidecar. GitHub's webhooks and the
+web-app manifest/icons must be reachable without signing in, and if they shared the
+app's port, anything that can reach that port could forge identity headers. So the
+app listens twice (`src/server.ts`): the full app on a port only the sidecar can reach
+(compose network, never published), and a public port that serves only `POST /webhook`
+and static files and strips identity headers (`src/public.ts`, tested). Same idea as
+llm-proxy's unpublished trusted `:8081` in bioinfolder-srv.
+
+## 2026-11-02: No build step
+
+Node 24 runs TypeScript directly when it uses only erasable syntax
+(`erasableSyntaxOnly` in tsconfig enforces it), so the image runs `node src/server.ts`
+and tsx/typescript stay dev-only.

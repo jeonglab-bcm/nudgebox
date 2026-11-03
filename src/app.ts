@@ -194,6 +194,9 @@ export function createApp(opts: AppOptions): App {
 	async function onWebhook(event: string, payload: any) {
 		const repo: string | undefined = payload.repository?.full_name;
 		if (!repo) return;
+		// The App is public (GitHub requires that to install it on both an org and a user
+		// account), so strangers can install it too: ignore every account not in config.
+		if (!config.orgs.some((o) => o.toLowerCase() === repo.split("/")[0].toLowerCase())) return;
 		if (event === "pull_request") {
 			const n = payload.pull_request?.number ?? payload.number;
 			const pr = payload.action === "closed" ? (store.deletePr(repo, n), null) : await refreshPr(repo, n);

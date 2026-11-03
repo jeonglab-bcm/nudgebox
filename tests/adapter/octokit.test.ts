@@ -20,7 +20,7 @@ const NODE = {
 	commits: { nodes: [{ commit: { statusCheckRollup: { state: "FAILURE" } } }] },
 };
 
-async function fakeGitHub(opts: { allowMergeCommit?: boolean; prState?: string } = {}) {
+async function fakeGitHub(opts: { allowMergeCommit?: boolean; prState?: string; extraAccounts?: string[] } = {}) {
 	const seen: Seen[] = [];
 	const server = createServer((req, res) => {
 		let raw = "";
@@ -66,7 +66,7 @@ async function fakeGitHub(opts: { allowMergeCommit?: boolean; prState?: string }
 	const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
 	const gh = new OctokitGitHub({
 		appId: "123", privateKey: privateKey.export({ type: "pkcs1", format: "pem" }).toString(),
-		clientId: "Iv1.x", clientSecret: "secret", accounts: ["jeonglab-bcm"], apiUrl: url, webUrl: url,
+		clientId: "Iv1.x", clientSecret: "secret", accounts: ["jeonglab-bcm", ...(opts.extraAccounts ?? [])], apiUrl: url, webUrl: url,
 	});
 	return { gh, seen, close: () => server.close() };
 }
@@ -83,6 +83,15 @@ test("open PRs are read with the App's installation token and mapped", async () 
 		const gql = f.seen.find((s) => s.path === "/graphql")!;
 		assert.equal(gql.auth, "token inst-tok");
 		assert.match(gql.body.variables.q, /is:pr is:open org:jeonglab-bcm/);
+	} finally {
+		f.close();
+	}
+});
+
+test("an account without the App is skipped, not fatal", async () => {
+	const f = await fakeGitHub({ extraAccounts: ["hyunhwan-bcm"] });
+	try {
+		assert.deepEqual((await f.gh.openPullRequests()).map((p) => p.number), [12]);
 	} finally {
 		f.close();
 	}

@@ -54,6 +54,22 @@ test("8. opened / closed webhooks update the inbox without waiting for a sync", 
 	}
 });
 
+test("8. webhooks from accounts outside config are ignored (the App is public)", async () => {
+	const t = await setup();
+	try {
+		t.github.grant("hwan", "stranger/repo");
+		t.github.addPr({ repo: "stranger/repo", number: 1, author: "x", requestedReviewers: ["hwan"] });
+		await t.subscribe("hyunhwanj", "https://push.example/hwan");
+		const payload = { action: "review_requested", requested_reviewer: { login: "hwan" }, pull_request: { number: 1 }, repository: { full_name: "stranger/repo" } };
+		assert.equal((await t.webhook("pull_request", payload)).status, 200);
+		await t.app.idle();
+		assert.deepEqual(all(await t.inbox("hyunhwanj")), []);
+		assert.equal(t.pushed.length, 0);
+	} finally {
+		await t.close();
+	}
+});
+
 test("8. the periodic sync catches a missed webhook", async () => {
 	const t = await setup();
 	try {

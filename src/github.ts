@@ -35,6 +35,13 @@ export interface Issue {
 	updatedAt: string; // ISO time of the last activity
 }
 
+/** SPEC 12: the text a summary reads. `files` only for PRs. */
+export interface ItemContent {
+	body: string;
+	comments: { author: string; body: string }[]; // conversation, then review comments
+	files?: { path: string; patch: string }[]; // patch "" for binary or too-large files
+}
+
 export interface UserTokens {
 	login: string;
 	accessToken: string;
@@ -54,6 +61,8 @@ export interface GitHubPort {
 	pullRequest(repo: string, number: number): Promise<PullRequest | null>;
 	openIssues(): Promise<Issue[]>; // open issues only, never PRs (SPEC 11)
 	issue(repo: string, number: number): Promise<Issue | null>; // null when closed, gone or a PR
+	prContent(repo: string, number: number): Promise<ItemContent>; // SPEC 12
+	issueContent(repo: string, number: number): Promise<ItemContent>; // SPEC 12
 	// actions, as the person (errors carry GitHub's `status` and message)
 	merge(token: string, repo: string, number: number): Promise<void>;
 	approve(token: string, repo: string, number: number): Promise<void>;

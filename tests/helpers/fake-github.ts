@@ -3,7 +3,7 @@
  * users, repo access, teams and PRs here, and read back what the app asked GitHub
  * to do. No network.
  */
-import type { GitHubPort, Issue, PullRequest, UserTokens } from "../../src/github.ts";
+import type { GitHubPort, Issue, ItemContent, PullRequest, UserTokens } from "../../src/github.ts";
 
 export type Call = { op: string; token?: string; repo?: string; number?: number; body?: string };
 
@@ -13,6 +13,7 @@ export class FakeGitHub implements GitHubPort {
 	access = new Map<string, Set<string>>(); // github login -> repos it can see
 	teams = new Map<string, string[]>(); // github login -> "org/team" slugs
 	codes = new Map<string, string>(); // oauth code -> github login
+	content = new Map<string, ItemContent>(); // "owner/repo#n" -> text a summary reads (SPEC 12)
 	calls: Call[] = [];
 	failNext: { status: number; message: string } | null = null;
 	tokenTtlMs = 8 * 3600_000;
@@ -108,6 +109,16 @@ export class FakeGitHub implements GitHubPort {
 	async issue(repo: string, number: number): Promise<Issue | null> {
 		const i = this.issues.get(`${repo}#${number}`);
 		return i ? { ...i } : null;
+	}
+
+	async prContent(repo: string, number: number): Promise<ItemContent> {
+		this.calls.push({ op: "prContent", repo, number });
+		return this.content.get(`${repo}#${number}`) ?? { body: "", comments: [], files: [] };
+	}
+
+	async issueContent(repo: string, number: number): Promise<ItemContent> {
+		this.calls.push({ op: "issueContent", repo, number });
+		return this.content.get(`${repo}#${number}`) ?? { body: "", comments: [] };
 	}
 
 	private act(op: string, token: string, repo: string, number: number, body?: string) {

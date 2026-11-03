@@ -94,3 +94,11 @@ character that still reads as an inbox, and chose **Nudgebox** (the box that nud
 you: the needs-you tab plus push). "Octobox" was avoided: it is an existing GitHub
 notifications product. The GitHub App is renamed to match; the repo name and the
 gh.bioinfolder.com address stay.
+
+## 2026-11-03: AI summary through the lab LLM
+
+Dr. Jeong asked for an AI summary using llm.bioinfolder.com. His answers: summarize
+**each PR and each issue** (no whole-inbox digest), **on click** only, cached until the
+item changes, rather than pre-generating for every open item. The lab LLM keeps private
+repo content in the lab; a test call answered in ~1.4 s. Nudgebox gets its own `bif_`
+token (portal.bioinfolder.com/tokens) so its use is separate from labbot's.

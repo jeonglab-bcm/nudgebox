@@ -121,3 +121,23 @@ on issues.
   Never for your own action (your own comment, assigning yourself). One push per
   event per person, even if several triggers match.
 - Kept current like PRs: webhooks (`issues`, `issue_comment`) plus the 10-minute sync.
+
+## 12. AI summary
+
+- A **Summarize** button on every PR and issue row. Nothing is generated until it is
+  clicked.
+- The summary is made by the lab's own LLM at `llm.bioinfolder.com` (OpenAI-compatible
+  API, model set in `config.yaml`), so private repo content stays on lab hardware.
+  Without an LLM key the button is not shown.
+- What the model reads: **PR**: title, description, changed files and their diffs,
+  review and conversation comments. **Issue**: title, description, comments. Input is
+  cut to a fixed size so very large PRs still work.
+- What it writes: a few short bullets on what the item is about, where it stands, and
+  what is blocking it or being asked.
+- Only for items you can see (section 4). Read-only: nothing is posted to GitHub.
+- A summary is kept until the item changes (new activity, or a new head commit for a
+  PR); clicking again before that shows the kept one without asking the model. It is
+  shared by everyone who can see the item.
+- If the LLM fails, the error is shown and nothing is kept, so the next click tries
+  again.
+- The item's text is treated as data, never as instructions to the model.

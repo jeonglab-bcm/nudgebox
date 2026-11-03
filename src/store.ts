@@ -30,6 +30,7 @@ export class Store {
 			CREATE TABLE IF NOT EXISTS issues (key TEXT PRIMARY KEY, json TEXT NOT NULL);
 			CREATE TABLE IF NOT EXISTS hidden (lab_user TEXT NOT NULL, kind TEXT NOT NULL, key TEXT NOT NULL,
 				hidden_at TEXT NOT NULL, PRIMARY KEY (lab_user, kind, key));
+			CREATE TABLE IF NOT EXISTS summaries (key TEXT PRIMARY KEY, version TEXT NOT NULL, summary TEXT NOT NULL, at TEXT NOT NULL);
 		`);
 	}
 
@@ -154,6 +155,17 @@ export class Store {
 	hiddenFor(labUser: string): Map<string, string> {
 		const rows = this.db.prepare("SELECT kind, key, hidden_at FROM hidden WHERE lab_user = ?").all(labUser) as { kind: string; key: string; hidden_at: string }[];
 		return new Map(rows.map((r) => [`${r.kind}:${r.key}`, r.hidden_at]));
+	}
+
+	// -- AI summaries (SPEC 12), "pr:owner/repo#n" -> kept until `version` changes --
+
+	summary(key: string, version: string): string | undefined {
+		const r = this.db.prepare("SELECT summary FROM summaries WHERE key = ? AND version = ?").get(key, version) as { summary: string } | undefined;
+		return r?.summary;
+	}
+
+	saveSummary(key: string, version: string, summary: string, at: string) {
+		this.db.prepare("INSERT OR REPLACE INTO summaries VALUES (?, ?, ?, ?)").run(key, version, summary, at);
 	}
 
 	// -- push devices ---------------------------------------------------------

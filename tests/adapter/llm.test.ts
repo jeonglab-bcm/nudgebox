@@ -26,7 +26,7 @@ async function fakeLlm(reply: (body: any) => { status: number; data: unknown; de
 	});
 	await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
 	const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`;
-	return { baseUrl, seen, close: () => server.closeAllConnections() || server.close() };
+	return { baseUrl, seen, close: () => { server.closeAllConnections(); server.close(); } };
 }
 
 const answer = (content: string) => ({ status: 200, data: { choices: [{ message: { role: "assistant", content } }] } });

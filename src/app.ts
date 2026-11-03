@@ -15,6 +15,8 @@ import { Store, type LinkedUser } from "./store.ts";
 import { seal, unseal } from "./crypto.ts";
 import { buildInbox, isMine, reviewRequested, type Viewer } from "./inbox.ts";
 import { verifySignature } from "./webhook.ts";
+import type { Summarize } from "./llm.ts";
+import { issuePrompt, prPrompt } from "./summary.ts";
 
 export interface Config {
 	orgs: string[]; // accounts the GitHub App is installed on
@@ -46,6 +48,7 @@ export interface AppOptions {
 	push: (sub: PushSubscription, payload: PushPayload) => Promise<void>; // throws {statusCode: 404|410} when gone
 	now: () => Date;
 	log?: (msg: string) => void;
+	summarize?: Summarize; // SPEC 12: the lab LLM; absent -> no Summarize button
 }
 
 export interface App {
@@ -385,6 +388,49 @@ export function createApp(opts: AppOptions): App {
 		return { ok: true };
 	}
 
+	/** SPEC 12: one click on Summarize. Kept per item version; one model call at a time per version. */
+	const summarizing = new Map<string, Promise<string>>();
+	async function summarizeItem(req: IncomingMessage, lab: string) {
+		const llm = opts.summarize;
+		if (!llm) throw new HttpError(503, "AI summary is not set up");
+		const b = await json(req);
+		if (b.kind !== "pr" && b.kind !== "issue") throw new HttpError(400, "kind must be pr or issue");
+		const { repos } = await viewOf(linked(lab));
+		const ok = typeof b.repo === "string" && Number.isInteger(b.number);
+		const pr = ok && b.kind === "pr" ? store.pr(b.repo, b.number) : undefined;
+		const issue = ok && b.kind === "issue" ? store.issue(b.repo, b.number) : undefined;
+		const item = pr ?? issue;
+		if (!item || !repos.has(item.repo.toLowerCase())) throw new HttpError(404, "not found");
+		const key = `${b.kind}:${item.repo}#${item.number}`;
+		const version = pr ? `${pr.updatedAt}|${pr.headSha}` : item.updatedAt;
+		const kept = store.summary(key, version);
+		if (kept !== undefined) return { summary: kept, cached: true };
+		const id = `${key}@${version}`;
+		let run = summarizing.get(id);
+		if (!run) {
+			run = (async () => {
+				const prompt = pr
+					? prPrompt(pr, await github.prContent(pr.repo, pr.number))
+					: issuePrompt(issue!, await github.issueContent(issue!.repo, issue!.number));
+				let text: string;
+				try {
+					text = await llm(prompt);
+				} catch (e) {
+					throw new HttpError(502, `LLM failed: ${(e as Error).message}`);
+				}
+				store.saveSummary(key, version, text, opts.now().toISOString());
+				return text;
+			})().finally(() => summarizing.delete(id));
+			summarizing.set(id, run);
+		}
+		try {
+			return { summary: await run, cached: false };
+		} catch (e) {
+			if (e instanceof HttpError) throw e;
+			throw new HttpError(502, `could not read it from GitHub: ${(e as Error).message}`);
+		}
+	}
+
 	async function route(req: IncomingMessage, res: ServerResponse) {
 		const url = new URL(req.url ?? "/", "http://x");
 		const path = url.pathname;
@@ -441,12 +487,12 @@ export function createApp(opts: AppOptions): App {
 			const f = fold(lab, "pr", store.prs().filter(visible(repos)));
 			// `version` lets an open page (e.g. the Home Screen app, which never reloads by
 			// itself) notice a newer deploy and reload.
-			return send(res, 200, { login: u.login, version: scriptVersion, ...buildInbox(f.live, viewer), old: f.old, hidden: f.hidden });
+			return send(res, 200, { login: u.login, version: scriptVersion, ...buildInbox(f.live, viewer), old: f.old, hidden: f.hidden, summarize: Boolean(opts.summarize) });
 		}
 		if (method === "GET" && path === "/api/issues") {
 			const { repos } = await viewOf(linked(lab));
 			const f = fold(lab, "issue", store.issues().filter(visible(repos)));
-			return send(res, 200, { items: f.live.sort(newest), old: f.old, hidden: f.hidden });
+			return send(res, 200, { items: f.live.sort(newest), old: f.old, hidden: f.hidden, summarize: Boolean(opts.summarize) });
 		}
 		if (method === "POST" && (path === "/api/hide" || path === "/api/unhide")) {
 			const b = await json(req);
@@ -464,6 +510,9 @@ export function createApp(opts: AppOptions): App {
 			store.deleteUser(lab);
 			access.delete(lab);
 			return send(res, 200, { ok: true });
+		}
+		if (method === "POST" && path === "/api/summarize") {
+			return send(res, 200, await summarizeItem(req, lab));
 		}
 		if (method === "POST" && path.startsWith("/api/prs/")) {
 			return send(res, 200, await act(req, lab, path.slice("/api/prs/".length)));

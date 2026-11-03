@@ -80,7 +80,7 @@ test("12. only items you can see; anything else is 404 and never reaches the mod
 		assert.equal((await t.summary("kellyl", "pr", MINE, 7)).status, 404); // hwan's personal repo
 		assert.equal((await t.summary("hyunhwanj", "pr", LAB, 999)).status, 404);
 		assert.equal((await t.summary("hyunhwanj", "issue", LAB, 3)).status, 404); // a PR, not an issue
-		assert.equal((await t.summary("hyunhwanj", "commit", LAB, 3)).status, 400);
+		assert.equal((await t.summary("hyunhwanj", "commit" as "pr", LAB, 3)).status, 400);
 		assert.equal(t.llm.calls.length, 0);
 		assert.equal(t.github.calls.filter((c) => c.op.endsWith("Content")).length, 0);
 	} finally {

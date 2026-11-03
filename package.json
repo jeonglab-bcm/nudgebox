@@ -1,0 +1,18 @@
+{
+  "name": "gh-dashboard",
+  "private": true,
+  "type": "module",
+  "description": "gh.bioinfolder.com: one inbox for the lab's GitHub PRs, with iPhone/Mac push",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --import tsx --test tests/acceptance/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
+  }
+}

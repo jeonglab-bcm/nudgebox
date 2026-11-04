@@ -271,7 +271,7 @@ test("13. everything, fonts included, comes from Nudgebox itself", async () => {
 		const own = new URL(s.base).host;
 		const others = s.requests.filter((u) => new URL(u).host !== own);
 		assert.deepEqual(others, []);
-		assert.ok(await s.page.evaluate(() => document.fonts.check('16px "Outfit"')), "Outfit did not load");
+		assert.ok(await s.page.evaluate(() => document.fonts.check('16px "Inter"')), "Inter did not load");
 	} finally {
 		await s.close();
 	}

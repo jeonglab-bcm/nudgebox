@@ -112,3 +112,10 @@ with the `modern-web-design` skill (freshtechbro/claudedesignskills): bold minim
 glass, and a lab-notebook look; he picked **glass** (dark first, frosted bars).
 Fonts (Outfit, IBM Plex Mono, both OFL) are served by Nudgebox so the private app
 makes no requests to Google.
+
+## 2026-11-04: Bold minimal look
+
+After a day with the glass look, Dr. Jeong asked to switch Nudgebox to the **bold
+minimal** skin from the 2026-11-03 comparison: monochrome with a coral accent and big
+tab counts, light first. The list's structure and keys are unchanged. Fonts are now
+Inter, Space Grotesk and JetBrains Mono, still served by Nudgebox.

@@ -198,9 +198,10 @@ stack of cards.
   A key that does not apply (approving your own PR, re-running with no failed checks)
   does nothing to GitHub and says why. A hint line with the main keys sits at the
   bottom on computers, not on phones.
-- **Look:** dark by default with a light version that follows the system setting;
-  frosted header and key bar; the selected row is lifted. Fonts are served by
-  Nudgebox, not a third party. Motion is off when the system asks for reduced motion.
+- **Look:** "bold minimal": monochrome with one coral accent for what needs you, the
+  tab counts as large numerals, light by default with a dark version that follows the
+  system setting (Settings can fix either, section 14). Fonts are served by Nudgebox,
+  not a third party. Motion is off when the system asks for reduced motion.
 
 ## 14. Settings
 

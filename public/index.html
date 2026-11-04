@@ -12,70 +12,105 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0d1117">
 <style>
-:root { --bg:#f6f8fa; --card:#fff; --fg:#1f2328; --muted:#59636e; --line:#d1d9e0; --accent:#0969da;
-  --ok:#1a7f37; --bad:#cf222e; --warn:#9a6700; --chip:#eef1f4; }
-@media (prefers-color-scheme: dark) { :root { --bg:#0d1117; --card:#151b23; --fg:#e6edf3; --muted:#9198a1;
-  --line:#3d444d; --accent:#4493f8; --ok:#3fb950; --bad:#f85149; --warn:#d29922; --chip:#212830; } }
+/* structure (SPEC 13): one line per item; the look lives in the skin below */
 * { box-sizing: border-box; }
-[hidden] { display:none !important; }
-body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
-header { position:sticky; top:0; z-index:1; background:var(--bg); border-bottom:1px solid var(--line);
-  display:flex; align-items:center; gap:8px; padding:10px 16px; }
-header h1 { font-size:17px; margin:0; flex:1; }
-main { max-width:860px; margin:0 auto; padding:8px 16px 40px; }
-button, .btn { font:inherit; font-size:13px; border:1px solid var(--line); background:var(--card); color:var(--fg);
-  border-radius:8px; padding:6px 10px; cursor:pointer; text-decoration:none; white-space:nowrap; }
-button.primary, .btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
-button:disabled { opacity:.5; }
-h2 { font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin:22px 0 8px; }
-h2 .n { background:var(--chip); border-radius:10px; padding:1px 8px; margin-left:6px; }
-.pr { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px; margin-bottom:8px; }
-.top { display:flex; gap:8px; align-items:baseline; }
-.title { font-weight:600; flex:1; color:var(--fg); text-decoration:none; overflow-wrap:anywhere; }
-.meta { color:var(--muted); font-size:13px; margin-top:4px; display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
-.chip { background:var(--chip); border-radius:10px; padding:1px 8px; font-size:12px; }
-.chip.ok { color:var(--ok); } .chip.bad { color:var(--bad); } .chip.warn { color:var(--warn); }
-.summary { margin-top:10px; padding:8px 12px; border-left:3px solid var(--accent); background:var(--bg); border-radius:6px; font-size:14px; }
-.summary ul { margin:0; padding-left:18px; }
-.summary li + li { margin-top:4px; }
-.actions { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
-.empty { color:var(--muted); font-size:13px; padding:4px 2px 8px; }
-nav { position:sticky; top:53px; z-index:1; background:var(--bg); padding:8px 16px 6px; border-bottom:1px solid var(--line); }
-.row { display:flex; gap:6px; align-items:center; max-width:860px; margin:0 auto; }
-.row + .row { margin-top:8px; }
-.seg { display:flex; background:var(--chip); border-radius:9px; padding:2px; }
-.seg button { border:0; background:transparent; padding:5px 12px; border-radius:7px; }
-.seg button.on { background:var(--card); box-shadow:0 1px 2px rgba(0,0,0,.15); font-weight:600; }
-.tabs { display:flex; gap:6px; overflow-x:auto; scrollbar-width:none; flex:1; }
-.tabs::-webkit-scrollbar { display:none; }
-.tabs button { border-radius:16px; }
-.tabs button.on { background:var(--fg); color:var(--bg); border-color:var(--fg); }
-.tabs .n { opacity:.7; margin-left:3px; }
-select { font:inherit; font-size:13px; border:1px solid var(--line); background:var(--card); color:var(--fg); border-radius:8px; padding:5px 8px; max-width:46%; }
-details.fold { margin-top:18px; }
-details.fold summary { color:var(--muted); font-size:13px; cursor:pointer; padding:6px 2px; text-transform:uppercase; letter-spacing:.04em; }
-.chip.label { color:var(--accent); }
-.notice { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-top:16px; }
-#toast { position:fixed; left:16px; right:16px; bottom:calc(16px + env(safe-area-inset-bottom)); max-width:560px; margin:0 auto;
-  background:var(--fg); color:var(--bg); border-radius:10px; padding:10px 14px; display:none; }
+[hidden] { display: none !important; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; min-height: 100vh; padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+button, .btn, select { font: inherit; color: inherit; cursor: pointer; text-decoration: none; white-space: nowrap; }
+button:disabled { opacity: .5; cursor: default; }
+.bar { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; gap: 10px; padding: 10px 20px; }
+.brand { display: flex; align-items: center; gap: 8px; margin-right: 6px; }
+.brand h1 { margin: 0; }
+.grow { flex: 1; }
+.seg { display: flex; }
+.seg button { display: inline-flex; gap: 6px; align-items: baseline; }
+.tabs { position: sticky; z-index: 2; display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; padding: 0 20px; }
+.tabs::-webkit-scrollbar { display: none; }
+.tabs button { display: inline-flex; gap: 8px; align-items: baseline; }
+main { max-width: 1120px; margin: 0 auto; padding: 8px 12px 96px; }
+.list { list-style: none; margin: 0; padding: 0; }
+.row { cursor: default; scroll-margin: 120px 0 64px; }
+.line { display: grid; align-items: center; column-gap: 12px; min-height: 36px; padding: 0 12px 0 0;
+  grid-template-columns: 4px minmax(6rem, 10rem) minmax(0, 1fr) auto 1.4rem 1.4rem 2.6rem 6.5rem; }
+.mark { align-self: stretch; }
+.ref, .title, .who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.title { text-decoration: none; color: inherit; }
+.flags { display: flex; gap: 4px; }
+.ci, .rv, .age { text-align: center; font-variant-numeric: tabular-nums; }
+.age { text-align: right; }
+.detail { padding: 4px 16px 14px 28px; }
+.facts { font-size: .86em; }
+.actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.actions button, .actions .btn { display: inline-flex; align-items: center; gap: 6px; }
+.summary ul { margin: 8px 0 0; padding-left: 18px; }
+.summary li + li { margin-top: 4px; }
+.fold { margin-top: 20px; }
+.fold summary { cursor: pointer; list-style: none; display: flex; gap: 8px; align-items: baseline; padding: 6px 16px; }
+.fold summary::-webkit-details-marker { display: none; }
+.empty { padding: 28px 16px; }
+.foot { margin-top: 40px; padding: 0 16px; }
+.keys { position: fixed; left: 0; right: 0; bottom: 0; z-index: 3; display: none; justify-content: center; flex-wrap: wrap; gap: 4px 16px; padding: 8px 16px calc(8px + env(safe-area-inset-bottom)); }
+@media (hover: hover) and (pointer: fine) { .keys { display: flex; } }
+#help { max-width: 440px; width: calc(100% - 32px); }
+#help dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 12px 0 16px; }
+#help dt { text-align: right; } #help dd { margin: 0; }
+#toast { position: fixed; left: 16px; right: 16px; bottom: calc(52px + env(safe-area-inset-bottom)); z-index: 4; max-width: 520px; margin: 0 auto; display: none; }
+.notice { margin: 24px 16px; }
+@media (max-width: 720px) {
+  .bar { padding: 8px 14px; gap: 8px; flex-wrap: wrap; }
+  .tabs { padding: 0 14px; }
+  main { padding: 4px 0 40px; }
+  .line { grid-template-columns: 4px minmax(0, 1fr) auto auto 2.4rem; grid-template-areas: "mark title title title age" "mark ref flags ci rv";
+    row-gap: 2px; padding: 8px 14px 8px 0; min-height: 56px; }
+  .mark { grid-area: mark; } .title { grid-area: title; } .age { grid-area: age; } .ref { grid-area: ref; }
+  .flags { grid-area: flags; } .ci { grid-area: ci; } .rv { grid-area: rv; }
+  .who { display: none; }
+  .detail { padding: 2px 14px 14px 18px; }
+  .actions button, .actions .btn { min-height: 40px; }
+}
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; } }
+</style>
+<style id="skin">
+/*SKIN*/
 </style>
 </head>
 <body>
-<header>
-  <h1>Nudgebox</h1>
-  <button id="push" hidden>Turn on notifications</button>
-  <button id="reload" aria-label="Refresh">↻</button>
+<header class="bar">
+  <div class="brand"><span class="logo" aria-hidden="true"></span><h1>Nudgebox</h1></div>
+  <div class="seg" id="kind"><button data-k="pr" class="on">PRs</button><button data-k="issue">Issues</button></div>
+  <select id="repo" aria-label="Repository"><option value="">All repos</option></select>
+  <span class="grow"></span>
+  <button id="push" class="quiet" hidden>Turn on notifications</button>
+  <button id="reload" class="icon" aria-label="Refresh" title="Refresh">↻</button>
+  <button id="keys-btn" class="icon" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">?</button>
 </header>
-<nav>
-  <div class="row">
-    <div class="seg" id="kind"><button data-k="pr" class="on">PRs</button><button data-k="issue">Issues</button></div>
-    <select id="repo" aria-label="Repository"><option value="">All repos</option></select>
-  </div>
-  <div class="row"><div class="tabs" id="tabs"></div></div>
-</nav>
+<nav class="tabs" id="tabs" aria-label="PR status"></nav>
 <main id="main"><p class="empty">Loading…</p></main>
-<div id="toast" role="status"></div>
+<footer class="keys" aria-hidden="true">
+  <span><kbd>j</kbd> <kbd>k</kbd> move</span><span><kbd>x</kbd> details</span><span><kbd>↵</kbd> open</span><span><kbd>a</kbd> approve</span>
+  <span><kbd>m</kbd> merge</span><span><kbd>r</kbd> re-run</span><span><kbd>s</kbd> summarize</span><span><kbd>h</kbd> hide</span><span><kbd>?</kbd> all keys</span>
+</footer>
+<dialog id="help" aria-labelledby="help-title">
+  <h2 id="help-title">Keyboard</h2>
+  <dl>
+    <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>next / previous</dd>
+    <dt><kbd>x</kbd> <kbd>space</kbd></dt><dd>show / hide details</dd>
+    <dt><kbd>↵</kbd> <kbd>o</kbd></dt><dd>open on GitHub</dd>
+    <dt><kbd>a</kbd></dt><dd>approve</dd>
+    <dt><kbd>m</kbd></dt><dd>merge (asks first)</dd>
+    <dt><kbd>r</kbd></dt><dd>re-run failed checks</dd>
+    <dt><kbd>c</kbd></dt><dd>comment</dd>
+    <dt><kbd>s</kbd></dt><dd>AI summary</dd>
+    <dt><kbd>h</kbd></dt><dd>hide / unhide</dd>
+    <dt><kbd>1</kbd>–<kbd>4</kbd></dt><dd>Needs you, WIP, CI failing, All</dd>
+    <dt><kbd>p</kbd> <kbd>i</kbd></dt><dd>PRs / Issues</dd>
+    <dt><kbd>/</kbd></dt><dd>repo filter</dd>
+    <dt><kbd>?</kbd></dt><dd>this list</dd>
+  </dl>
+  <form method="dialog"><button>Close</button></form>
+</dialog>
+<div id="toast" role="status" aria-live="polite"></div>
 <script type="module" src="/app.js"></script>
 </body>
 </html>

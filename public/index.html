@@ -19,13 +19,14 @@ html { -webkit-text-size-adjust: 100%; }
 body { margin: 0; min-height: 100vh; padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
 button, .btn, select { font: inherit; color: inherit; cursor: pointer; text-decoration: none; white-space: nowrap; }
 button:disabled { opacity: .5; cursor: default; }
-.bar { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; gap: 10px; padding: 10px 20px; }
+.chrome { position: sticky; top: 0; z-index: 3; }
+.bar { display: flex; align-items: center; gap: 10px; padding: 10px 20px; }
 .brand { display: flex; align-items: center; gap: 8px; margin-right: 6px; }
 .brand h1 { margin: 0; }
 .grow { flex: 1; }
 .seg { display: flex; }
 .seg button { display: inline-flex; gap: 6px; align-items: baseline; }
-.tabs { position: sticky; z-index: 2; display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; padding: 0 20px; }
+.tabs { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; padding: 0 20px; }
 .tabs::-webkit-scrollbar { display: none; }
 .tabs button { display: inline-flex; gap: 8px; align-items: baseline; }
 main { max-width: 1120px; margin: 0 auto; padding: 8px 12px 96px; }
@@ -76,6 +77,7 @@ main { max-width: 1120px; margin: 0 auto; padding: 8px 12px 96px; }
 </style>
 </head>
 <body>
+<div class="chrome">
 <header class="bar">
   <div class="brand"><span class="logo" aria-hidden="true"></span><h1>Nudgebox</h1></div>
   <div class="seg" id="kind"><button data-k="pr" class="on">PRs</button><button data-k="issue">Issues</button></div>
@@ -86,6 +88,7 @@ main { max-width: 1120px; margin: 0 auto; padding: 8px 12px 96px; }
   <button id="keys-btn" class="icon" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">?</button>
 </header>
 <nav class="tabs" id="tabs" aria-label="PR status"></nav>
+</div>
 <main id="main"><p class="empty">Loading…</p></main>
 <footer class="keys" aria-hidden="true">
   <span><kbd>j</kbd> <kbd>k</kbd> move</span><span><kbd>x</kbd> details</span><span><kbd>↵</kbd> open</span><span><kbd>a</kbd> approve</span>

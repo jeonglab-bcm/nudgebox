@@ -257,6 +257,7 @@ function render() {
 
 	const prev = shown.findIndex((r) => r.key === view.sel);
 	shown = [];
+	main.dataset.view = kind === "pr" ? view.tab : "issues"; // lets the skin mark "needs you" rows only where that adds something
 	main.replaceChildren();
 	main.append(live.length ? list(live, kind === "pr" ? "Pull requests" : "Issues") : el("p", { class: "empty" }, kind === "pr" ? "Nothing here. Nice." : "No open issues"));
 	main.append(fold("old", "Old: no activity for 30+ days", wrap(kd.old)) || "", fold("hidden", "Hidden", wrap(kd.hidden, { hidden: true })) || "");

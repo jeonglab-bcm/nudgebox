@@ -130,7 +130,7 @@ main { padding-top: 16px; }
 .ref { font: 12.5px var(--mono); color: var(--muted); }
 .num { color: var(--cyan); }
 .title { font-weight: 500; }
-.tone-you .title::after { content: "you"; margin-left: 8px; font: 600 10px/1 var(--mono); text-transform: uppercase; letter-spacing: .08em; vertical-align: 2px;
+main[data-view="all"] .tone-you .title::after { content: "you"; margin-left: 8px; font: 600 10px/1 var(--mono); text-transform: uppercase; letter-spacing: .08em; vertical-align: 2px;
   padding: 3px 6px; border-radius: 999px; color: var(--violet); border: 1px solid color-mix(in oklch, var(--violet) 50%, transparent); }
 .flag { font: 500 11px var(--mono); padding: 2px 8px; border-radius: 999px; border: 1px solid var(--glass-line); color: var(--muted); }
 .flag.bad { color: var(--bad); border-color: color-mix(in oklch, var(--bad) 45%, transparent); }

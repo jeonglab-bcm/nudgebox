@@ -20,13 +20,14 @@ body { margin: 0; min-height: 100vh; padding: env(safe-area-inset-top) 0 env(saf
 button, .btn, select { font: inherit; color: inherit; cursor: pointer; text-decoration: none; white-space: nowrap; }
 button:disabled { opacity: .5; cursor: default; }
 .chrome { position: sticky; top: 0; z-index: 3; }
-.bar { display: flex; align-items: center; gap: 10px; padding: 10px 20px; }
+.bar { display: flex; align-items: center; gap: 10px; padding: 10px var(--gutter); }
+:root { --gutter: max(20px, calc((100% - 1120px) / 2 + 12px)); }
 .brand { display: flex; align-items: center; gap: 8px; margin-right: 6px; }
 .brand h1 { margin: 0; }
 .grow { flex: 1; }
 .seg { display: flex; }
 .seg button { display: inline-flex; gap: 6px; align-items: baseline; }
-.tabs { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; padding: 0 20px; }
+.tabs { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; padding: 0 var(--gutter); }
 .tabs::-webkit-scrollbar { display: none; }
 .tabs button { display: inline-flex; gap: 8px; align-items: baseline; }
 main { max-width: 1120px; margin: 0 auto; padding: 8px 12px 96px; }
@@ -53,14 +54,20 @@ main { max-width: 1120px; margin: 0 auto; padding: 8px 12px 96px; }
 .foot { margin-top: 40px; padding: 0 16px; }
 .keys { position: fixed; left: 0; right: 0; bottom: 0; z-index: 3; display: none; justify-content: center; flex-wrap: wrap; gap: 4px 16px; padding: 8px 16px calc(8px + env(safe-area-inset-bottom)); }
 @media (hover: hover) and (pointer: fine) { .keys { display: flex; } }
+/* no keyboard (phones): no key hints */
+@media not ((hover: hover) and (pointer: fine)) { #keys-btn, .actions kbd { display: none; } }
 #help { max-width: 440px; width: calc(100% - 32px); }
 #help dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 12px 0 16px; }
 #help dt { text-align: right; } #help dd { margin: 0; }
 #toast { position: fixed; left: 16px; right: 16px; bottom: calc(52px + env(safe-area-inset-bottom)); z-index: 4; max-width: 520px; margin: 0 auto; display: none; }
 .notice { margin: 24px 16px; }
 @media (max-width: 720px) {
-  .bar { padding: 8px 14px; gap: 8px; flex-wrap: wrap; }
-  .tabs { padding: 0 14px; }
+  :root { --gutter: 14px; }
+  .bar { padding: 8px var(--gutter); gap: 8px; flex-wrap: wrap; }
+  .grow { display: none; }
+  #reload { margin-left: auto; }
+  #repo { order: 5; flex: 1; min-width: 0; }
+  #push { order: 6; }
   main { padding: 4px 0 40px; }
   .line { grid-template-columns: 4px minmax(0, 1fr) auto auto 2.4rem; grid-template-areas: "mark title title title age" "mark ref flags ci rv";
     row-gap: 2px; padding: 8px 14px 8px 0; min-height: 56px; }

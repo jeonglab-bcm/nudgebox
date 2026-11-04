@@ -21,7 +21,9 @@ const fakePush = (sub: string | null, permission = "default") => `
 		getSubscription: async () => wrap(sessionStorage.fakeSub),
 		subscribe: async () => { sessionStorage.fakeSub = "https://web.push.apple.com/this-device"; return wrap(sessionStorage.fakeSub); },
 	} };
-	Object.defineProperty(navigator, "serviceWorker", { value: { register: async () => reg, ready: Promise.resolve(reg) } });
+	window.swListeners = [];
+	Object.defineProperty(navigator, "serviceWorker", { value: { register: async () => reg, ready: Promise.resolve(reg), addEventListener: (type, fn) => type === "message" && window.swListeners.push(fn) } });
+	window.pushCheckMs = 1500; // instead of 15 s
 	window.PushManager ??= function () {};
 	let perm = ${JSON.stringify(permission)};
 	window.Notification = { get permission() { return perm; }, requestPermission: async () => (perm = "granted") };
@@ -150,7 +152,7 @@ test("14. Send a test sends to this device only", async () => {
 		await s.page.click("text=Send a test");
 		await s.page.waitForTimeout(400);
 		assert.deepEqual(s.t.pushed.map((p) => p.endpoint), ["https://web.push.apple.com/this-device"]);
-		assert.match(await text(s.page, "#toast"), /sent/i);
+		assert.match(await text(s.page, "#push-check"), /sent/i);
 	} finally {
 		await s.close();
 	}
@@ -241,6 +243,53 @@ test("14. Settings lists what notifies you", async () => {
 	try {
 		const t = await text(s.page, "#triggers");
 		for (const w of [/review/i, /CI/, /9 AM/, /assigned/i, /mention/i]) assert.match(t, w);
+	} finally {
+		await s.close();
+	}
+});
+
+/** As the service worker would: tell the page that the last test push arrived. */
+const workerSays = (page: Page, msg: object) => page.evaluate((m) => (window as unknown as { swListeners: ((e: { data: object }) => void)[] }).swListeners.forEach((f) => f({ data: m })), msg);
+
+test("14. Send a test: the browser got it and asked the system to show it", async () => {
+	const s = await open({ sub: "https://fcm.googleapis.com/fcm/send/this-device" });
+	try {
+		await s.t.subscribe("hyunhwanj", "https://fcm.googleapis.com/fcm/send/this-device");
+		await s.page.click("#bell");
+		await s.page.click("text=Send a test");
+		await s.page.waitForFunction(() => document.querySelector("#push-check")?.textContent?.includes("sent"));
+		const id = (s.t.pushed.at(-1)!.payload as { test?: string }).test!;
+		await workerSays(s.page, { type: "push-received", test: id, shown: true });
+		await s.page.waitForFunction(() => /received/.test(document.querySelector("#push-check")?.textContent ?? ""));
+		assert.match(await text(s.page, "#push-check"), /System Settings → Notifications/);
+	} finally {
+		await s.close();
+	}
+});
+
+test("14. Send a test: the browser got it but could not show it", async () => {
+	const s = await open({ sub: "https://fcm.googleapis.com/fcm/send/this-device" });
+	try {
+		await s.t.subscribe("hyunhwanj", "https://fcm.googleapis.com/fcm/send/this-device");
+		await s.page.click("#bell");
+		await s.page.click("text=Send a test");
+		await s.page.waitForFunction(() => document.querySelector("#push-check")?.textContent?.includes("sent"));
+		const id = (s.t.pushed.at(-1)!.payload as { test?: string }).test!;
+		await workerSays(s.page, { type: "push-received", test: id, shown: false, error: "permission denied" });
+		await s.page.waitForFunction(() => /could not show/.test(document.querySelector("#push-check")?.textContent ?? ""));
+		assert.match(await text(s.page, "#push-check"), /permission denied/);
+	} finally {
+		await s.close();
+	}
+});
+
+test("14. Send a test: the browser did not receive it in time", async () => {
+	const s = await open({ sub: "https://fcm.googleapis.com/fcm/send/this-device" });
+	try {
+		await s.t.subscribe("hyunhwanj", "https://fcm.googleapis.com/fcm/send/this-device");
+		await s.page.click("#bell");
+		await s.page.click("text=Send a test");
+		await s.page.waitForFunction(() => /did not receive/.test(document.querySelector("#push-check")?.textContent ?? ""), null, { timeout: 5000 });
 	} finally {
 		await s.close();
 	}

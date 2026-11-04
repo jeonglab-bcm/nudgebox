@@ -15,11 +15,13 @@ function worker() {
 	const listeners: Record<string, (e: unknown) => void> = {};
 	const shown: { title: string }[] = [];
 	const badge: (number | null)[] = [];
+	const told: unknown[] = []; // messages to open Nudgebox pages
+	const windows = [{ postMessage: (m: unknown) => void told.push(m) }];
 	const self = {
 		addEventListener: (type: string, fn: (e: unknown) => void) => (listeners[type] = fn),
 		registration: { showNotification: async (title: string) => void shown.push({ title }) },
 		navigator: { setAppBadge: async (n: number) => void badge.push(n), clearAppBadge: async () => void badge.push(null) },
-		clients: { openWindow: async () => null },
+		clients: { openWindow: async () => null, matchAll: async () => windows },
 	};
 	runInNewContext(readFileSync("public/sw.js", "utf8"), { self });
 	const push = async (payload: object) => {
@@ -27,7 +29,7 @@ function worker() {
 		listeners.push({ data: { json: () => payload }, waitUntil: (p: Promise<unknown>) => waits.push(p) });
 		await Promise.all(waits);
 	};
-	return { push, shown, badge, self };
+	return { push, shown, badge, self, told };
 }
 
 test("7. a notification sets the icon's count from the push", async () => {
@@ -69,4 +71,20 @@ test("7. opening the page clears the icon and resets the count on the server", a
 		side.server.close();
 		await t.close();
 	}
+});
+
+test("14. the worker tells open pages that a test arrived and was shown", async () => {
+	const w = worker();
+	await w.push({ title: "Nudgebox test", body: "", test: "abc12345" });
+	const plain = (x: unknown) => JSON.parse(JSON.stringify(x)); // objects made in the worker's own context
+	assert.deepEqual(plain(w.told), [{ type: "push-received", test: "abc12345", shown: true }]);
+	await w.push({ title: "Review requested", body: "" });
+	assert.equal(w.told.length, 1); // only tests are reported
+});
+
+test("14. the worker reports a test it could not show, with the reason", async () => {
+	const w = worker();
+	w.self.registration.showNotification = async () => { throw new Error("permission denied"); };
+	await w.push({ title: "Nudgebox test", body: "", test: "abc12345" });
+	assert.deepEqual(JSON.parse(JSON.stringify(w.told)), [{ type: "push-received", test: "abc12345", shown: false, error: "permission denied" }]);
 });

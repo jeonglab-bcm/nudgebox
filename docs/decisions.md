@@ -102,3 +102,13 @@ Dr. Jeong asked for an AI summary using llm.bioinfolder.com. His answers: summar
 item changes, rather than pre-generating for every open item. The lab LLM keeps private
 repo content in the lab; a test call answered in ~1.4 s. Nudgebox gets its own `bif_`
 token (portal.bioinfolder.com/tokens) so its use is separate from labbot's.
+
+## 2026-11-03: Triage list, "Glass" look
+
+Dr. Jeong found the GitHub-style cards generic. He chose a **dense triage list**
+(one line per item, keyboard-driven, like a mail client) over an editorial briefing
+or a bold branded look. Three skins of the same list were then built side by side
+with the `modern-web-design` skill (freshtechbro/claudedesignskills): bold minimal,
+glass, and a lab-notebook look; he picked **glass** (dark first, frosted bars).
+Fonts (Outfit, IBM Plex Mono, both OFL) are served by Nudgebox so the private app
+makes no requests to Google.

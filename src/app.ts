@@ -70,6 +70,10 @@ const STATIC: Record<string, string> = {
 	"/icon.svg": "image/svg+xml",
 	"/icon-180.png": "image/png",
 	"/icon-512.png": "image/png",
+	"/fonts/Outfit-400-700.woff2": "font/woff2",
+	"/fonts/IBMPlexMono-400.woff2": "font/woff2",
+	"/fonts/IBMPlexMono-500.woff2": "font/woff2",
+	"/fonts/IBMPlexMono-600.woff2": "font/woff2",
 };
 
 class HttpError extends Error {

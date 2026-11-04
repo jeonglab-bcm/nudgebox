@@ -113,7 +113,15 @@ const ACTIONS = {
 		if (b && b.trim()) await doAction(x, "comment", { body: b });
 	},
 	summarize: (x, k) => (data[k]?.summarize ? summarize(k, x) : "Summaries are not set up"),
-	hide: (x, k, hidden) => setHidden(k, x, !hidden),
+	hide: (x, k, hidden) => {
+		// hiding the selected row hands the selection to the next live row (or the one above)
+		const i = shown.findIndex((r) => r.key === view.sel);
+		if (!hidden && i >= 0 && shown[i].item === x) {
+			const next = shown.slice(i + 1).find((r) => !r.hidden) ?? shown.slice(0, i).reverse().find((r) => !r.hidden);
+			if (next) view.sel = next.key;
+		}
+		return setHidden(k, x, !hidden);
+	},
 };
 const KEYS = { Enter: "open", o: "open", a: "approve", m: "merge", r: "rerun", c: "comment", s: "summarize", h: "hide" };
 

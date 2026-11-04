@@ -4,8 +4,8 @@
  * http://127.0.0.1:<port>/. A small proxy in front plays the Keycloak sidecar (you are
  * lab user "hyunhwanj", GitHub "hwan").
  */
-import { createServer, request } from "node:http";
-import { start, ORIGIN } from "../tests/helpers/harness.ts";
+import { start } from "../tests/helpers/harness.ts";
+import { sidecar } from "../tests/helpers/browser.ts";
 
 const port = Number(process.argv[2] ?? 8099);
 const t = await start();
@@ -43,13 +43,5 @@ issue("hyunhwan-bcm/tailjobs", 40, "hwan", "Show GPU memory in job list", 7, { c
 await t.link("hyunhwanj", "hwan");
 await t.app.sync();
 
-// the sidecar: identity headers on every request, and the public origin on POSTs
-createServer((req, res) => {
-	const headers = { ...req.headers, "x-forwarded-email": "hyunhwanj@bcm.edu", "x-forwarded-preferred-username": "hyunhwanj", host: new URL(t.base).host } as Record<string, string>;
-	if (req.method !== "GET") headers.origin = ORIGIN;
-	const up = request(t.base + req.url, { method: req.method, headers }, (r) => {
-		res.writeHead(r.statusCode ?? 502, r.headers);
-		r.pipe(res);
-	});
-	req.pipe(up);
-}).listen(port, "127.0.0.1", () => console.log(`demo inbox on http://127.0.0.1:${port}/`));
+const { url } = await sidecar(t.base, "hyunhwanj", port);
+console.log(`demo inbox on ${url}`);

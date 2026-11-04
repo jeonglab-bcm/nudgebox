@@ -70,6 +70,10 @@ const STATIC: Record<string, string> = {
 	"/icon.svg": "image/svg+xml",
 	"/icon-180.png": "image/png",
 	"/icon-512.png": "image/png",
+	"/fonts/Outfit-400-700.woff2": "font/woff2",
+	"/fonts/IBMPlexMono-400.woff2": "font/woff2",
+	"/fonts/IBMPlexMono-500.woff2": "font/woff2",
+	"/fonts/IBMPlexMono-600.woff2": "font/woff2",
 };
 
 class HttpError extends Error {
@@ -487,7 +491,7 @@ export function createApp(opts: AppOptions): App {
 			const f = fold(lab, "pr", store.prs().filter(visible(repos)));
 			// `version` lets an open page (e.g. the Home Screen app, which never reloads by
 			// itself) notice a newer deploy and reload.
-			return send(res, 200, { login: u.login, version: scriptVersion, ...buildInbox(f.live, viewer), old: f.old, hidden: f.hidden, summarize: Boolean(opts.summarize) });
+			return send(res, 200, { login: u.login, version: scriptVersion, staleDays: config.staleDays, ...buildInbox(f.live, viewer), old: f.old, hidden: f.hidden, summarize: Boolean(opts.summarize) });
 		}
 		if (method === "GET" && path === "/api/issues") {
 			const { repos } = await viewOf(linked(lab));

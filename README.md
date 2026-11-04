@@ -39,9 +39,14 @@ Two ports, on purpose (see `src/server.ts`):
 
 ```sh
 npm install
-npm test            # acceptance + adapter tests, no network (fake GitHub)
+npx playwright-core install chromium-headless-shell   # once, for the page tests
+npm test            # acceptance, adapter and page (tests/ui) tests, no network (fake GitHub)
 npm run typecheck
 npm run live-check  # read-only: real open PRs via your gh login, mapped and sectioned
 ```
 
 Tests are numbered by SPEC section (e.g. `5. inbox sections and order`).
+
+To look at the page with example data and no accounts: `node --import tsx scripts/demo.ts 8099`,
+then open http://127.0.0.1:8099/. `node scripts/shots.mjs http://127.0.0.1:8099/ /tmp/nudgebox`
+saves desktop and phone screenshots, light and dark.

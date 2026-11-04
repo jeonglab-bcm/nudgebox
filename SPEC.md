@@ -141,3 +141,47 @@ on issues.
 - If the LLM fails, the error is shown and nothing is kept, so the next click tries
   again.
 - The item's text is treated as data, never as instructions to the model.
+
+## 13. Triage list
+
+The inbox (sections 5 and 11) is a compact list for clearing a queue quickly, not a
+stack of cards.
+
+- **One line per item** on a computer: repo and number, title (cut with … when long),
+  draft/conflict flags, checks, review state, age, author. On a phone each item takes
+  two lines (title and age; repo, checks and review). The page never scrolls sideways.
+- **Checks and review are symbols** with a text label for screen readers: checks ✓
+  passed, ✗ failed, ● running, – none; review ✓ approved, ✎ changes requested, ○
+  review required.
+- **Stale:** an item with no activity for `staleDays` (`config.yaml`, the same setting
+  as the stale digest) shows its age in the warning colour.
+- On the **All** tab, PRs that would be in **Needs you** carry a small "you" mark.
+- **One row is selected.** Its details (checks and review in words, AI summary) and its
+  actions (Approve, Merge, Re-run failed, Comment, Summarize, Hide/Unhide, Open) show
+  under it only when it is opened; other rows show no buttons. A tap or click selects
+  and opens a row; tapping it again closes it.
+- **Keyboard** (computers only; ignored while typing in a field or with Ctrl, Cmd or
+  Alt held):
+
+  | Key | Does |
+  |---|---|
+  | `j` / `↓`, `k` / `↑` | next / previous row |
+  | `x` or space | open / close the selected row |
+  | `Enter` or `o` | open on GitHub |
+  | `a` | approve |
+  | `m` | merge (still asks first) |
+  | `r` | re-run failed checks |
+  | `c` | comment |
+  | `s` | AI summary |
+  | `h` | hide / unhide |
+  | `1`–`4` | Needs you, WIP, CI failing, All |
+  | `p` / `i` | PRs / Issues |
+  | `/` | repo filter |
+  | `?` | list of keys |
+
+  A key that does not apply (approving your own PR, re-running with no failed checks)
+  does nothing to GitHub and says why. A hint line with the main keys sits at the
+  bottom on computers, not on phones.
+- **Look:** dark by default with a light version that follows the system setting;
+  frosted header and key bar; the selected row is lifted. Fonts are served by
+  Nudgebox, not a third party. Motion is off when the system asks for reduced motion.

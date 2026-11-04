@@ -83,13 +83,23 @@ const inline = (s) => s.replace(/\*\*(.+?)\*\*/g, "$1").split(/`([^`]+)`/).map((
 function summaryBox(kind, item) {
 	const s = summaries.get(`${kind}:${keyOf(item)}`);
 	if (!s) return null;
-	const lines = s.split("\n").map((l) => l.trim().replace(/^[-*•]\s*/, "")).filter(Boolean);
-	const rows = lines.map((l) => l.match(/^(What|Status|Next):\s*(.+)$/i)).filter(Boolean);
-	// SPEC 12: three labelled rows; a summary kept in the older bullet form shows as a list
-	if (rows.length && rows.length === lines.length) {
-		return el("dl", { class: "summary" }, rows.flatMap(([, label, text]) => [el("dt", {}, label[0].toUpperCase() + label.slice(1).toLowerCase()), el("dd", {}, inline(text))]));
+	const lines = s.split("\n").map((l) => l.trim()).filter(Boolean);
+	const bullet = (l) => l.replace(/^[-*•]\s*/, "");
+	// SPEC 12: labelled rows (What, Key points, Status, Next); "- " lines under a label are its list
+	const LABEL = /^(What|Key points|Status|Next):\s*(.*)$/i;
+	if (LABEL.test(lines[0] ?? "")) {
+		const rows = [];
+		for (const l of lines) {
+			const m = l.match(LABEL);
+			if (m) rows.push({ label: m[1][0].toUpperCase() + m[1].slice(1).toLowerCase(), text: m[2], items: [] });
+			else if (/^[-*•]\s/.test(l)) rows.at(-1).items.push(bullet(l));
+			else rows.at(-1).text += ` ${l}`;
+		}
+		return el("dl", { class: "summary" }, rows.flatMap((r) => [el("dt", {}, r.label),
+			el("dd", {}, r.text ? el("p", {}, inline(r.text)) : null, r.items.length ? el("ul", {}, r.items.map((i) => el("li", {}, inline(i)))) : null)]));
 	}
-	return el("div", { class: "summary" }, el("ul", {}, lines.map((l) => el("li", {}, inline(l)))));
+	// a summary kept in the older bullet form shows as a list
+	return el("div", { class: "summary" }, el("ul", {}, lines.map((l) => el("li", {}, inline(bullet(l))))));
 }
 
 async function summarize(kind, item) {

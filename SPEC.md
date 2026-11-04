@@ -143,8 +143,10 @@ on issues.
 - What the model reads: **PR**: title, description, changed files and their diffs,
   review and conversation comments. **Issue**: title, description, comments. Input is
   cut to a fixed size so very large PRs still work.
-- What it writes: a few short bullets on what the item is about, where it stands, and
-  what is blocking it or being asked.
+- What it writes: exactly three labelled lines, each at most 20 words: **What** it is
+  about, its **Status**, and **Next**: who has to do what ("Nothing" if nobody). Shown as
+  three short rows, plain text, readable on a phone. (Summaries kept from the older
+  bullet format are made again in this form.)
 - Only for items you can see (section 4). Read-only: nothing is posted to GitHub.
 - A summary is kept until the item changes (new activity, or a new head commit for a
   PR); clicking again before that shows the kept one without asking the model. It is

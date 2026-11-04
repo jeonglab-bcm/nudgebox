@@ -27,14 +27,14 @@ export async function start(opts: { staleDays?: number; oldDays?: number; now?: 
 	const pushed: Pushed[] = [];
 	const gone = new Set<string>(); // push endpoints that answer 410 Gone
 	// in-memory stand-in for llm.bioinfolder.com: records prompts, answers "summary N"
-	const llm = { calls: [] as LlmCall[], failNext: false };
+	const llm = { calls: [] as LlmCall[], failNext: false, reply: undefined as string | undefined };
 	const summarize = async (prompt: LlmCall) => {
 		llm.calls.push(prompt);
 		if (llm.failNext) {
 			llm.failNext = false;
 			throw Object.assign(new Error("upstream unavailable"), { status: 503 });
 		}
-		return `- summary ${llm.calls.length}`;
+		return llm.reply ?? `- summary ${llm.calls.length}`;
 	};
 	const logs: string[] = [];
 	const app: App = createApp({

@@ -179,3 +179,31 @@ test("12. without an LLM configured there is no Summarize", async () => {
 		await on.close();
 	}
 });
+
+test("12. the model is asked for three labelled lines of at most 20 words", async () => {
+	const t = await setup();
+	try {
+		await t.summary("hyunhwanj", "pr", LAB, 3);
+		const { system } = t.llm.calls[0];
+		for (const label of ["What:", "Status:", "Next:"]) assert.ok(system.includes(label), `no ${label} in the instructions`);
+		assert.match(system, /20 words/);
+	} finally {
+		await t.close();
+	}
+});
+
+test("12. a summary kept in the older bullet format is made again", async () => {
+	const t = await setup();
+	try {
+		const pr = (await (await t.req("/api/inbox", { as: "hyunhwanj" })).json()).sections.flatMap((s: { prs: { number: number; updatedAt: string }[] }) => s.prs).find((p: { number: number }) => p.number === 3);
+		const { Store } = await import("../../src/store.ts");
+		const old = new Store(`${t.dir}/ghd.sqlite`);
+		old.saveSummary(`pr:${LAB}#3`, `${pr.updatedAt}|sha-${LAB}-3`, "- an old bullet summary", new Date().toISOString()); // the cache key before SUMMARY_FORMAT
+		old.close();
+		const r = await (await t.summary("hyunhwanj", "pr", LAB, 3)).json();
+		assert.equal(r.cached, false);
+		assert.equal(t.llm.calls.length, 1);
+	} finally {
+		await t.close();
+	}
+});

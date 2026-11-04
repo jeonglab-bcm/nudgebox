@@ -276,3 +276,24 @@ test("13. everything, fonts included, comes from Nudgebox itself", async () => {
 		await s.close();
 	}
 });
+
+test("12. a summary shows as three labelled rows; an older bullet one as a list", async () => {
+	const s = await open();
+	try {
+		s.t.llm.reply = "What: Fixes the `liftover` off-by-one.\nStatus: Checks pass; waiting for review.\nNext: @hwan to review.";
+		await s.page.keyboard.press("s");
+		await s.page.waitForSelector(".summary dt");
+		assert.deepEqual(await s.page.locator(".summary dt").allTextContents(), ["What", "Status", "Next"]);
+		assert.equal(await s.page.locator(".summary dd code").textContent(), "liftover");
+		assert.match((await s.page.locator(".summary dd").nth(2).textContent())!, /@hwan to review/);
+		const size = await s.page.locator(".summary dd").first().evaluate((e) => parseFloat(getComputedStyle(e).fontSize));
+		assert.ok(size >= 14.5, `summary text is ${size}px`);
+		s.t.llm.reply = "- an older bullet\n- another";
+		await s.page.keyboard.press("j");
+		await s.page.keyboard.press("s");
+		await s.page.waitForSelector(".summary li");
+		assert.deepEqual(await s.page.locator(".summary li").allTextContents(), ["an older bullet", "another"]);
+	} finally {
+		await s.close();
+	}
+});

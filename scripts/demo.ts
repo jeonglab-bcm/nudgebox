@@ -40,6 +40,9 @@ issue(L("labbot"), 90, "jlee", "Calendar module double-books Thursday seminar", 
 issue(L("variant-db"), 150, "hwan", "Add ClinVar 2026-10 release", 3, { labels: ["data"] });
 issue("hyunhwan-bcm/tailjobs", 40, "hwan", "Show GPU memory in job list", 7, { comments: 1 });
 
+// what the lab model answers (SPEC 12), so Summarize shows something realistic
+t.llm.reply = "What: Ranks candidate genes by HPO similarity and the inheritance mode in `rank.py`.\nStatus: Checks still running; review requested from @hwan, no comments yet.\nNext: @hwan to review once checks pass.";
+
 await t.link("hyunhwanj", "hwan");
 await t.app.sync();
 

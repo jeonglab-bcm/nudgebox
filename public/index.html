@@ -12,6 +12,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#14152b" media="(prefers-color-scheme: dark)">
 <meta name="theme-color" content="#f3f3fb" media="(prefers-color-scheme: light)">
+<script>/* SPEC 14: the chosen theme before the first paint (no flash) */ try { const t = localStorage.getItem("ghd-theme"); if (t === "dark" || t === "light") document.documentElement.dataset.theme = t; } catch {}</script>
 <link rel="preload" href="/fonts/Outfit-400-700.woff2" as="font" type="font/woff2" crossorigin>
 <style>
 /* structure (SPEC 13): one line per item; the look lives in the skin below */
@@ -70,7 +71,14 @@ dl.summary dt, dl.summary dd { margin: 0; }
   :root { --gutter: 14px; }
   .bar { padding: 8px var(--gutter); gap: 8px; flex-wrap: wrap; }
   .grow { display: none; }
-  #reload { margin-left: auto; }
+  #reload { display: none; } /* the app refreshes whenever it comes back to the front */
+  #bell { margin-left: auto; }
+  /* one top row on a phone: name, PRs/Issues, bell, gear */
+  .bar { column-gap: 6px; }
+  .brand { gap: 6px; margin-right: 0; }
+  .brand h1 { font-size: 16px !important; }
+  .seg button { padding-inline: 10px; }
+  .bar button.icon { width: 30px; height: 30px; }
   #repo { order: 5; flex: 1 1 55%; min-width: 0; }
   #push { order: 6; }
   main { padding: 4px 0 40px; }
@@ -82,6 +90,28 @@ dl.summary dt, dl.summary dd { margin: 0; }
   .detail { padding: 2px 14px 14px 18px; }
   .actions button, .actions .btn { min-height: 40px; }
 }
+/* header icons (SPEC 14) */
+button.icon { display: inline-grid; place-items: center; position: relative; }
+button.icon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+#bell .slash, #bell .pip { display: none; }
+#bell[data-state="off"] .slash, #bell[data-state="blocked"] .slash, #bell[data-state="unavailable"] .slash { display: inline; }
+#bell[data-state="off"] .pip, #bell[data-state="blocked"] .pip { display: block; position: absolute; top: 3px; right: 3px; width: 8px; height: 8px; border-radius: 50%; }
+/* settings page (SPEC 14): the list's filters do not apply there */
+body.settings #kind, body.settings #repo, body.settings #tabs, body.settings .keys, body.settings #keys-btn { display: none !important; }
+#settings-page { max-width: 640px; margin: 0 auto; padding: 8px 16px 48px; }
+.set-head { display: flex; align-items: center; gap: 12px; margin: 8px 0 4px; }
+.set-head h2 { margin: 0; }
+.set { padding: 18px 0; }
+.set h3 { margin: 0 0 10px; }
+.set p { margin: 0 0 8px; max-width: 60ch; }
+.state { display: flex; gap: 10px; align-items: baseline; }
+.state .dot { flex: none; width: 9px; height: 9px; border-radius: 50%; transform: translateY(-1px); }
+.devices, .plain { list-style: none; margin: 0; padding: 0; }
+.device { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 2px 12px; padding: 10px 0; }
+.device .kind { grid-column: 1; min-width: 0; }
+.device .since { grid-column: 1; }
+.device .here, .device button { grid-column: 2; grid-row: 1 / span 2; }
+.plain li { padding: 6px 0; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; } }
 </style>
 <style id="skin">
@@ -92,19 +122,27 @@ dl.summary dt, dl.summary dd { margin: 0; }
 @font-face { font-family: "IBM Plex Mono"; src: url(/fonts/IBMPlexMono-600.woff2) format("woff2"); font-weight: 600; font-display: swap; }
 /* B. Glassmorphism 2.0, dark first: frosted chrome over a quiet gradient mesh, depth for the
    selected row (modern-web-design §6, trends §3, §6). Glass only on the 2 sticky bars. */
-:root { color-scheme: dark light;
+:root { color-scheme: dark;
   --bg: oklch(17% 0.03 270); --fg: oklch(95% 0.01 270); --muted: oklch(72% 0.03 270); --line: oklch(100% 0 0 / .09);
   --glass: oklch(22% 0.03 270 / .62); --glass-line: oklch(100% 0 0 / .12); --card: oklch(100% 0 0 / .055);
   --violet: oklch(72% 0.18 295); --cyan: oklch(82% 0.12 205); --ok: oklch(80% 0.15 160); --bad: oklch(72% 0.17 15); --wait: oklch(85% 0.13 85);
   --mesh-1: oklch(45% 0.18 295 / .35); --mesh-2: oklch(55% 0.12 205 / .22);
   --sans: "Outfit", system-ui, sans-serif; --mono: "IBM Plex Mono", ui-monospace, monospace;
   --e2: 0 4px 8px oklch(0% 0 0 / .15); --e3: 0 8px 24px oklch(0% 0 0 / .32); --spring: cubic-bezier(0.34, 1.56, 0.64, 1); }
-@media (prefers-color-scheme: light) { :root {
+/* theme (SPEC 14): dark unless the device is light; a choice in Settings wins either way */
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { color-scheme: light;
   --bg: oklch(97% 0.012 280); --fg: oklch(24% 0.04 275); --muted: oklch(47% 0.04 275); --line: oklch(30% 0.05 275 / .1);
   --glass: oklch(99% 0.005 280 / .7); --glass-line: oklch(30% 0.05 275 / .12); --card: oklch(100% 0 0 / .75);
   --violet: oklch(52% 0.2 295); --cyan: oklch(58% 0.12 215); --ok: oklch(50% 0.13 155); --bad: oklch(53% 0.2 20); --wait: oklch(58% 0.13 70);
   --mesh-1: oklch(80% 0.1 295 / .45); --mesh-2: oklch(85% 0.08 200 / .45);
   --e3: 0 8px 24px oklch(30% 0.08 280 / .14); } }
+:root[data-theme="light"] { color-scheme: light;
+  --bg: oklch(97% 0.012 280); --fg: oklch(24% 0.04 275); --muted: oklch(47% 0.04 275); --line: oklch(30% 0.05 275 / .1);
+  --glass: oklch(99% 0.005 280 / .7); --glass-line: oklch(30% 0.05 275 / .12); --card: oklch(100% 0 0 / .75);
+  --violet: oklch(52% 0.2 295); --cyan: oklch(58% 0.12 215); --ok: oklch(50% 0.13 155); --bad: oklch(53% 0.2 20); --wait: oklch(58% 0.13 70);
+  --mesh-1: oklch(80% 0.1 295 / .45); --mesh-2: oklch(85% 0.08 200 / .45);
+  --e3: 0 8px 24px oklch(30% 0.08 280 / .14); }
+:root[data-theme="dark"] { color-scheme: dark; }
 body { color: var(--fg); font: 400 14.5px/1.45 var(--sans); background: var(--bg);
   background-image: radial-gradient(60vw 50vh at 10% -10%, var(--mesh-1), transparent 70%), radial-gradient(50vw 60vh at 100% 110%, var(--mesh-2), transparent 70%);
   background-attachment: fixed; }
@@ -178,6 +216,29 @@ kbd { font: 500 11px var(--mono); padding: 1px 6px; border-radius: 5px; backgrou
 .btn.primary { display: inline-block; background: linear-gradient(135deg, var(--violet), var(--cyan)); color: oklch(15% 0.03 270); padding: 8px 16px; border-radius: 999px; font-weight: 600; }
 .foot .quiet { background: none; border: 0; }
 :focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+/* header bell and gear (SPEC 14) */
+#bell[data-state="on"] { color: var(--violet); border-color: color-mix(in oklch, var(--violet) 45%, transparent); }
+#bell[data-state="off"] .pip, #bell[data-state="blocked"] .pip { background: var(--bad); box-shadow: 0 0 0 2px var(--bg); }
+#bell[data-state="unavailable"] { opacity: .6; }
+/* settings page */
+.set-head h2 { font: 600 22px var(--sans); }
+.set + .set { border-top: 1px solid var(--line); }
+.set h3 { font: 600 12px var(--mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.set .hint { color: var(--muted); font-size: 13.5px; }
+.seg.theme { display: inline-flex; margin-bottom: 8px; }
+.seg.theme button[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
+.state { font-size: 15.5px; }
+.state.on .dot { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+.state.off .dot, .state.blocked .dot { background: var(--bad); }
+.state.unavailable .dot { background: var(--muted); }
+.device + .device { border-top: 1px solid var(--line); }
+.device .since { color: var(--muted); font: 12.5px var(--mono); }
+.device .here { font: 600 11px var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--violet);
+  padding: 2px 8px; border-radius: 999px; border: 1px solid color-mix(in oklch, var(--violet) 50%, transparent); }
+.device button.quiet, .set-head button.quiet { background: var(--card); border: 1px solid var(--glass-line); }
+.plain li { padding-left: 16px; position: relative; }
+.plain li::before { content: ""; position: absolute; left: 0; top: 14px; width: 6px; height: 6px; border-radius: 50%; background: linear-gradient(135deg, var(--violet), var(--cyan)); }
+.actions .danger { color: var(--bad); border-color: color-mix(in oklch, var(--bad) 45%, transparent); }
 @media (max-width: 720px) {
   .row, .row.sel { border-radius: 0; transform: none; border-width: 1px 0; }
   .list { gap: 0; }
@@ -192,9 +253,14 @@ kbd { font: 500 11px var(--mono); padding: 1px 6px; border-radius: 5px; backgrou
   <div class="seg" id="kind"><button data-k="pr" class="on">PRs</button><button data-k="issue">Issues</button></div>
   <select id="repo" aria-label="Repository"><option value="">All repos</option></select>
   <span class="grow"></span>
-  <button id="push" class="quiet" hidden>Turn on notifications</button>
   <button id="reload" class="icon" aria-label="Refresh" title="Refresh">↻</button>
   <button id="keys-btn" class="icon" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">?</button>
+  <button id="bell" class="icon" data-state="off" aria-label="Notifications off" title="Notifications off">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path class="b" d="M6 16V11a6 6 0 1 1 12 0v5l1.5 2h-15z M10 20.5a2.2 2.2 0 0 0 4 0"/><path class="slash" d="M4 4l16 16"/></svg><span class="pip" aria-hidden="true"></span>
+  </button>
+  <button id="settings-btn" class="icon" aria-label="Settings" title="Settings">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.8v2.6M12 18.6v2.6M21.2 12h-2.6M5.4 12H2.8M18.5 5.5l-1.8 1.8M7.3 16.7l-1.8 1.8M18.5 18.5l-1.8-1.8M7.3 7.3 5.5 5.5"/><circle cx="12" cy="12" r="6.3"/></svg>
+  </button>
 </header>
 <nav class="tabs" id="tabs" aria-label="PR status"></nav>
 </div>

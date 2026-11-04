@@ -16,7 +16,7 @@ import { seal, unseal } from "./crypto.ts";
 import { buildInbox, isMine, reviewRequested, type Viewer } from "./inbox.ts";
 import { verifySignature } from "./webhook.ts";
 import type { Summarize } from "./llm.ts";
-import { issuePrompt, prPrompt } from "./summary.ts";
+import { issuePrompt, prPrompt, SUMMARY_FORMAT } from "./summary.ts";
 
 export interface Config {
 	orgs: string[]; // accounts the GitHub App is installed on
@@ -419,7 +419,7 @@ export function createApp(opts: AppOptions): App {
 		const item = pr ?? issue;
 		if (!item || !repos.has(item.repo.toLowerCase())) throw new HttpError(404, "not found");
 		const key = `${b.kind}:${item.repo}#${item.number}`;
-		const version = pr ? `${pr.updatedAt}|${pr.headSha}` : item.updatedAt;
+		const version = `${SUMMARY_FORMAT}|${pr ? `${pr.updatedAt}|${pr.headSha}` : item.updatedAt}`;
 		const kept = store.summary(key, version);
 		if (kept !== undefined) return { summary: kept, cached: true };
 		const id = `${key}@${version}`;

@@ -77,13 +77,19 @@ async function setHidden(kind, item, hide) {
 
 // SPEC 12: AI summaries shown on this page, by "kind:repo#n" (kept across re-renders)
 const summaries = new Map();
-const plain = (s) => s.replace(/\*\*(.+?)\*\*/g, "$1").replace(/`([^`]+)`/g, "$1");
+// model text -> nodes: **bold** dropped to plain, `code` kept as <code>; never HTML
+const inline = (s) => s.replace(/\*\*(.+?)\*\*/g, "$1").split(/`([^`]+)`/).map((part, i) => (i % 2 ? el("code", {}, part) : part));
 
 function summaryBox(kind, item) {
 	const s = summaries.get(`${kind}:${keyOf(item)}`);
 	if (!s) return null;
-	const lines = s.split("\n").map((l) => l.trim()).filter(Boolean);
-	return el("div", { class: "summary" }, el("ul", {}, lines.map((l) => el("li", {}, plain(l.replace(/^[-*•]\s*/, ""))))));
+	const lines = s.split("\n").map((l) => l.trim().replace(/^[-*•]\s*/, "")).filter(Boolean);
+	const rows = lines.map((l) => l.match(/^(What|Status|Next):\s*(.+)$/i)).filter(Boolean);
+	// SPEC 12: three labelled rows; a summary kept in the older bullet form shows as a list
+	if (rows.length && rows.length === lines.length) {
+		return el("dl", { class: "summary" }, rows.flatMap(([, label, text]) => [el("dt", {}, label[0].toUpperCase() + label.slice(1).toLowerCase()), el("dd", {}, inline(text))]));
+	}
+	return el("div", { class: "summary" }, el("ul", {}, lines.map((l) => el("li", {}, inline(l)))));
 }
 
 async function summarize(kind, item) {

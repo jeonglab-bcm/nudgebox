@@ -47,8 +47,11 @@ main { max-width: 1120px; margin: 0 auto; padding: 8px 12px 96px; }
 .facts { font-size: .86em; }
 .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .actions button, .actions .btn { display: inline-flex; align-items: center; gap: 6px; }
-.summary ul { margin: 8px 0 0; padding-left: 18px; }
-.summary li + li { margin-top: 4px; }
+.summary { max-width: 72ch; }
+.summary ul { margin: 0; padding-left: 18px; }
+.summary li + li { margin-top: 6px; }
+dl.summary { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 14px; align-items: baseline; }
+dl.summary dt, dl.summary dd { margin: 0; }
 .fold { margin-top: 20px; }
 .fold summary { cursor: pointer; list-style: none; display: flex; gap: 8px; align-items: baseline; padding: 6px 16px; }
 .fold summary::-webkit-details-marker { display: none; }
@@ -148,8 +151,12 @@ main[data-view="all"] .tone-you .title::after { content: "you"; margin-left: 8px
 .who { color: var(--muted); font-size: 13.5px; }
 .detail { padding-left: 34px; }
 .facts { color: var(--muted); }
-.summary { margin-top: 12px; padding: 10px 14px; border-radius: 10px; background: color-mix(in oklch, var(--violet) 10%, transparent);
-  border: 1px solid color-mix(in oklch, var(--violet) 30%, transparent); }
+/* SPEC 12: the summary is for reading, so it is the calmest thing in the row */
+.summary { margin: 12px 0 2px; padding: 12px 14px; border-radius: 10px; background: color-mix(in oklch, var(--bg) 55%, transparent);
+  color: var(--fg); font-size: 15px; line-height: 1.55; }
+.summary dt { font: 600 11px/1.9 var(--mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.summary dd { overflow-wrap: anywhere; }
+.summary code { font: 13px var(--mono); padding: 1px 5px; border-radius: 5px; background: var(--card); }
 .actions button, .actions .btn { background: var(--card); border: 1px solid var(--glass-line); border-radius: 999px; padding: 6px 12px; font-size: 13px; font-weight: 500;
   transition: transform .2s var(--spring), border-color .2s, box-shadow .2s; }
 .actions button:hover, .actions .btn:hover { transform: translateY(-2px); border-color: var(--violet); box-shadow: var(--e2); }

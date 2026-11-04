@@ -30,6 +30,7 @@ export class Store {
 			CREATE TABLE IF NOT EXISTS issues (key TEXT PRIMARY KEY, json TEXT NOT NULL);
 			CREATE TABLE IF NOT EXISTS hidden (lab_user TEXT NOT NULL, kind TEXT NOT NULL, key TEXT NOT NULL,
 				hidden_at TEXT NOT NULL, PRIMARY KEY (lab_user, kind, key));
+			CREATE TABLE IF NOT EXISTS unread (lab_user TEXT PRIMARY KEY, n INTEGER NOT NULL);
 			CREATE TABLE IF NOT EXISTS summaries (key TEXT PRIMARY KEY, version TEXT NOT NULL, summary TEXT NOT NULL, at TEXT NOT NULL);
 		`);
 	}
@@ -182,6 +183,17 @@ export class Store {
 	deleteDevice(endpoint: string, labUser?: string) {
 		if (labUser) this.db.prepare("DELETE FROM devices WHERE endpoint = ? AND lab_user = ?").run(endpoint, labUser);
 		else this.db.prepare("DELETE FROM devices WHERE endpoint = ?").run(endpoint);
+	}
+
+	// -- unread count for the app icon (SPEC 7) ------------------------------
+
+	/** One more notification for labUser; returns the new count. */
+	bumpUnread(labUser: string): number {
+		return (this.db.prepare("INSERT INTO unread (lab_user, n) VALUES (?, 1) ON CONFLICT (lab_user) DO UPDATE SET n = n + 1 RETURNING n").get(labUser) as { n: number }).n;
+	}
+
+	resetUnread(labUser: string) {
+		this.db.prepare("DELETE FROM unread WHERE lab_user = ?").run(labUser);
 	}
 
 	// -- "already notified" marks --------------------------------------------

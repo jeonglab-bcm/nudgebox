@@ -4,7 +4,10 @@ self.addEventListener("push", (event) => {
 	try {
 		data = { ...data, ...event.data.json() };
 	} catch {}
-	event.waitUntil(self.registration.showNotification(data.title, { body: data.body, icon: "/icon-180.png", data: { url: data.url } }));
+	const shown = self.registration.showNotification(data.title, { body: data.body, icon: "/icon-180.png", data: { url: data.url } });
+	// SPEC 7: unread count on the app icon, where the browser supports it
+	const badge = typeof data.badge === "number" && self.navigator?.setAppBadge ? self.navigator.setAppBadge(data.badge).catch(() => {}) : null;
+	event.waitUntil(Promise.all([shown, badge]));
 });
 
 self.addEventListener("notificationclick", (event) => {

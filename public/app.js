@@ -456,9 +456,40 @@ async function turnOff() {
 	loadDevices();
 }
 
+// SPEC 14: Send a test says which part failed, from the service worker's report
+const PUSH_CHECK_MS = window.pushCheckMs ?? 15000;
+const testWaits = new Map(); // test id -> resolve(report)
+navigator.serviceWorker?.addEventListener?.("message", (e) => {
+	if (e.data?.type === "push-received") testWaits.get(e.data.test)?.(e.data);
+});
+let pushCheck = "";
+function setCheck(text) {
+	pushCheck = text;
+	const p = $("#push-check");
+	if (p) p.textContent = text;
+}
+
+function browserName() {
+	const ua = navigator.userAgent;
+	return /Edg\//.test(ua) ? "Microsoft Edge" : /Firefox\//.test(ua) ? "Firefox" : /Chrome\//.test(ua) ? "Google Chrome" : /Safari\//.test(ua) ? "Safari" : "your browser";
+}
+
 async function sendTest() {
+	setCheck("Sending a test…");
 	const { status, data: d } = await api("/api/push/test", { endpoint: push.sub.endpoint });
-	toast(status === 200 ? "Test sent. It should arrive within a few seconds." : d.error || `Could not send (${status})`);
+	if (status !== 200) return setCheck(d.error || `Could not send the test (${status}).`);
+	setCheck("Test sent to the push service. Waiting for this device to receive it…");
+	const got = await new Promise((resolve) => {
+		testWaits.set(d.id, resolve);
+		setTimeout(() => resolve(null), PUSH_CHECK_MS);
+	});
+	testWaits.delete(d.id);
+	const secs = Math.round(PUSH_CHECK_MS / 1000);
+	if (!got) setCheck(`This device did not receive the test within ${secs} seconds. The push service accepted it, so the problem is between the push service and this browser: keep ${browserName()} open and up to date, or turn notifications off and on again here.`);
+	else if (got.shown) setCheck(isIOS
+		? "This device received the test and asked iOS to show it. If no notification appeared, iOS hides it: check Settings → Notifications → Nudgebox, and Focus."
+		: `This device received the test and asked the system to show it. If no notification appeared, your computer hides it: on a Mac, open System Settings → Notifications → ${browserName()}, allow notifications with the Banners or Alerts style, and check Focus.`);
+	else setCheck(`This device received the test but could not show it: ${got.error}.`);
 }
 
 // -- settings (SPEC 14) -------------------------------------------------------------
@@ -518,7 +549,8 @@ function renderSettings() {
 			el("div", { class: "actions" },
 				p.state === "off" ? el("button", { class: "primary", onclick: busy(turnOn) }, "Turn on notifications") : null,
 				p.state === "on" ? el("button", { onclick: busy(sendTest) }, "Send a test") : null,
-				p.state === "on" ? el("button", { onclick: busy(turnOff) }, "Turn off") : null)),
+				p.state === "on" ? el("button", { onclick: busy(turnOff) }, "Turn off") : null),
+			p.state === "on" ? el("p", { id: "push-check", class: "hint", role: "status" }, pushCheck) : null),
 		section("devices", "Your devices with notifications",
 			devices === null ? el("p", { class: "hint" }, "Loading…")
 				: !devices.length ? el("p", { class: "hint" }, "None yet. Turn notifications on above, on each device you want them on.")

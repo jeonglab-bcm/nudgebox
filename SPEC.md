@@ -214,7 +214,11 @@ or `Escape` returns to the list. List keys (section 13) do nothing on this page.
   **not possible here and why** (on iPhone in Safari: add Nudgebox to the Home Screen
   and open it from there; blocked: where to allow them). One button for the next
   step: Turn on, or Send a test and Turn off. **Send a test** sends one notification
-  to this device only; it does not count as unread (section 7).
+  to this device only; it does not count as unread (section 7). It then says which
+  part failed, if any: the browser **received** the test and asked the system to show
+  it (if nothing appeared, the computer's own notification settings or Focus hide
+  it, and where to look), the browser received it but **could not show** it (with the
+  reason), or the browser **did not receive** it within 15 seconds.
 - **Your devices:** every device with notifications on, by kind (Apple: iPhone, iPad
   or Mac Safari; Chrome; Firefox; Edge) and since when, this device marked. Any other
   one can be removed.

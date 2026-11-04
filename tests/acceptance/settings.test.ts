@@ -71,3 +71,15 @@ test("14. the inbox says which lab login and GitHub login you are", async () => 
 		await t.close();
 	}
 });
+
+test("14. a test notification carries an id, so this device can report that it arrived", async () => {
+	const t = await setup();
+	try {
+		const r = await sendTest(t, "hyunhwanj", "https://web.push.apple.com/hwan-iphone");
+		const { id } = await r.json();
+		assert.match(id, /^[\w-]{8,}$/);
+		assert.equal((t.pushed[0].payload as { test?: string }).test, id);
+	} finally {
+		await t.close();
+	}
+});

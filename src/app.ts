@@ -35,6 +35,7 @@ export interface PushPayload {
 	body: string;
 	url?: string;
 	badge?: number; // SPEC 7: the person's unread count, for the app icon
+	test?: string; // SPEC 14: id of a Send a test push, echoed back by the device
 }
 
 /** SPEC 7: "high" makes iOS deliver even in Low Power Mode. */
@@ -557,9 +558,10 @@ export function createApp(opts: AppOptions): App {
 			const b = await json(req);
 			const d = store.devices(lab).find((x) => x.endpoint === b.endpoint);
 			if (!d) throw new HttpError(404, "not one of your devices");
-			const ok = await pushTo(lab, d, { title: "Nudgebox test", body: "Notifications work on this device.", url: "/#settings" }, { urgency: "high" });
+			const id = randomBytes(6).toString("base64url");
+			const ok = await pushTo(lab, d, { title: "Nudgebox test", body: "Notifications work on this device.", url: "/#settings", test: id }, { urgency: "high" });
 			if (!ok) throw new HttpError(502, "the push service did not take it; turn notifications off and on again");
-			return send(res, 200, { ok: true });
+			return send(res, 200, { ok: true, id });
 		}
 		if (method === "POST" && path === "/api/push/seen") {
 			store.resetUnread(lab); // SPEC 7: Nudgebox was opened

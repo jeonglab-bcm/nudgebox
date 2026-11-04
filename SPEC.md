@@ -198,3 +198,27 @@ stack of cards.
 - **Look:** dark by default with a light version that follows the system setting;
   frosted header and key bar; the selected row is lifted. Fonts are served by
   Nudgebox, not a third party. Motion is off when the system asks for reduced motion.
+
+## 14. Settings
+
+A gear in the header opens **Settings** (address `#settings`); Back, the browser's back
+or `Escape` returns to the list. List keys (section 13) do nothing on this page.
+
+- **Appearance:** theme **System** (follows the device), **Dark** or **Light**. Kept per
+  device; the page opens in the chosen theme without a flash of the other one.
+- **Notifications on this device:** says plainly whether they are **on**, **off**, or
+  **not possible here and why** (on iPhone in Safari: add Nudgebox to the Home Screen
+  and open it from there; blocked: where to allow them). One button for the next
+  step: Turn on, or Send a test and Turn off. **Send a test** sends one notification
+  to this device only; it does not count as unread (section 7).
+- **Your devices:** every device with notifications on, by kind (Apple: iPhone, iPad
+  or Mac Safari; Chrome; Firefox; Edge) and since when, this device marked. Any other
+  one can be removed.
+- **What notifies you:** the triggers of sections 7 and 11, in one line each.
+- **GitHub account:** which GitHub login and lab login are connected, and
+  **Disconnect GitHub** (asks first; the stored token is deleted). It is no longer at
+  the bottom of the list.
+
+**Header bell.** Next to the gear, a bell shows this device's notification state at a
+glance: a plain bell when on, a crossed-out bell with a dot when off, a crossed-out
+grey bell when not possible here. It opens the notifications part of Settings.

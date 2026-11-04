@@ -88,10 +88,9 @@ test("14. the theme can be System, Dark or Light, is kept on this device, and ch
 		await s.page.click('[data-theme-choice="light"]');
 		assert.equal(await s.page.getAttribute("html", "data-theme"), "light");
 		assert.notEqual(await bg(), darkBg);
-		await s.page.reload();
-		await s.page.waitForSelector(".row");
+		await s.page.reload(); // still on #settings
+		await s.page.waitForSelector("#settings-page");
 		assert.equal(await s.page.getAttribute("html", "data-theme"), "light"); // kept
-		await s.page.click("#settings-btn");
 		assert.equal(await s.page.getAttribute('[data-theme-choice="light"]', "aria-pressed"), "true");
 		await s.page.click('[data-theme-choice="system"]');
 		assert.equal(await s.page.getAttribute("html", "data-theme"), null);

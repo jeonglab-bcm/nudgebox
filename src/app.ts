@@ -189,18 +189,23 @@ export function createApp(opts: AppOptions): App {
 		const devices = store.devices(lab);
 		if (!devices.length) return;
 		const badge = store.bumpUnread(lab);
-		for (const d of devices) {
-			const service = new URL(d.endpoint).host;
-			try {
-				await opts.push({ endpoint: d.endpoint, keys: d.keys }, { ...payload, badge }, pushOpts);
-				log(`push ${service} for ${lab}: sent "${payload.title}"`);
-			} catch (e) {
-				const status = (e as { statusCode?: number }).statusCode;
-				if (status === 404 || status === 410) {
-					store.deleteDevice(d.endpoint);
-					log(`push ${service} for ${lab}: ${status}, device removed`);
-				} else log(`push ${service} for ${lab}: failed ${status ?? ""} ${(e as Error).message}`);
-			}
+		for (const d of devices) await pushTo(lab, d, { ...payload, badge }, pushOpts);
+	}
+
+	/** One push to one device; true if the push service took it. */
+	async function pushTo(lab: string, d: PushSubscription, payload: PushPayload, pushOpts: PushOptions = {}): Promise<boolean> {
+		const service = new URL(d.endpoint).host;
+		try {
+			await opts.push({ endpoint: d.endpoint, keys: d.keys }, payload, pushOpts);
+			log(`push ${service} for ${lab}: sent "${payload.title}"`);
+			return true;
+		} catch (e) {
+			const status = (e as { statusCode?: number }).statusCode;
+			if (status === 404 || status === 410) {
+				store.deleteDevice(d.endpoint);
+				log(`push ${service} for ${lab}: ${status}, device removed`);
+			} else log(`push ${service} for ${lab}: failed ${status ?? ""} ${(e as Error).message}`);
+			return false;
 		}
 	}
 
@@ -504,7 +509,7 @@ export function createApp(opts: AppOptions): App {
 			const f = fold(lab, "pr", store.prs().filter(visible(repos)));
 			// `version` lets an open page (e.g. the Home Screen app, which never reloads by
 			// itself) notice a newer deploy and reload.
-			return send(res, 200, { login: u.login, version: scriptVersion, staleDays: config.staleDays, ...buildInbox(f.live, viewer), old: f.old, hidden: f.hidden, summarize: Boolean(opts.summarize) });
+			return send(res, 200, { user: lab, login: u.login, version: scriptVersion, staleDays: config.staleDays, ...buildInbox(f.live, viewer), old: f.old, hidden: f.hidden, summarize: Boolean(opts.summarize) });
 		}
 		if (method === "GET" && path === "/api/issues") {
 			const { repos } = await viewOf(linked(lab));
@@ -547,6 +552,15 @@ export function createApp(opts: AppOptions): App {
 			}
 			store.addDevice(lab, { endpoint: b.endpoint, keys: { p256dh: b.keys.p256dh, auth: b.keys.auth } }, opts.now().toISOString());
 			return send(res, 201, { ok: true });
+		}
+		if (method === "POST" && path === "/api/push/test") {
+			// SPEC 14: Send a test, to one of your own devices; not counted as unread
+			const b = await json(req);
+			const d = store.devices(lab).find((x) => x.endpoint === b.endpoint);
+			if (!d) throw new HttpError(404, "not one of your devices");
+			const ok = await pushTo(lab, d, { title: "Nudgebox test", body: "Notifications work on this device.", url: "/#settings" }, { urgency: "high" });
+			if (!ok) throw new HttpError(502, "the push service did not take it; turn notifications off and on again");
+			return send(res, 200, { ok: true });
 		}
 		if (method === "POST" && path === "/api/push/seen") {
 			store.resetUnread(lab); // SPEC 7: Nudgebox was opened

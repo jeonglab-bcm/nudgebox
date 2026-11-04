@@ -241,6 +241,11 @@ function fold(id, title, entries) {
 }
 
 function render() {
+	if (onSettings()) {
+		if (devices === null) loadDevices();
+		return renderSettings();
+	}
+	document.body.classList.remove("settings");
 	const kind = view.kind;
 	const kd = data[kind];
 	if (!kd) return;
@@ -280,7 +285,6 @@ function render() {
 		view.sel = shown[Math.min(Math.max(prev, 0), shown.length - 1)].key;
 		return render();
 	}
-	main.append(el("div", { class: "foot" }, el("button", { class: "quiet", onclick: unlink }, "Disconnect GitHub")));
 }
 
 // -- keyboard (SPEC 13) -------------------------------------------------------------
@@ -290,6 +294,10 @@ document.addEventListener("keydown", (e) => {
 	const t = e.target;
 	if (t.closest?.("input, textarea, select, [contenteditable]")) {
 		if (e.key === "Escape") t.blur();
+		return;
+	}
+	if (onSettings()) { // SPEC 14: list keys do nothing here
+		if (e.key === "Escape") goBack();
 		return;
 	}
 	if (help().open) {
@@ -345,7 +353,8 @@ async function load() {
 	seg[0].replaceChildren("PRs", el("span", { class: "n" }, pr.data.sections.reduce((n, s) => n + s.prs.length, 0)));
 	seg[1].replaceChildren("Issues", el("span", { class: "n" }, data.issue.items.length));
 	render();
-	setupPush();
+	refreshPush();
+	if (onSettings()) loadDevices();
 	markSeen();
 }
 
@@ -358,6 +367,8 @@ function markSeen() {
 async function unlink() {
 	if (!confirm("Disconnect GitHub? The stored token is deleted.")) return;
 	await api("/api/unlink", {});
+	history.replaceState(null, "", location.pathname + location.search);
+	document.body.classList.remove("settings");
 	load();
 }
 
@@ -371,7 +382,7 @@ $("#repo").addEventListener("change", (e) => {
 	render();
 });
 
-// -- push (SPEC 7) ---------------------------------------------------------------
+// -- push on this device (SPEC 7, 14) ----------------------------------------------
 const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
 const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
 
@@ -380,42 +391,160 @@ function b64url(s) {
 	return Uint8Array.from(raw, (c) => c.charCodeAt(0));
 }
 
-let pushReady = false;
-async function setupPush() {
-	if (pushReady || !("serviceWorker" in navigator)) return;
-	pushReady = true;
-	const btn = $("#push");
-	const reg = await navigator.serviceWorker.register("/sw.js");
-	if (!("PushManager" in window)) {
-		if (isIOS && !standalone) {
-			btn.hidden = false;
-			btn.textContent = "Notifications?";
-			btn.onclick = () => toast("On iPhone: Share → Add to Home Screen, then open Nudgebox from the Home Screen.");
+// this device: state "on" | "off" | "blocked" | "unavailable", with the reason shown in Settings
+let push = { state: "off", reason: "", sub: null, reg: null };
+let swReg = null;
+
+async function refreshPush() {
+	if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+		push = { state: "unavailable", sub: null, reg: null, reason: isIOS && !standalone
+			? "On iPhone, notifications only work in the Nudgebox app on your Home Screen. In Safari, tap Share, then Add to Home Screen, then open Nudgebox from the Home Screen."
+			: "This browser can't receive notifications. Use Safari or Chrome." };
+	} else {
+		try {
+			swReg ??= await navigator.serviceWorker.register("/sw.js");
+			const sub = await swReg.pushManager.getSubscription();
+			if (sub) push = { state: "on", sub, reg: swReg, reason: "" };
+			else if (window.Notification?.permission === "denied") push = { state: "blocked", sub: null, reg: swReg, reason: isIOS
+				? "Notifications are blocked for Nudgebox. Allow them in the iPhone's Settings → Notifications → Nudgebox."
+				: "Notifications are blocked for this site. Allow gh.bioinfolder.com in your browser's site settings, and the browser in System Settings → Notifications." };
+			else push = { state: "off", sub: null, reg: swReg, reason: "" };
+		} catch (e) {
+			push = { state: "unavailable", sub: null, reg: null, reason: `Notifications could not start here (${e.message}).` };
 		}
-		return;
 	}
-	const current = await reg.pushManager.getSubscription();
-	btn.hidden = false;
-	btn.textContent = current ? "Notifications on" : "Turn on notifications";
-	btn.onclick = async () => {
-		const sub = await reg.pushManager.getSubscription();
-		if (sub) {
-			if (!confirm("Turn off notifications on this device?")) return;
-			await api("/api/push/unsubscribe", { endpoint: sub.endpoint });
-			await sub.unsubscribe();
-			btn.textContent = "Turn on notifications";
-			return;
-		}
-		if ((await Notification.requestPermission()) !== "granted") return toast("Notifications were not allowed");
-		const { data: k } = await api("/api/push/key");
-		const s = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64url(k.publicKey) });
-		const { status } = await api("/api/push/subscribe", s.toJSON());
-		btn.textContent = status === 201 ? "Notifications on" : "Turn on notifications";
-		toast(status === 201 ? "Notifications are on for this device" : "Could not turn on notifications");
-	};
+	const bell = $("#bell");
+	bell.dataset.state = push.state;
+	bell.setAttribute("aria-label", { on: "Notifications on", off: "Notifications off", blocked: "Notifications blocked", unavailable: "Notifications unavailable here" }[push.state]);
+	bell.title = bell.getAttribute("aria-label");
+	if (onSettings()) renderSettings();
 }
 
+async function turnOn() {
+	if ((await Notification.requestPermission()) !== "granted") {
+		await refreshPush();
+		return toast("Notifications were not allowed");
+	}
+	try {
+		const { data: k } = await api("/api/push/key");
+		const s = await push.reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64url(k.publicKey) });
+		const { status } = await api("/api/push/subscribe", s.toJSON());
+		toast(status === 201 ? "Notifications are on for this device" : `Could not turn on notifications (${status})`);
+	} catch (e) {
+		toast(`Could not turn on notifications: ${e.message}`);
+	}
+	await refreshPush();
+	loadDevices();
+}
+
+async function turnOff() {
+	if (!push.sub || !confirm("Turn off notifications on this device?")) return;
+	await api("/api/push/unsubscribe", { endpoint: push.sub.endpoint });
+	await push.sub.unsubscribe();
+	toast("Notifications are off for this device");
+	await refreshPush();
+	loadDevices();
+}
+
+async function sendTest() {
+	const { status, data: d } = await api("/api/push/test", { endpoint: push.sub.endpoint });
+	toast(status === 200 ? "Test sent. It should arrive within a few seconds." : d.error || `Could not send (${status})`);
+}
+
+// -- settings (SPEC 14) -------------------------------------------------------------
+const onSettings = () => location.hash === "#settings";
+let devices = null; // your devices with notifications on, from the server
+
+async function loadDevices() {
+	const { status, data: d } = await api("/api/push/subscriptions");
+	devices = status === 200 ? d : [];
+	if (onSettings()) renderSettings();
+}
+
+const deviceKind = (endpoint) => {
+	const h = new URL(endpoint).host;
+	if (h.endsWith("push.apple.com")) return "Apple (iPhone, iPad or Mac Safari)";
+	if (h.endsWith("googleapis.com")) return "Chrome";
+	if (h.endsWith("mozilla.com")) return "Firefox";
+	if (h.endsWith("windows.com")) return "Edge";
+	return h;
+};
+
+function theme() {
+	try { return localStorage.getItem("ghd-theme") || "system"; } catch { return "system"; }
+}
+function setTheme(t) {
+	try { t === "system" ? localStorage.removeItem("ghd-theme") : localStorage.setItem("ghd-theme", t); } catch {}
+	if (t === "system") delete document.documentElement.dataset.theme;
+	else document.documentElement.dataset.theme = t;
+	renderSettings();
+}
+
+function goBack() {
+	history.replaceState(null, "", location.pathname + location.search);
+	render();
+}
+
+function section(id, title, ...kids) {
+	return el("section", { id, class: "set" }, el("h3", {}, title), ...kids);
+}
+
+function renderSettings() {
+	document.body.classList.add("settings");
+	$("#tabs").hidden = true;
+	const t = theme();
+	const p = push;
+	const stateText = { on: "On for this device.", off: "Off on this device.", blocked: p.reason, unavailable: `Not possible here. ${p.reason}` }[p.state];
+	const since = (iso) => new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+	main.replaceChildren(el("div", { id: "settings-page" },
+		el("div", { class: "set-head" }, el("button", { id: "back", class: "quiet", onclick: goBack }, "← Back"), el("h2", {}, "Settings")),
+		section("appearance", "Appearance",
+			el("div", { class: "seg theme", role: "group", "aria-label": "Theme" },
+				["system", "dark", "light"].map((c) => el("button", { "data-theme-choice": c, "aria-pressed": String(t === c), class: t === c ? "on" : "", onclick: () => setTheme(c) },
+					c[0].toUpperCase() + c.slice(1)))),
+			el("p", { class: "hint" }, "System follows this device's light or dark setting. Kept on this device only.")),
+		section("notifications", "Notifications on this device",
+			el("p", { id: "push-state", class: `state ${p.state}` }, el("span", { class: "dot", "aria-hidden": "true" }), stateText),
+			el("div", { class: "actions" },
+				p.state === "off" ? el("button", { class: "primary", onclick: busy(turnOn) }, "Turn on notifications") : null,
+				p.state === "on" ? el("button", { onclick: busy(sendTest) }, "Send a test") : null,
+				p.state === "on" ? el("button", { onclick: busy(turnOff) }, "Turn off") : null)),
+		section("devices", "Your devices with notifications",
+			devices === null ? el("p", { class: "hint" }, "Loading…")
+				: !devices.length ? el("p", { class: "hint" }, "None yet. Turn notifications on above, on each device you want them on.")
+				: el("ul", { class: "devices" }, devices.map((d) => {
+					const here = d.endpoint === p.sub?.endpoint;
+					return el("li", { class: "device" },
+						el("span", { class: "kind" }, deviceKind(d.endpoint)), el("span", { class: "since" }, `since ${since(d.created)}`),
+						here ? el("span", { class: "here" }, "This device")
+							: el("button", { class: "quiet", onclick: busy(async () => { await api("/api/push/unsubscribe", { endpoint: d.endpoint }); toast("Removed"); loadDevices(); }) }, "Remove"));
+				}))),
+		section("triggers", "What notifies you",
+			el("ul", { class: "plain" },
+				el("li", {}, "A review is requested from you (or a team you are in)"),
+				el("li", {}, "CI finished on your PR, passed or failed (once per commit)"),
+				el("li", {}, `At 9 AM: your PRs and reviews with no activity for ${data.pr?.staleDays ?? 3}+ days`),
+				el("li", {}, "An issue is assigned to you, you are @mentioned, or someone comments on your issue")),
+			el("p", { class: "hint" }, "Hidden and old items never notify. The number on the app icon counts notifications since you last opened Nudgebox.")),
+		section("github", "GitHub account",
+			el("p", {}, "Connected as ", el("b", {}, data.login || "…"), " on GitHub, for lab login ", el("b", {}, data.pr?.user || "…"), ". Actions run as this GitHub account."),
+			el("div", { class: "actions" }, el("button", { class: "danger", onclick: unlink }, "Disconnect GitHub")))));
+	if (location.hash === "#settings" && renderSettings.scrollTo) {
+		$(`#${renderSettings.scrollTo}`)?.scrollIntoView({ block: "start" });
+		renderSettings.scrollTo = null;
+	}
+}
+
+function openSettings(part) {
+	renderSettings.scrollTo = part ?? null;
+	if (!onSettings()) location.hash = "#settings"; // hashchange renders it
+	else renderSettings();
+}
+
+window.addEventListener("hashchange", () => render());
+$("#settings-btn").onclick = () => openSettings();
+$("#bell").onclick = () => openSettings("notifications");
 $("#reload").onclick = load;
+$("#keys-btn").onclick = () => help().showModal();
 document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && load());
 load();
-$("#keys-btn").onclick = () => help().showModal();

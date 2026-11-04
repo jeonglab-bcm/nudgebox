@@ -43,7 +43,7 @@ export async function start(opts: { staleDays?: number; oldDays?: number; now?: 
 		origin: ORIGIN,
 		github,
 		webhookSecret: WEBHOOK_SECRET,
-		vapidPublicKey: "BTestVapidPublicKey-not-a-real-key-0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJ",
+		vapidPublicKey: "BAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4_QA" /* shape of a real one: 65 bytes, base64url */,
 		githubClientId: "Iv1.test",
 		encryptionKey: randomBytes(32),
 		dbPath: join(dir, "ghd.sqlite"),

@@ -44,6 +44,8 @@ issue("hyunhwan-bcm/tailjobs", 40, "hwan", "Show GPU memory in job list", 7, { c
 t.llm.reply = "What: Ranks candidate genes by HPO similarity and the inheritance mode in `rank.py`.\nStatus: Checks still running; review requested from @hwan, no comments yet.\nNext: @hwan to review once checks pass.";
 
 await t.link("hyunhwanj", "hwan");
+await t.subscribe("hyunhwanj", "https://web.push.apple.com/demo-iphone");
+await t.subscribe("hyunhwanj", "https://fcm.googleapis.com/fcm/send/demo-chrome");
 await t.app.sync();
 
 const { url } = await sidecar(t.base, "hyunhwanj", port);

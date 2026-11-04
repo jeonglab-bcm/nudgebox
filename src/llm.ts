@@ -29,7 +29,7 @@ export function createSummarizer(o: LlmOptions): Summarize {
 					model: o.model,
 					messages: [{ role: "system", content: system }, { role: "user", content: user }],
 					stream: false,
-					max_tokens: 800,
+					max_tokens: 1200,
 					temperature: 0.3,
 					chat_template_kwargs: { enable_thinking: false },
 				}),

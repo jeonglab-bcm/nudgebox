@@ -53,6 +53,13 @@ main { max-width: 1120px; margin: 0 auto; padding: 8px 12px 96px; }
 .summary li + li { margin-top: 6px; }
 dl.summary { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 14px; align-items: baseline; }
 dl.summary dt, dl.summary dd { margin: 0; }
+dl.summary dd p { margin: 0; }
+dl.summary dd ul { margin: 0; padding-left: 18px; }
+dl.summary dd p + ul { margin-top: 4px; }
+dl.summary dd ul { list-style: disc; }
+@media (max-width: 720px) { /* labels above their text, so the text gets the full width */
+  dl.summary { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  dl.summary dd + dt { margin-top: 10px; } }
 .fold { margin-top: 20px; }
 .fold summary { cursor: pointer; list-style: none; display: flex; gap: 8px; align-items: baseline; padding: 6px 16px; }
 .fold summary::-webkit-details-marker { display: none; }

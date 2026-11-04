@@ -41,7 +41,18 @@ issue(L("variant-db"), 150, "hwan", "Add ClinVar 2026-10 release", 3, { labels: 
 issue("hyunhwan-bcm/tailjobs", 40, "hwan", "Show GPU memory in job list", 7, { comments: 1 });
 
 // what the lab model answers (SPEC 12), so Summarize shows something realistic
-t.llm.reply = "What: Ranks candidate genes by HPO similarity and the inheritance mode in `rank.py`.\nStatus: Checks still running; review requested from @hwan, no comments yet.\nNext: @hwan to review once checks pass.";
+t.llm.reply = [
+	"What: This pull request adds a candidate-gene ranking to `rank.py`. It scores genes by HPO similarity and by the inheritance mode.",
+	"",
+	"Key points:",
+	"- The ranking puts the known causal gene in the top 10 for 41 of 50 solved cases.",
+	"- The old ranking put it in the top 10 for 33 of 50 cases.",
+	"- The change adds `hpo_sim.py` and a test set in `tests/solved_cases.tsv`.",
+	"",
+	"Status: The checks are running. A review from @hwan is necessary.",
+	"",
+	"Next: @hwan must review the PR after the checks pass.",
+].join("\n");
 
 await t.link("hyunhwanj", "hwan");
 await t.subscribe("hyunhwanj", "https://web.push.apple.com/demo-iphone");

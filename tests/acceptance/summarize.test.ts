@@ -180,13 +180,14 @@ test("12. without an LLM configured there is no Summarize", async () => {
 	}
 });
 
-test("12. the model is asked for three labelled lines of at most 20 words", async () => {
+test("12. the model is asked for ASD-STE100 English in What, Key points, Status, Next", async () => {
 	const t = await setup();
 	try {
 		await t.summary("hyunhwanj", "pr", LAB, 3);
 		const { system } = t.llm.calls[0];
-		for (const label of ["What:", "Status:", "Next:"]) assert.ok(system.includes(label), `no ${label} in the instructions`);
-		assert.match(system, /20 words/);
+		for (const label of ["What:", "Key points:", "Status:", "Next:"]) assert.ok(system.includes(label), `no ${label} in the instructions`);
+		assert.match(system, /ASD-STE100/);
+		assert.match(system, /25 words/);
 	} finally {
 		await t.close();
 	}

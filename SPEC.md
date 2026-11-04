@@ -143,10 +143,13 @@ on issues.
 - What the model reads: **PR**: title, description, changed files and their diffs,
   review and conversation comments. **Issue**: title, description, comments. Input is
   cut to a fixed size so very large PRs still work.
-- What it writes: exactly three labelled lines, each at most 20 words: **What** it is
-  about, its **Status**, and **Next**: who has to do what ("Nothing" if nobody). Shown as
-  three short rows, plain text, readable on a phone. (Summaries kept from the older
-  bullet format are made again in this form.)
+- What it writes, in ASD-STE100 Simplified Technical English (one topic per sentence,
+  at most 25 words, active voice, simple tenses, no idioms, one term for one meaning):
+  **What** it is about (1 or 2 sentences); **Key points**: 2 to 4 concrete facts
+  (results and numbers, files, decisions, open questions); **Status** (checks,
+  reviews, blockers); **Next**: who has to do what, by @name. Shown as labelled rows,
+  key points as a list, plain text, readable on a phone. (Summaries kept in an older
+  format are made again in this one.)
 - Only for items you can see (section 4). Read-only: nothing is posted to GitHub.
 - A summary is kept until the item changes (new activity, or a new head commit for a
   PR); clicking again before that shows the kept one without asking the model. It is

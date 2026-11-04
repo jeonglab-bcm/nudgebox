@@ -18,7 +18,7 @@ export const WEBHOOK_SECRET = "test-webhook-secret";
 /** One request the app made to the LLM (SPEC 12). */
 export type LlmCall = { system: string; user: string };
 
-export type Pushed = { endpoint: string; payload: { title: string; body: string; url?: string } };
+export type Pushed = { endpoint: string; payload: { title: string; body: string; url?: string; badge?: number }; urgency?: string };
 
 /** `llm: false` starts the app with no LLM configured (SPEC 12: no Summarize). */
 export async function start(opts: { staleDays?: number; oldDays?: number; now?: () => Date; llm?: false } = {}) {
@@ -36,7 +36,9 @@ export async function start(opts: { staleDays?: number; oldDays?: number; now?: 
 		}
 		return `- summary ${llm.calls.length}`;
 	};
+	const logs: string[] = [];
 	const app: App = createApp({
+		log: (m) => logs.push(m),
 		config: { orgs: ["jeonglab-bcm", "hyunhwan-bcm"], staleDays: opts.staleDays ?? 3, oldDays: opts.oldDays ?? 30, timezone: "America/Chicago" },
 		origin: ORIGIN,
 		github,
@@ -45,9 +47,9 @@ export async function start(opts: { staleDays?: number; oldDays?: number; now?: 
 		githubClientId: "Iv1.test",
 		encryptionKey: randomBytes(32),
 		dbPath: join(dir, "ghd.sqlite"),
-		push: async (sub, payload) => {
+		push: async (sub, payload, opts) => {
 			if (gone.has(sub.endpoint)) throw Object.assign(new Error("Gone"), { statusCode: 410 });
-			pushed.push({ endpoint: sub.endpoint, payload });
+			pushed.push({ endpoint: sub.endpoint, payload, urgency: opts?.urgency });
 		},
 		now: opts.now ?? (() => new Date()),
 		summarize: opts.llm === false ? undefined : summarize,
@@ -114,6 +116,11 @@ export async function start(opts: { staleDays?: number; oldDays?: number; now?: 
 		});
 	}
 
+	/** SPEC 7: the page tells the server it was opened (resets the unread count). */
+	async function seen(as: string) {
+		return req("/api/push/seen", { as, method: "POST", body: "{}" });
+	}
+
 	async function subscribe(as: string, endpoint: string) {
 		const r = await req("/api/push/subscribe", { as, method: "POST", body: JSON.stringify({ endpoint, keys: { p256dh: "k", auth: "a" } }) });
 		if (r.status !== 201) throw new Error(`subscribe ${r.status}`);
@@ -124,7 +131,7 @@ export async function start(opts: { staleDays?: number; oldDays?: number; now?: 
 		server.close();
 		rmSync(dir, { recursive: true, force: true });
 	};
-	return { app, github, llm, pushed, gone, base, dir, req, link, inbox, issues, hide, summary, webhook, subscribe, close };
+	return { app, github, llm, pushed, gone, base, dir, logs, req, link, inbox, issues, hide, summary, webhook, subscribe, seen, close };
 }
 
 /** "owner/repo#n" ids per section, for compact assertions. */

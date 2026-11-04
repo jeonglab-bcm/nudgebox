@@ -87,6 +87,17 @@ gone is removed. Triggers:
 
 Hidden and old items (section 5) send nothing. Issue notifications: section 11.
 
+**Unread count.** The Nudgebox icon on the Home Screen (and the Dock on a Mac) shows how
+many notifications you got since you last opened Nudgebox. Each notification to you
+adds one, counted per person (not per device). Opening Nudgebox, on any of your
+devices, resets it to zero and clears the icon on that device; your other devices
+show the right number again with their next notification (iOS allows no silent push
+to clear them sooner).
+
+**Delivery.** Review requests go out as high-urgency pushes, which iOS delivers even in
+Low Power Mode. Each push is logged with the push service and its answer (never the
+device address), so a missing notification can be traced.
+
 No Slack, no email.
 
 ## 8. Freshness

@@ -34,7 +34,11 @@ export interface PushPayload {
 	title: string;
 	body: string;
 	url?: string;
+	badge?: number; // SPEC 7: the person's unread count, for the app icon
 }
+
+/** SPEC 7: "high" makes iOS deliver even in Low Power Mode. */
+export type PushOptions = { urgency?: "normal" | "high" };
 
 export interface AppOptions {
 	config: Config;
@@ -45,7 +49,7 @@ export interface AppOptions {
 	encryptionKey: Buffer; // 32 bytes, encrypts stored GitHub tokens
 	dbPath: string;
 	vapidPublicKey?: string; // given to browsers to subscribe to push
-	push: (sub: PushSubscription, payload: PushPayload) => Promise<void>; // throws {statusCode: 404|410} when gone
+	push: (sub: PushSubscription, payload: PushPayload, opts?: PushOptions) => Promise<void>; // throws {statusCode: 404|410} when gone
 	now: () => Date;
 	log?: (msg: string) => void;
 	summarize?: Summarize; // SPEC 12: the lab LLM; absent -> no Summarize button
@@ -179,14 +183,23 @@ export function createApp(opts: AppOptions): App {
 
 	// -- push --------------------------------------------------------------------
 
-	async function notify(lab: string, payload: PushPayload) {
-		for (const d of store.devices(lab)) {
+	// One notification to every device of `lab`, carrying their unread count (SPEC 7).
+	// Logged per device by push service only: the endpoint itself is a secret address.
+	async function notify(lab: string, payload: PushPayload, pushOpts: PushOptions = {}) {
+		const devices = store.devices(lab);
+		if (!devices.length) return;
+		const badge = store.bumpUnread(lab);
+		for (const d of devices) {
+			const service = new URL(d.endpoint).host;
 			try {
-				await opts.push({ endpoint: d.endpoint, keys: d.keys }, payload);
+				await opts.push({ endpoint: d.endpoint, keys: d.keys }, { ...payload, badge }, pushOpts);
+				log(`push ${service} for ${lab}: sent "${payload.title}"`);
 			} catch (e) {
 				const status = (e as { statusCode?: number }).statusCode;
-				if (status === 404 || status === 410) store.deleteDevice(d.endpoint);
-				else log(`push to a device of ${lab} failed: ${(e as Error).message}`);
+				if (status === 404 || status === 410) {
+					store.deleteDevice(d.endpoint);
+					log(`push ${service} for ${lab}: ${status}, device removed`);
+				} else log(`push ${service} for ${lab}: failed ${status ?? ""} ${(e as Error).message}`);
 			}
 		}
 	}
@@ -217,7 +230,7 @@ export function createApp(opts: AppOptions): App {
 			}
 		}
 		for (const lab of targets) {
-			if (!isQuiet(lab, "pr", pr)) await notify(lab, { title: "Review requested", body: `${short(pr)}: ${pr.title} (by ${pr.author})`, url: pr.url });
+			if (!isQuiet(lab, "pr", pr)) await notify(lab, { title: "Review requested", body: `${short(pr)}: ${pr.title} (by ${pr.author})`, url: pr.url }, { urgency: "high" });
 		}
 	}
 
@@ -534,6 +547,10 @@ export function createApp(opts: AppOptions): App {
 			}
 			store.addDevice(lab, { endpoint: b.endpoint, keys: { p256dh: b.keys.p256dh, auth: b.keys.auth } }, opts.now().toISOString());
 			return send(res, 201, { ok: true });
+		}
+		if (method === "POST" && path === "/api/push/seen") {
+			store.resetUnread(lab); // SPEC 7: Nudgebox was opened
+			return send(res, 200, { ok: true });
 		}
 		if (method === "POST" && path === "/api/push/unsubscribe") {
 			const b = await json(req);

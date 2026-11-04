@@ -340,6 +340,13 @@ async function load() {
 	seg[1].replaceChildren("Issues", el("span", { class: "n" }, data.issue.items.length));
 	render();
 	setupPush();
+	markSeen();
+}
+
+// SPEC 7: opening Nudgebox clears the unread count, on this icon and on the server
+function markSeen() {
+	navigator.clearAppBadge?.().catch(() => {});
+	api("/api/push/seen", {}).catch(() => {});
 }
 
 async function unlink() {

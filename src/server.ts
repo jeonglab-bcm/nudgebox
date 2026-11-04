@@ -64,8 +64,8 @@ const app = createApp({
 	encryptionKey: tokenKey,
 	dbPath: process.env.DB_PATH ?? "/data/gh-dashboard.sqlite",
 	vapidPublicKey: vapid.publicKey,
-	push: async (sub, payload) => {
-		await webpush.sendNotification(sub, JSON.stringify(payload), { vapidDetails: vapid, TTL: 24 * 3600 });
+	push: async (sub, payload, opts) => {
+		await webpush.sendNotification(sub, JSON.stringify(payload), { vapidDetails: vapid, TTL: 24 * 3600, urgency: opts?.urgency ?? "normal" });
 	},
 	now: () => new Date(),
 	log,

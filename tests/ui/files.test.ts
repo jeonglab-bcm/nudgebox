@@ -138,9 +138,82 @@ test("15. an added file shows only its new version", async () => {
 		s.t.differ.reply = { largeResidual: false, summary: "new_file", before: { hunks: [] }, after: { hunks: [{ op: "insert", from: { row: 0, col: 0 }, to: { row: 3, col: 0 } }] } };
 		await s.page.keyboard.press("f");
 		await s.page.click(".file >> nth=2");
-		await s.page.waitForSelector(".pane.after .m-insert");
-		assert.equal(await s.page.locator(".pane.before").count(), 0);
+		await s.page.waitForSelector(".md-pane.after .md-added"); // a Markdown file, so rendered
+		assert.equal(await s.page.locator(".md-pane.before, .pane.before").count(), 0);
 		assert.match((await s.page.locator(".diff .note").textContent())!, /new file/i);
+	} finally {
+		await s.close();
+	}
+});
+
+// -- Markdown (SPEC 15) ------------------------------------------------------------------
+
+const MD_BEFORE = "# Guide\n\nIntro text.\n\n## Install\n\nRun `make`.\n\n## Use\n\nOld usage.\n\n## A\n\na\n\n## B\n\nb\n\n## C\n\nc\n";
+const MD_AFTER = "# Guide\n\nIntro text.\n\n## Install\n\nRun `make`.\n\n## Use\n\nNew **usage** with [docs](https://example.org).\n\n## A\n\na\n\n## B\n\nb\n\n## C\n\nc\n";
+
+async function openMd(md = { before: MD_BEFORE, after: MD_AFTER }, reply?: object) {
+	const s = await open();
+	s.t.github.prFileSets.set(`${LAB}#4`, { base: "base-sha", head: "head-sha", files: [{ path: "docs/guide.md", status: "modified", additions: 1, deletions: 1 }] });
+	s.t.github.blobs.set(`${LAB}@base-sha:docs/guide.md`, md.before);
+	s.t.github.blobs.set(`${LAB}@head-sha:docs/guide.md`, md.after);
+	s.t.differ.reply = (reply as typeof s.t.differ.reply) ?? { largeResidual: false, before: { hunks: [{ op: "update", ...at(10, 0, 10) }] }, after: { hunks: [{ op: "update", ...at(10, 0, 40) }] } };
+	await s.page.keyboard.press("f");
+	await s.page.click(".file >> nth=0");
+	return s;
+}
+
+test("15. a Markdown file opens rendered, with the changed block marked on each side", async () => {
+	const s = await openMd();
+	try {
+		await s.page.waitForSelector(".md-pane.after .md-block.changed");
+		assert.ok((await s.page.locator(".md-pane.after h2").allTextContents()).includes("Use"), "the heading next to the change is shown");
+		assert.equal(await s.page.locator(".md-pane.after .md-block.changed strong").textContent(), "usage");
+		assert.equal(await s.page.locator(".md-pane.after .md-block.changed a").getAttribute("target"), "_blank");
+		assert.match((await s.page.locator(".md-pane.before .md-block.changed").textContent())!, /Old usage/);
+		assert.doesNotMatch((await s.page.locator(".md-pane.after").textContent())!, /\*\*|##/); // not raw
+	} finally {
+		await s.close();
+	}
+});
+
+test("15. unchanged Markdown blocks fold, and the switch shows the plain diff", async () => {
+	const s = await openMd();
+	try {
+		await s.page.waitForSelector(".md-pane.after .md-block.changed");
+		assert.match((await s.page.locator(".md-pane.after .fold").last().textContent())!, /5 unchanged blocks/);
+		await s.page.click(".diff >> text=Plain diff");
+		await s.page.waitForSelector(".pane.after .code-line");
+		assert.equal(await s.page.locator(".md-pane").count(), 0);
+		await s.page.click(".diff >> text=Rendered");
+		await s.page.waitForSelector(".md-pane.after");
+	} finally {
+		await s.close();
+	}
+});
+
+test("15. rendered Markdown runs nothing from the file", async () => {
+	const evil = "# Hi\n\n<img src=x onerror=\"window.pwned=1\">\n\n<script>window.pwned=2</script>\n\n<iframe src=\"https://example.org\"></iframe>\n\n[x](javascript:window.pwned=3)\n";
+	const s = await openMd({ before: "# Hi\n", after: evil });
+	try {
+		await s.page.waitForSelector(".md-pane.after h1");
+		await s.page.waitForTimeout(300);
+		assert.equal(await s.page.evaluate(() => (window as unknown as { pwned?: number }).pwned), undefined);
+		assert.equal(await s.page.locator(".md-pane script, .md-pane iframe, .md-pane [onerror]").count(), 0);
+		const href = await s.page.locator(".md-pane.after a").first().getAttribute("href").catch(() => null);
+		assert.ok(!href || !href.startsWith("javascript:"), href ?? "");
+	} finally {
+		await s.close();
+	}
+});
+
+test("15. in a list, only the changed item is marked", async () => {
+	const before = "# List\n\n- one\n- two\n- three\n";
+	const after = "# List\n\n- one\n- TWO, changed\n- three\n";
+	const s = await openMd({ before, after }, { largeResidual: false, before: { hunks: [{ op: "update", ...at(3, 2, 5) }] }, after: { hunks: [{ op: "update", ...at(3, 2, 14) }] } });
+	try {
+		await s.page.waitForSelector(".md-pane.after .md-block.changed");
+		assert.deepEqual((await s.page.locator(".md-pane.after .md-block.changed").allTextContents()).map((x) => x.trim()), ["TWO, changed"]);
+		assert.deepEqual(await s.page.locator(".md-pane.after li").allTextContents(), ["one", "TWO, changed", "three"]);
 	} finally {
 		await s.close();
 	}

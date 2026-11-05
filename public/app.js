@@ -555,7 +555,7 @@ function openSettings(part) {
 
 // -- files and diffs (SPEC 15) --------------------------------------------------------
 const onFiles = () => location.hash.startsWith("#files/");
-let files = { key: null, data: null, error: null, open: new Set(), diffs: new Map() };
+let files = { key: null, data: null, error: null, open: new Set(), diffs: new Map(), mdMode: new Map() };
 const STATUS = { added: "A", removed: "D", modified: "M", renamed: "R", copied: "C", changed: "M", unchanged: "·" };
 const NOTE = {
 	whitespace_only: "Only whitespace changed.", comment_only: "Only comments changed.", refactor_moved_only: "Only moved code: nothing else changed.",
@@ -631,17 +631,89 @@ function pane(side, ref, text, hunks) {
 		el("div", { class: "lines" }, out));
 }
 
+// SPEC 15: Markdown files render; the libraries load only when one is opened
+let mdLib = null;
+function loadMd() {
+	mdLib ??= Promise.all([import("/vendor/marked-18.1.3.esm.js"), import("/vendor/purify-3.4.17.es.mjs")]).then(([m, p]) => {
+		const purify = p.default;
+		purify.addHook("afterSanitizeAttributes", (n) => {
+			if (n.tagName === "A") n.setAttribute("target", "_blank"), n.setAttribute("rel", "noopener noreferrer");
+		});
+		mdLib.ready = { marked: m.marked, purify };
+		render();
+	});
+	return mdLib.ready;
+}
+const isMd = (path) => /\.(md|markdown)$/i.test(path);
+
+// one side, rendered: top-level blocks, each marked if a change touches its lines
+function mdPane(side, ref, text, hunks, lib) {
+	const tokens = lib.marked.lexer(text);
+	const blocks = [];
+	let row = 0;
+	const lines = (s) => (s.match(/\n/g) || []).length;
+	for (const tk of tokens) {
+		const start = row;
+		row += lines(tk.raw);
+		if (tk.type === "space") continue;
+		if (tk.type !== "list") {
+			blocks.push({ tk, start, end: start + lines(tk.raw.replace(/\n+$/, "")) });
+			continue;
+		}
+		// a list is one block per item, so a change marks only its item
+		let at = start;
+		tk.items.forEach((item, i) => {
+			const one = { ...tk, raw: item.raw, items: [item], start: tk.ordered ? (tk.start || 1) + i : "" };
+			blocks.push({ tk: one, start: at, end: at + lines(item.raw.replace(/\n+$/, "")), item: true });
+			at += lines(item.raw);
+		});
+	}
+	for (const b of blocks) {
+		const hit = hunks.filter((h) => h.from.row <= b.end && h.to.row >= b.start && !(h.to.row === b.start && h.to.col === 0 && h.from.row < b.start));
+		b.kind = !hit.length ? null : hit.every((h) => h.op === "move") ? "moved"
+			: hit.some((h) => h.op === "update") ? "updated" : side === "before" ? "removed" : "added";
+	}
+	const any = blocks.some((b) => b.kind);
+	const show = blocks.map((b, i) => !any || [i - 1, i, i + 1].some((j) => blocks[j]?.kind));
+	const out = [];
+	let hidden = 0;
+	const fold = () => {
+		if (hidden) out.push(el("div", { class: "fold" }, `${hidden} unchanged block${hidden > 1 ? "s" : ""}`));
+		hidden = 0;
+	};
+	blocks.forEach((b, i) => {
+		if (!show[i]) return void hidden++;
+		fold();
+		const div = el("div", { class: `md-block${b.item ? " md-item" : ""}${b.kind ? ` changed md-${b.kind}` : ""}`, title: b.kind ?? null });
+		div.innerHTML = lib.purify.sanitize(lib.marked.parser(Object.assign([b.tk], { links: tokens.links }))); // cleaned: no scripts or handlers
+		out.push(div);
+	});
+	fold();
+	return el("section", { class: `md-pane ${side}` },
+		el("h4", {}, side === "before" ? "Before" : "After", el("span", { class: "sha" }, ref.slice(0, 7))),
+		el("div", { class: "md-body" }, out));
+}
+
 function diffView(f, r, prUrl) {
 	if (!r) return el("div", { class: "diff" }, el("p", { class: "pending" }, "Diffing…"));
 	if (r.error) return el("div", { class: "diff" }, el("p", { class: "note" }, r.error));
 	const github = el("a", { href: `${prUrl}/files`, target: "_blank", rel: "noopener" }, "See it on GitHub");
 	if (r.skipped) return el("div", { class: "diff" }, el("p", { class: "note" }, r.skipped === "binary" ? "Binary file: not diffed. " : "Over 1 MB: not diffed. ", github));
 	const note = NOTE[r.result.summary];
+	const md = isMd(f.path);
+	const rendered = md && files.mdMode.get(f.path) !== "plain";
+	const lib = rendered ? loadMd() : null;
+	const choose = (mode) => (e) => { e.stopPropagation(); files.mdMode.set(f.path, mode); render(); };
+	const side = (name) => r[name] && (rendered
+		? mdPane(name, r[name].ref, r[name].text, r.result[name].hunks, lib)
+		: pane(name, r[name].ref, r[name].text, r.result[name].hunks));
 	return el("div", { class: "diff" },
+		md ? el("div", { class: "md-switch seg", role: "group", "aria-label": "Show" },
+			el("button", { "aria-pressed": String(rendered), class: rendered ? "on" : "", onclick: choose("rendered") }, "Rendered"),
+			el("button", { "aria-pressed": String(!rendered), class: rendered ? "" : "on", onclick: choose("plain") }, "Plain diff")) : null,
 		note ? el("p", { class: "note" }, note) : null,
-		el("div", { class: "panes" },
-			r.before ? pane("before", r.before.ref, r.before.text, r.result.before.hunks) : null,
-			r.after ? pane("after", r.after.ref, r.after.text, r.result.after.hunks) : null));
+		rendered && !lib ? el("p", { class: "pending" }, "Rendering…")
+			: el("div", { class: "panes" }, side("before"), side("after")));
 }
 
 function renderFiles() {
@@ -652,7 +724,7 @@ function renderFiles() {
 	if (!t) return goBack();
 	const key = `${t.repo}#${t.number}`;
 	if (files.key !== key) {
-		files = { key, data: null, error: null, open: new Set(), diffs: new Map() };
+		files = { key, data: null, error: null, open: new Set(), diffs: new Map(), mdMode: new Map() };
 		loadFiles(key, t);
 	}
 	const pr = data.pr && [...data.pr.sections.flatMap((s) => s.prs), ...data.pr.old, ...data.pr.hidden].find((p) => p.repo === t.repo && p.number === t.number);

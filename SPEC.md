@@ -252,3 +252,10 @@ release run on the server) from the file's two whole versions:
   GitHub.
 - Only for PRs and repos you can see (section 4). Read-only. The same two versions are
   diffed once and kept.
+
+**Markdown files** (`.md`, `.markdown`) open **rendered**: before and after as formatted
+text (headings, lists, links, code, tables), each block that has a change marked
+(removed on the before side, added or changed on the after side, moved), with one block
+of context around each change and longer runs of unchanged blocks folded. A switch shows the plain diff instead. The
+rendered text is cleaned first: no scripts, event handlers or embedded frames from the
+file run in Nudgebox; links open in a new tab.

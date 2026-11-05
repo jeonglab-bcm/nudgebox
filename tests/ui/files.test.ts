@@ -119,13 +119,14 @@ test("15. moved code is marked as moved, with the line it moved to", async () =>
 	}
 });
 
-test("15. a binary file is not diffed and links to GitHub", async () => {
+test("15. a binary file omnidiff cannot read says so and links to GitHub", async () => {
 	const s = await open();
 	try {
+		s.t.differ.reply = { largeResidual: false, binary: true, before: { hunks: [] }, after: { hunks: [] } } as never;
 		await s.page.keyboard.press("f");
 		await s.page.click(".file >> nth=1");
 		await s.page.waitForSelector(".diff .note");
-		assert.match((await s.page.locator(".diff .note").textContent())!, /binary/i);
+		assert.match((await s.page.locator(".diff .note").textContent())!, /no content diff/i);
 		assert.match((await s.page.locator(".diff .note a").getAttribute("href"))!, /github\.com\/jeonglab-bcm\/labbot\/pull\/4\/files/);
 	} finally {
 		await s.close();

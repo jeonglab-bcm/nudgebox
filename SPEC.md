@@ -256,8 +256,21 @@ release run on the server) from the file's two whole versions:
 - **Before and after** side by side on a computer, one above the other on a phone.
 - A note when omnidiff names the shape of the change: only whitespace, only comments,
   only moved code, a new file, a deleted file.
-- Binary files and files over 1 MB are not diffed; the view says so and links to
-  GitHub.
+- Text files over 1 MB are not diffed; the view says so and links to GitHub.
+- **Binary files are diffed by what they hold** (omnidiff), up to 10 MB:
+  - **Pictures** (PNG, JPEG, GIF, WebP, BMP, ICO): before and after side by side with
+    each changed area outlined, plus **Difference** (the changed pixels lit up) and
+    **Slider** (wipe from before to after); format, size, share of pixels changed and
+    number of areas. An added or removed picture shows alone; for an animation, how its
+    frames changed.
+  - **Archives, fonts, cursors, translation catalogs and PDFs**: what changed inside,
+    each file, glyph, page or message as added, removed or changed, with how (lines
+    added and removed; pixels changed and where). **Changed PDF pages are drawn**
+    before and after with the changed areas outlined.
+  - Any other binary file: says there is no content diff for its kind, with a link
+    to GitHub.
+  - The page gets the bytes from Nudgebox, only for repos you can see, served so that
+    a browser can only show them as a picture or a PDF to draw, never run them.
 - Only for PRs and repos you can see (section 4). Read-only. The same two versions are
   diffed once and kept.
 

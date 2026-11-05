@@ -5,7 +5,7 @@
  * lab user "hyunhwanj", GitHub "hwan").
  */
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { start } from "../tests/helpers/harness.ts";
 import { createOmnidiff } from "../src/omnidiff.ts";
 import { sidecar } from "../tests/helpers/browser.ts";
@@ -71,6 +71,17 @@ t.github.prFileSets.set(`${L("AURORA")}#311`, {
 });
 for (const rev of ["015c1e5", "fbb18e9"]) for (const p of ["src/summary.ts", "public/sw.js", "SPEC.md"]) t.github.blobs.set(`${L("AURORA")}@${rev}:${p}`, git(rev, p));
 t.github.blobs.set(`${L("AURORA")}@fbb18e9:public/fonts/Inter-400-700.woff2`, Buffer.from([0x77, 0x4f, 0x46, 0x32, 0, 1]));
+// binary files (SPEC 15): the test fixtures, as a figure, a data bundle and a draft
+const fx = (n: string) => readFileSync(`tests/fixtures/binary/${n}`);
+t.github.prFileSets.get(`${L("AURORA")}#311`)!.files.push(
+	{ path: "figures/fig2.png", status: "modified", additions: 0, deletions: 0 },
+	{ path: "data/bundle.zip", status: "modified", additions: 0, deletions: 0 },
+	{ path: "paper/draft.pdf", status: "modified", additions: 0, deletions: 0 },
+);
+for (const [p, ext] of [["figures/fig2.png", "png"], ["data/bundle.zip", "zip"], ["paper/draft.pdf", "pdf"]]) {
+	t.github.blobs.set(`${L("AURORA")}@015c1e5:${p}`, fx(`before.${ext}`));
+	t.github.blobs.set(`${L("AURORA")}@fbb18e9:${p}`, fx(`after.${ext}`));
+}
 
 t.llm.delayMs = 30; // summaries stream in like the real model
 

@@ -131,3 +131,13 @@ Accuracy figures are the author's own. It is AGPL-3.0; Nudgebox runs the unmodif
 release as a separate program inside its private image, pinned by version and SHA-256.
 It does not parse Markdown (diffed as plain text); rendered Markdown diffs are
 Nudgebox's own work. He chose "any two files" for compare and rendered `.md` files.
+
+## 2026-11-05: Binary diffs, and drawing PDF pages
+
+Dr. Jeong asked for diffs of binary files. omnidiff's JSON already compares them by
+content (proof of concept on a PNG, a ZIP and a PDF pair: under 0.01 s each), but it
+gives facts, not pictures: changed areas of a picture, and the members (files, glyphs,
+pages) of a container. So Nudgebox draws them: pictures from a new `/api/file`
+(type from the bytes only, sandbox CSP), and, as he chose, changed PDF pages with pdf.js
+6.5.438 (Mozilla, Apache-2.0, vendored, loaded only for a PDF). Binary files go to
+10 MB (through the git blob API above 1 MB); text diffs stay at 1 MB.

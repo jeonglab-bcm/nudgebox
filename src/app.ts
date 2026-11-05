@@ -77,6 +77,8 @@ const STATIC: Record<string, string> = {
 	"/icon.svg": "image/svg+xml",
 	"/icon-180.png": "image/png",
 	"/icon-512.png": "image/png",
+	"/vendor/marked-18.1.3.esm.js": "text/javascript", // SPEC 15: rendered Markdown (MIT)
+	"/vendor/purify-3.4.17.es.mjs": "text/javascript", // SPEC 15: cleans it (MPL-2.0 or Apache-2.0)
 	"/fonts/Inter-400-700.woff2": "font/woff2",
 	"/fonts/SpaceGrotesk-500-700.woff2": "font/woff2",
 	"/fonts/JetBrainsMono-400-600.woff2": "font/woff2",

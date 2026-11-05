@@ -208,3 +208,90 @@ test("12. a summary kept in the older bullet format is made again", async () => 
 		await t.close();
 	}
 });
+
+// -- streamed (SPEC 12) ------------------------------------------------------------------
+
+type Ev = { event: string; data: any };
+/** Asks for a summary as an event stream and reads every event until the end. */
+async function stream(t: Awaited<ReturnType<typeof setup>>, as: string, kind: string, repo: string, number: number) {
+	const r = await t.req("/api/summarize", { as, method: "POST", headers: { accept: "text/event-stream" }, body: JSON.stringify({ kind, repo, number }) });
+	const text = await r.text();
+	const events: Ev[] = text.split("\n\n").filter(Boolean).map((block) => {
+		const ev = block.match(/^event: (.+)$/m)?.[1] ?? "message";
+		const data = block.match(/^data: (.+)$/m)?.[1];
+		return { event: ev, data: data ? JSON.parse(data) : null };
+	});
+	return { r, events };
+}
+
+test("12. streamed: reading, then the text piece by piece, then done; the summary is kept", async () => {
+	const t = await setup();
+	try {
+		t.llm.reply = "What: Adds a GeoJSON exporter.\nStatus: Checks pass.\nNext: Nothing.";
+		t.llm.delayMs = 5; // as a real model: pieces come over time, after the stream has opened
+		const { r, events } = await stream(t, "hyunhwanj", "pr", LAB, 3);
+		assert.equal(r.headers.get("content-type"), "text/event-stream");
+		assert.equal(r.headers.get("x-accel-buffering"), "no"); // nginx passes it on at once
+		assert.deepEqual(events[0], { event: "stage", data: { stage: "reading" } });
+		const deltas = events.filter((e) => e.event === "message").map((e) => e.data.delta);
+		assert.ok(deltas.length > 2, `${deltas.length} pieces`);
+		assert.equal(deltas.join(""), t.llm.reply);
+		assert.deepEqual(events.at(-1), { event: "done", data: { summary: t.llm.reply, cached: false } });
+		const again = await (await t.summary("hyunhwanj", "pr", LAB, 3)).json();
+		assert.deepEqual(again, { summary: t.llm.reply, cached: true });
+	} finally {
+		await t.close();
+	}
+});
+
+test("12. streamed: a kept summary comes at once", async () => {
+	const t = await setup();
+	try {
+		await t.summary("hyunhwanj", "pr", LAB, 3);
+		const { events } = await stream(t, "hyunhwanj", "pr", LAB, 3);
+		assert.deepEqual(events, [{ event: "done", data: { summary: "- summary 1", cached: true } }]);
+	} finally {
+		await t.close();
+	}
+});
+
+test("12. streamed: a model failure ends with an error and nothing is kept", async () => {
+	const t = await setup();
+	try {
+		t.llm.failNext = true;
+		const { events } = await stream(t, "hyunhwanj", "pr", LAB, 3);
+		assert.equal(events.at(-1)!.event, "error");
+		assert.match(events.at(-1)!.data.error, /LLM failed/);
+		const next = await (await t.summary("hyunhwanj", "pr", LAB, 3)).json();
+		assert.equal(next.cached, false);
+	} finally {
+		await t.close();
+	}
+});
+
+test("12. streamed: two people at once share one model call and both get the whole text", async () => {
+	const t = await setup();
+	try {
+		t.llm.reply = "What: Shared.\nStatus: Fine.\nNext: Nothing.";
+		t.llm.delayMs = 10;
+		const [a, b] = await Promise.all([stream(t, "hyunhwanj", "pr", LAB, 3), stream(t, "kellyl", "pr", LAB, 3)]);
+		assert.equal(t.llm.calls.length, 1);
+		for (const s of [a, b]) {
+			assert.equal(s.events.filter((e) => e.event === "message").map((e) => e.data.delta).join(""), t.llm.reply);
+			assert.equal(s.events.at(-1)!.event, "done");
+		}
+	} finally {
+		await t.close();
+	}
+});
+
+test("12. streamed: refused requests are plain errors, not streams", async () => {
+	const t = await setup();
+	try {
+		const { r } = await stream(t, "kellyl", "pr", MINE, 7); // not visible to kelly
+		assert.equal(r.status, 404);
+		assert.match(r.headers.get("content-type")!, /json/);
+	} finally {
+		await t.close();
+	}
+});

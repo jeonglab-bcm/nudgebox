@@ -156,6 +156,10 @@ on issues.
   shared by everyone who can see the item.
 - If the LLM fails, the error is shown and nothing is kept, so the next click tries
   again.
+- **Streamed:** the summary appears as the model writes it. First the row says
+  "Reading the PR…" (or issue) while Nudgebox fetches it from GitHub, then the text
+  grows line by line. A kept summary appears at once. Two people asking for the same
+  summary at the same time share one model call and both see it grow.
 - The item's text is treated as data, never as instructions to the model.
 
 ## 13. Triage list

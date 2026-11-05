@@ -97,7 +97,7 @@ test("13. no buttons until a row is opened; a click opens and closes it", async 
 		assert.equal(await s.page.locator("main .list button").count(), 0);
 		await rows(s.page).nth(2).click();
 		assert.equal(await selectedKey(s.page), "pr:jeonglab-bcm/labbot#2");
-		assert.deepEqual(await s.page.locator(".row.open .actions button").allTextContents(), ["sSummarize", "hHide"]);
+		assert.deepEqual(await s.page.locator(".row.open .actions button").allTextContents(), ["fFiles", "sSummarize", "hHide"]);
 		await rows(s.page).nth(2).locator(".ref").click();
 		assert.equal(await s.page.locator("main .list button").count(), 0);
 	} finally {
@@ -311,7 +311,7 @@ test("13. no Approve, Merge, Comment or Open buttons; Re-run failed only when ch
 	try {
 		await rows(s.page).nth(0).locator(".ref").click(); // #3, failing (already selected, so not its title)
 		const names = await s.page.locator(".row.open .actions").locator("button, a").allTextContents();
-		assert.deepEqual(names, ["rRe-run failed", "sSummarize", "hHide"]);
+		assert.deepEqual(names, ["fFiles", "rRe-run failed", "sSummarize", "hHide"]);
 		assert.equal(await s.page.locator(".row.open .actions a").count(), 0);
 	} finally {
 		await s.close();

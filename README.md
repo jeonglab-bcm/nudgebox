@@ -40,6 +40,7 @@ Two ports, on purpose (see `src/server.ts`):
 ```sh
 npm install
 npx playwright-core install chromium-headless-shell   # once, for the page tests
+scripts/get-omnidiff.sh   # once: the pinned omnidiff at bin/omnidiff (SPEC 15)
 npm test            # acceptance, adapter and page (tests/ui) tests, no network (fake GitHub)
 npm run typecheck
 npm run live-check  # read-only: real open PRs via your gh login, mapped and sectioned

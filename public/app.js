@@ -127,6 +127,7 @@ const ACTIONS = {
 		if (b && b.trim()) await doAction(x, "comment", { body: b });
 	},
 	summarize: (x, k) => (data[k]?.summarize ? summarize(k, x) : "Summaries are not set up"),
+	files: (x, k) => (k !== "pr" ? "Files are for pull requests" : void (location.hash = `#files/${x.repo}/${x.number}`)),
 	hide: (x, k, hidden) => {
 		// hiding the selected row hands the selection to the next live row (or the one above)
 		const i = shown.findIndex((r) => r.key === view.sel);
@@ -137,7 +138,7 @@ const ACTIONS = {
 		return setHidden(k, x, !hidden);
 	},
 };
-const KEYS = { Enter: "open", o: "open", a: "approve", m: "merge", r: "rerun", c: "comment", s: "summarize", h: "hide" };
+const KEYS = { f: "files", Enter: "open", o: "open", a: "approve", m: "merge", r: "rerun", c: "comment", s: "summarize", h: "hide" };
 
 async function act(name, entry = selected()) {
 	if (!entry) return;
@@ -198,6 +199,7 @@ function detail(entry) {
 		summaryBox(kind, x),
 		el("div", { class: "actions" },
 			// SPEC 13: Approve, Merge, Comment and Open are keys only (fewer buttons)
+			kind === "pr" ? btn("f", "Files", "files") : null,
 			kind === "pr" && x.checks === "failure" ? btn("r", "Re-run failed", "rerun") : null,
 			data[kind]?.summarize ? btn("s", "Summarize", "summarize") : null,
 			btn("h", hidden ? "Unhide" : "Hide", "hide")));
@@ -245,6 +247,8 @@ function fold(id, title, entries) {
 }
 
 function render() {
+	if (onFiles()) return renderFiles();
+	document.body.classList.remove("files");
 	if (onSettings()) {
 		if (devices === null) loadDevices();
 		return renderSettings();
@@ -298,6 +302,10 @@ document.addEventListener("keydown", (e) => {
 	const t = e.target;
 	if (t.closest?.("input, textarea, select, [contenteditable]")) {
 		if (e.key === "Escape") t.blur();
+		return;
+	}
+	if (onFiles()) { // SPEC 15
+		if (e.key === "Escape") goBack();
 		return;
 	}
 	if (onSettings()) { // SPEC 14: list keys do nothing here
@@ -543,6 +551,136 @@ function openSettings(part) {
 	renderSettings.scrollTo = part ?? null;
 	if (!onSettings()) location.hash = "#settings"; // hashchange renders it
 	else renderSettings();
+}
+
+// -- files and diffs (SPEC 15) --------------------------------------------------------
+const onFiles = () => location.hash.startsWith("#files/");
+let files = { key: null, data: null, error: null, open: new Set(), diffs: new Map() };
+const STATUS = { added: "A", removed: "D", modified: "M", renamed: "R", copied: "C", changed: "M", unchanged: "·" };
+const NOTE = {
+	whitespace_only: "Only whitespace changed.", comment_only: "Only comments changed.", refactor_moved_only: "Only moved code: nothing else changed.",
+	new_file: "New file.", deleted_file: "Deleted file.", no_changes: "No changes.",
+};
+
+function filesTarget() {
+	const m = location.hash.match(/^#files\/([^/]+\/[^/]+)\/(\d+)$/);
+	return m && { repo: decodeURIComponent(m[1]), number: Number(m[2]) };
+}
+
+async function loadFiles(key, t) {
+	const { status, data: d } = await api(`/api/prs/files?repo=${encodeURIComponent(t.repo)}&number=${t.number}`);
+	if (files.key !== key) return;
+	if (status === 200) files.data = d;
+	else files.error = d.error || `Could not load the files (${status})`;
+	render();
+}
+
+async function loadDiff(f) {
+	const { repo } = filesTarget();
+	const d = files.data;
+	const before = f.status === "added" ? null : { repo, ref: d.base, path: f.previous ?? f.path };
+	const after = f.status === "removed" ? null : { repo, ref: d.head, path: f.path };
+	const { status, data: r } = await api("/api/diff", { before, after });
+	files.diffs.set(f.path, status === 200 ? r : { error: r.error || `Could not diff (${status})` });
+	render();
+}
+
+// one side of a diff: changed lines with 3 lines of context, the rest folded
+function pane(side, ref, text, hunks) {
+	const lines = text.split("\n");
+	if (text.endsWith("\n")) lines.pop();
+	const marks = lines.map(() => []);
+	for (const h of hunks) {
+		for (let row = h.from.row; row <= Math.min(h.to.row, lines.length - 1); row++) {
+			const start = row === h.from.row ? h.from.col : 0;
+			const end = row === h.to.row ? h.to.col : lines[row].length;
+			if (row === h.to.row && row !== h.from.row && end === 0) continue; // a range that ends at the start of a row
+			const title = h.op === "move" && h.target
+				? side === "before" ? `moved to line ${h.target.from.row + 1}` : `moved from line ${h.target.from.row + 1}`
+				: { insert: "added", delete: "removed", update: "changed" }[h.op];
+			marks[row].push({ start, end: Math.max(end, start), op: h.op, title });
+		}
+	}
+	const show = lines.map(() => false);
+	marks.forEach((m, row) => {
+		if (m.length) for (let r = Math.max(0, row - 3); r <= Math.min(lines.length - 1, row + 3); r++) show[r] = true;
+	});
+	const out = [];
+	let hidden = 0;
+	const fold = () => {
+		if (hidden) out.push(el("div", { class: "fold" }, `${hidden} unchanged line${hidden > 1 ? "s" : ""}`));
+		hidden = 0;
+	};
+	lines.forEach((line, row) => {
+		if (!show[row]) return void hidden++;
+		fold();
+		const parts = [];
+		let at = 0;
+		for (const m of marks[row].sort((a, b) => a.start - b.start)) {
+			if (m.start < at) continue; // overlapping ranges: keep the first
+			if (m.start > at) parts.push(line.slice(at, m.start));
+			parts.push(el("span", { class: `m-${m.op}`, title: m.title }, line.slice(m.start, m.end)));
+			at = m.end;
+		}
+		if (at < line.length) parts.push(line.slice(at));
+		out.push(el("div", { class: `code-line${marks[row].length ? " changed" : ""}` }, el("span", { class: "ln" }, row + 1), el("span", { class: "code" }, parts)));
+	});
+	fold();
+	return el("section", { class: `pane ${side}` },
+		el("h4", {}, side === "before" ? "Before" : "After", el("span", { class: "sha" }, ref.slice(0, 7))),
+		el("div", { class: "lines" }, out));
+}
+
+function diffView(f, r, prUrl) {
+	if (!r) return el("div", { class: "diff" }, el("p", { class: "pending" }, "Diffing…"));
+	if (r.error) return el("div", { class: "diff" }, el("p", { class: "note" }, r.error));
+	const github = el("a", { href: `${prUrl}/files`, target: "_blank", rel: "noopener" }, "See it on GitHub");
+	if (r.skipped) return el("div", { class: "diff" }, el("p", { class: "note" }, r.skipped === "binary" ? "Binary file: not diffed. " : "Over 1 MB: not diffed. ", github));
+	const note = NOTE[r.result.summary];
+	return el("div", { class: "diff" },
+		note ? el("p", { class: "note" }, note) : null,
+		el("div", { class: "panes" },
+			r.before ? pane("before", r.before.ref, r.before.text, r.result.before.hunks) : null,
+			r.after ? pane("after", r.after.ref, r.after.text, r.result.after.hunks) : null));
+}
+
+function renderFiles() {
+	document.body.classList.add("files");
+	document.body.classList.remove("settings");
+	$("#tabs").hidden = true;
+	const t = filesTarget();
+	if (!t) return goBack();
+	const key = `${t.repo}#${t.number}`;
+	if (files.key !== key) {
+		files = { key, data: null, error: null, open: new Set(), diffs: new Map() };
+		loadFiles(key, t);
+	}
+	const pr = data.pr && [...data.pr.sections.flatMap((s) => s.prs), ...data.pr.old, ...data.pr.hidden].find((p) => p.repo === t.repo && p.number === t.number);
+	const prUrl = pr?.url ?? `https://github.com/${t.repo}/pull/${t.number}`;
+	const list = files.data ? el("ul", { class: "files" }, files.data.files.flatMap((f) => {
+		const isOpen = files.open.has(f.path);
+		const row = el("li", { class: `file${isOpen ? " open" : ""}`, role: "button", tabindex: "0", "aria-expanded": String(isOpen) },
+			el("span", { class: `status s-${f.status}`, title: f.status }, STATUS[f.status] ?? "?"),
+			el("span", { class: "path", title: f.previous ? `renamed from ${f.previous}` : null }, f.path),
+			el("span", { class: "counts" }, el("span", { class: "add" }, `+${f.additions}`), " ", el("span", { class: "del" }, `−${f.deletions}`)));
+		const toggle = () => {
+			if (isOpen) files.open.delete(f.path);
+			else {
+				files.open.add(f.path);
+				if (!files.diffs.has(f.path)) { files.diffs.set(f.path, null); loadDiff(f); }
+			}
+			render();
+		};
+		row.addEventListener("click", toggle);
+		row.addEventListener("keydown", (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle()));
+		return [row, isOpen ? el("li", { class: "file-diff" }, diffView(f, files.diffs.get(f.path), prUrl)) : null];
+	})) : el("p", { class: "hint" }, files.error ?? "Loading the files…");
+	main.replaceChildren(el("div", { id: "files-page" },
+		el("div", { class: "set-head" }, el("button", { id: "back", class: "quiet", onclick: goBack }, "← Back"),
+			el("h2", {}, `${t.repo.split("/")[1]}#${t.number}`)),
+		pr ? el("p", { class: "pr-title" }, el("a", { href: prUrl, target: "_blank", rel: "noopener" }, pr.title)) : null,
+		files.data ? el("p", { class: "hint" }, `${files.data.files.length} changed file${files.data.files.length === 1 ? "" : "s"}, compared with where the branch left its base.`) : null,
+		list));
 }
 
 window.addEventListener("hashchange", () => render());

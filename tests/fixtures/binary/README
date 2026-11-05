@@ -1,0 +1,4 @@
+Small binary pairs for SPEC 15 tests, made with Pillow and zipfile:
+- before.png / after.png: 400x300; a red box turns blue and a green circle is added (2 changed areas)
+- before.zip / after.zip: README.txt edited, data/new.csv added, fig.png changed
+- before.pdf / after.pdf: 2 pages; page 1 is the PNG pair above, page 2 the same

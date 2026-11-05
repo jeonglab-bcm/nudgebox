@@ -799,7 +799,8 @@ function diffView(f, r, github, modes = files.mdMode, labels = {}) {
 	if (!r) return el("div", { class: "diff" }, el("p", { class: "pending" }, "Diffing…"));
 	if (r.error) return el("div", { class: "diff" }, el("p", { class: "note" }, r.error));
 	const link = el("a", { href: github, target: "_blank", rel: "noopener" }, "See it on GitHub");
-	if (r.skipped) return el("div", { class: "diff" }, el("p", { class: "note" }, r.skipped === "binary" ? "Binary file: not diffed. " : "Over 1 MB: not diffed. ", link));
+	if (r.skipped) return el("div", { class: "diff" }, el("p", { class: "note" }, r.binary ? "Over 10 MB: not diffed. " : "Too large to diff. ", link));
+	if (r.result.binary) return binaryView(f, r, link, modes);
 	const note = NOTE[r.result.summary];
 	const md = isMd(f.path);
 	const rendered = md && modes.get(f.path) !== "plain";
@@ -855,6 +856,173 @@ function renderFiles() {
 		pr ? el("p", { class: "pr-title" }, el("a", { href: prUrl, target: "_blank", rel: "noopener" }, pr.title)) : null,
 		files.data ? el("p", { class: "hint" }, `${files.data.files.length} changed file${files.data.files.length === 1 ? "" : "s"}, compared with where the branch left its base.`) : null,
 		list));
+}
+
+// -- binary files (SPEC 15): pictures, and containers such as archives and PDFs ---------
+const fileUrl = (s) => `/api/file?repo=${encodeURIComponent(s.repo)}&ref=${encodeURIComponent(s.ref)}&path=${encodeURIComponent(s.path)}`;
+const fmtBytes = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`);
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+function pixelsText(p) {
+	if (!p.regions.length) return "No visible change (only the bytes differ)";
+	const pct = (100 * p.changed_pixels) / p.total_pixels;
+	return `${pct < 0.1 ? "under 0.1" : pct.toFixed(1)}% of pixels changed in ${plural(p.regions.length, "area")}`;
+}
+
+// what changed between two pictures, in words
+function pictureText(c) {
+	const side = (s) => s && `${s.format} ${s.width}×${s.height}${s.frames ? `, ${s.frames} frames` : ""}`;
+	const cmp = c.comparison;
+	if (cmp.kind === "one_sided") return c.before ? `Removed: ${side(c.before)}` : `Added: ${side(c.after)}`;
+	const sizes = `${side(c.before)} → ${side(c.after)}`;
+	if (cmp.kind === "pixels") return `${sizes} · ${pixelsText(cmp)}`;
+	if (cmp.kind === "resized") return `${sizes} · resized${cmp.aspect_kept ? ", same shape" : ""}${cmp.scaled ? ` · ${pixelsText(cmp.scaled)} (at the smaller size)` : ""}`;
+	if (cmp.kind === "frames") {
+		const changed = cmp.steps.filter((s) => s.kind !== "same").length;
+		return `${sizes} · ${changed ? `${plural(changed, "frame step")} changed` : "frames look the same"}${cmp.retimed ? ", retimed" : ""}`;
+	}
+	return sizes;
+}
+
+// changed areas as outlines over a picture, in the picture's own pixels
+function areas(regions, w, h) {
+	return regions.map((r) => el("div", {
+		class: "area", title: `${r.changed_pixels} pixels changed`,
+		style: `left:${(100 * r.x) / w}%;top:${(100 * r.y) / h}%;width:${Math.max((100 * r.width) / w, 0.6)}%;height:${Math.max((100 * r.height) / h, 0.6)}%`,
+	}));
+}
+
+function picPane(side, label, media, regions, w, h) {
+	return el("section", { class: `pic-pane ${side}` }, el("h4", {}, label),
+		el("div", { class: "pic-frame" }, media, w && h ? areas(regions, w, h) : null));
+}
+
+// the changed pixels lit up over a faint copy of the after picture
+async function drawDifference(canvas, urlBefore, urlAfter) {
+	const load = (src) => new Promise((ok, fail) => { const i = new Image(); i.onload = () => ok(i); i.onerror = fail; i.src = src; });
+	const [a, b] = await Promise.all([load(urlBefore), load(urlAfter)]);
+	const w = (canvas.width = b.naturalWidth), h = (canvas.height = b.naturalHeight);
+	const px = (img) => { const c = new OffscreenCanvas(w, h).getContext("2d"); c.drawImage(img, 0, 0); return c.getImageData(0, 0, w, h).data; };
+	const [da, db] = [px(a), px(b)];
+	const out = canvas.getContext("2d").createImageData(w, h);
+	for (let i = 0; i < out.data.length; i += 4) {
+		const diff = Math.abs(da[i] - db[i]) + Math.abs(da[i + 1] - db[i + 1]) + Math.abs(da[i + 2] - db[i + 2]) + Math.abs(da[i + 3] - db[i + 3]);
+		if (diff > 24) out.data.set([230, 60, 50, 255], i);
+		else {
+			const lum = 0.3 * db[i] + 0.59 * db[i + 1] + 0.11 * db[i + 2];
+			const v = 255 - (255 - lum) * 0.22 * (db[i + 3] / 255);
+			out.data.set([v, v, v, 255], i);
+		}
+	}
+	canvas.getContext("2d").putImageData(out, 0, 0);
+	canvas.dataset.drawn = "1";
+}
+
+function pictureView(f, r, c, modes) {
+	const cmp = c.comparison;
+	const before = r.before && fileUrl(r.before), after = r.after && fileUrl(r.after);
+	const same = cmp.kind === "pixels";
+	const key = `pic:${f.path}`;
+	const mode = same ? modes.get(key) ?? "side" : "side";
+	const regions = same ? cmp.regions : [];
+	const choose = (m) => (e) => { e.stopPropagation(); modes.set(key, m); render(); };
+	const img = (src, alt) => el("img", { src, alt, loading: "lazy" });
+	let body;
+	if (mode === "difference") {
+		const canvas = el("canvas", { class: "pic-diff", "aria-label": "Changed pixels, lit up" });
+		drawDifference(canvas, before, after).catch(() => toast("Could not draw the difference"));
+		body = el("div", { class: "pic-frame single" }, canvas, areas(regions, c.after.width, c.after.height));
+	} else if (mode === "slider") {
+		const pos = modes.get(`${key}:pos`) ?? 50;
+		const top = el("div", { class: "top", style: `clip-path: inset(0 0 0 ${pos}%)` }, img(after, "After"));
+		const range = el("input", { type: "range", min: "0", max: "100", value: String(pos), "aria-label": "Before ← → After" });
+		range.addEventListener("input", (e) => {
+			modes.set(`${key}:pos`, e.target.value);
+			top.setAttribute("style", `clip-path: inset(0 0 0 ${e.target.value}%)`);
+		});
+		range.addEventListener("click", (e) => e.stopPropagation());
+		body = el("div", { class: "pic-slider" }, el("div", { class: "pic-frame single" }, img(before, "Before"), top), range);
+	} else {
+		body = el("div", { class: "pic-panes" },
+			before ? picPane("before", "Before", img(before, "Before"), regions, c.before?.width, c.before?.height) : null,
+			after ? picPane("after", "After", img(after, "After"), regions, c.after?.width, c.after?.height) : null);
+	}
+	return el("div", { class: "diff" },
+		el("p", { class: "pic-info" }, pictureText(c)),
+		same ? el("div", { class: "pic-modes seg", role: "group", "aria-label": "Show" },
+			[["side", "Side by side"], ["difference", "Difference"], ["slider", "Slider"]].map(([m, name]) =>
+				el("button", { class: mode === m ? "on" : "", "aria-pressed": String(mode === m), onclick: choose(m) }, name))) : null,
+		body);
+}
+
+const FAMILY = { archives: "file", fonts: "part", documents: "part", catalogs: "message", cursors: "size" };
+
+function memberText(m) {
+	const d = m.detail;
+	if (!d) return "";
+	if (d.kind === "text") return `−${d.removed} +${d.added} lines${d.whitespace ? " (whitespace only)" : ""}`;
+	if (d.kind === "picture") return d.comparison.kind === "pixels" ? pixelsText(d.comparison) : pictureText(d);
+	if (d.kind === "binary") return `${fmtBytes(d.before_bytes)} → ${fmtBytes(d.after_bytes)}`;
+	if (d.kind === "content") return d.content.kind === "container" ? `${plural(d.content.members.length, "change")} inside` : "picture changed";
+	return "";
+}
+
+// SPEC 15: PDF pages drawn with pdf.js, loaded only when a PDF is opened
+let pdfLib = null;
+const pdfDocs = new Map(); // file url -> loading document
+function pdfDoc(url) {
+	pdfLib ??= import("/vendor/pdf-6.5.438.min.mjs").then((m) => {
+		m.GlobalWorkerOptions.workerSrc = "/vendor/pdf.worker-6.5.438.min.mjs";
+		return m;
+	});
+	if (!pdfDocs.has(url)) pdfDocs.set(url, pdfLib.then((m) => m.getDocument({ url, isEvalSupported: false }).promise));
+	return pdfDocs.get(url);
+}
+
+async function drawPdfPage(canvas, url, number, width) {
+	const doc = await pdfDoc(url);
+	const page = await doc.getPage(number);
+	const viewport = page.getViewport({ scale: width / page.getViewport({ scale: 1 }).width });
+	canvas.width = Math.round(viewport.width);
+	canvas.height = Math.round(viewport.height);
+	await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+	canvas.dataset.drawn = "1";
+}
+
+function containerView(f, r, c, link) {
+	const noun = FAMILY[c.family] ?? "member";
+	const fmt = (c.before ?? c.after).format;
+	const counts = c.before && c.after ? `${c.before.members} → ${plural(c.after.members, noun)}` : plural((c.before ?? c.after).members, noun);
+	const order = { changed: 0, added: 1, removed: 2, same: 3 };
+	const members = [...c.members].sort((a, b) => order[a.status] - order[b.status]);
+	const pages = c.family === "documents"
+		? members.filter((m) => /^page \d+$/.test(m.key) && m.status === "changed" && m.detail?.kind === "picture").slice(0, 10) : [];
+	return el("div", { class: "diff" },
+		el("p", { class: "members-head" }, `${fmt}: ${counts} · ${c.unchanged} unchanged`),
+		el("ul", { class: "members" }, members.map((m) => el("li", { class: `member m-${m.status}` },
+			el("span", { class: "key" }, m.key), el("span", { class: "status" }, m.status), el("span", { class: "how" }, memberText(m))))),
+		pages.map((m) => {
+			const n = Number(m.key.split(" ")[1]);
+			const d = m.detail;
+			const canvas = (side) => {
+				const cv = el("canvas", { "aria-label": `${m.key}, ${side}` });
+				drawPdfPage(cv, fileUrl(r[side]), n, d[side].width).catch(() => cv.replaceWith(el("p", { class: "note" }, "Could not draw this page.")));
+				return cv;
+			};
+			return el("div", { class: "pdf-page" }, el("h5", {}, `Page ${n} · ${pixelsText(d.comparison)}`),
+				el("div", { class: "pic-panes" },
+					picPane("before", "Before", canvas("before"), d.comparison.regions ?? [], d.before.width, d.before.height),
+					picPane("after", "After", canvas("after"), d.comparison.regions ?? [], d.after.width, d.after.height)));
+		}),
+		el("p", { class: "note" }, el("a", { href: link.getAttribute("href"), target: "_blank", rel: "noopener" }, "See it on GitHub")));
+}
+
+function binaryView(f, r, link, modes) {
+	const c = r.result.content;
+	if (!c) return el("div", { class: "diff" }, el("p", { class: "note" }, "Binary file: no content diff for this kind of file. ", link));
+	if (c.kind === "picture") return pictureView(f, r, c, modes);
+	if (c.kind === "container") return containerView(f, r, c, link);
+	return el("div", { class: "diff" }, el("p", { class: "note" }, "Binary file: no content diff for this kind of file. ", link));
 }
 
 // -- compare two files (SPEC 15) -----------------------------------------------------

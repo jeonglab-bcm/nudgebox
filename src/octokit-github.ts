@@ -112,6 +112,9 @@ function fail(status: number, message: string): never {
 	throw Object.assign(new Error(message), { status });
 }
 
+/** SPEC 15: the largest file Nudgebox fetches (binary files; text stops at 1 MB in the app). */
+export const MAX_FILE_BYTES = 10_000_000;
+
 export class OctokitGitHub implements GitHubPort {
 	private app: App;
 	private apiUrl: string;
@@ -294,15 +297,20 @@ export class OctokitGitHub implements GitHubPort {
 		}
 	}
 
-	/** SPEC 15: one file's bytes at a commit; "too large" over 1 MB (the API sends no content then); null when not there. */
+	/**
+	 * SPEC 15: one file's bytes at a commit, up to 10 MB; null when not there. The contents
+	 * API sends files up to 1 MB inline; bigger ones come from the git blob API by their sha.
+	 */
 	async fileAt(repo: string, ref: string, path: string): Promise<Buffer | "too large" | null> {
 		const [owner, name] = repo.split("/");
 		const o = await this.installationFor(owner);
 		try {
 			const { data } = await o.request("GET /repos/{owner}/{repo}/contents/{path}", { owner, repo: name, path, ref });
 			if (Array.isArray(data) || data.type !== "file") return null;
-			if (data.size > 1_000_000 || data.encoding !== "base64") return "too large";
-			return Buffer.from(data.content, "base64");
+			if (data.size > MAX_FILE_BYTES) return "too large";
+			if (data.encoding === "base64" && data.content) return Buffer.from(data.content, "base64");
+			const { data: blob } = await o.request("GET /repos/{owner}/{repo}/git/blobs/{file_sha}", { owner, repo: name, file_sha: data.sha });
+			return Buffer.from(blob.content, "base64");
 		} catch (e) {
 			if ((e as { status?: number }).status === 404) return null;
 			throw e;

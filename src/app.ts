@@ -79,6 +79,8 @@ const STATIC: Record<string, string> = {
 	"/icon-512.png": "image/png",
 	"/vendor/marked-18.1.3.esm.js": "text/javascript", // SPEC 15: rendered Markdown (MIT)
 	"/vendor/purify-3.4.17.es.mjs": "text/javascript", // SPEC 15: cleans it (MPL-2.0 or Apache-2.0)
+	"/vendor/pdf-6.5.438.min.mjs": "text/javascript", // SPEC 15: draws PDF pages (pdf.js, Apache-2.0)
+	"/vendor/pdf.worker-6.5.438.min.mjs": "text/javascript",
 	"/fonts/Inter-400-700.woff2": "font/woff2",
 	"/fonts/SpaceGrotesk-500-700.woff2": "font/woff2",
 	"/fonts/JetBrainsMono-400-600.woff2": "font/woff2",
@@ -418,7 +420,9 @@ export function createApp(opts: AppOptions): App {
 	const summarizing = new Map<string, SummaryRun>(); // by "kind:repo#n@version"
 	// -- files and diffs (SPEC 15) -----------------------------------------------
 
-	const MAX_FILE = 1_000_000;
+	const MAX_TEXT = 1_000_000; // text diffs stop here; binary files go to 10 MB (MAX_FILE_BYTES)
+	const MAX_BINARY = 10_000_000;
+	const isBinary = (b: Buffer) => b.subarray(0, 8000).includes(0);
 	const diffs = new Map<string, Promise<unknown>>(); // kept diffs, newest last (the versions are commits, so they never change)
 
 	async function prFilesFor(lab: string, repo: string | null, number: number) {
@@ -448,11 +452,19 @@ export function createApp(opts: AppOptions): App {
 			run = (async () => {
 				const got = await Promise.all(sides.map((s) => (s ? github.fileAt(s.repo, s.ref, s.path) : null)));
 				if (sides.some((s, i) => s && got[i] === null)) throw new HttpError(404, "file not found");
+				const bufs = got.map((g) => (g instanceof Buffer ? g : null));
+				const binary = bufs.some((b) => b && isBinary(b));
+				const limit = binary ? MAX_BINARY : MAX_TEXT;
 				const view = (i: number) => (sides[i] ? { ...sides[i]!, text: null as string | null } : null);
-				const skipped = got.some((g) => g === "too large" || (g && g.length > MAX_FILE)) ? "too large"
-					: got.some((g) => g instanceof Buffer && g.subarray(0, 8000).includes(0)) ? "binary" : null;
-				if (skipped) return { before: view(0), after: view(1), skipped };
-				const text = got.map((g) => (g instanceof Buffer ? g.toString("utf8") : null));
+				if (got.some((g) => g === "too large" || (g && g.length > limit))) return { before: view(0), after: view(1), skipped: "too large" };
+				if (binary) {
+					// SPEC 15: diffed by content; the page draws the files from /api/file, so no text here
+					const arg = (i: number): DiffSide | null => (sides[i] ? { path: sides[i]!.path, bytes: bufs[i]! } : null);
+					const result = await differ(arg(0), arg(1));
+					const side = (i: number) => sides[i] && { ...sides[i]!, size: bufs[i]!.length };
+					return { before: side(0), after: side(1), result };
+				}
+				const text = bufs.map((b) => (b ? b.toString("utf8") : null));
 				const arg = (i: number): DiffSide | null => (sides[i] ? { path: sides[i]!.path, text: text[i]! } : null);
 				const result = await differ(arg(0), arg(1));
 				return { before: sides[0] && { ...sides[0], text: text[0] }, after: sides[1] && { ...sides[1], text: text[1] }, result };
@@ -524,6 +536,41 @@ export function createApp(opts: AppOptions): App {
 	}
 
 	/** Summarize as one JSON answer. */
+	/**
+	 * SPEC 15: a file's bytes for the page to draw (a picture or a PDF). The type comes from
+	 * the bytes, never the name; anything else is a download. A sandbox CSP and nosniff keep
+	 * a browser from running anything in it, even when it is opened on its own.
+	 */
+	const SHOWABLE: [string, (b: Buffer) => boolean][] = [
+		["image/png", (b) => b.subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47]))],
+		["image/jpeg", (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff],
+		["image/gif", (b) => b.subarray(0, 4).toString("latin1") === "GIF8"],
+		["image/webp", (b) => b.subarray(0, 4).toString("latin1") === "RIFF" && b.subarray(8, 12).toString("latin1") === "WEBP"],
+		["image/bmp", (b) => b.subarray(0, 2).toString("latin1") === "BM"],
+		["image/x-icon", (b) => b.subarray(0, 4).equals(Buffer.from([0, 0, 1, 0]))],
+		["application/pdf", (b) => b.subarray(0, 5).toString("latin1") === "%PDF-"],
+	];
+
+	async function fileBytes(res: ServerResponse, lab: string, repo: string | null, ref: string | null, path: string | null) {
+		if (!repo || !ref || !path) throw new HttpError(400, "give repo, ref and path");
+		const { repos } = await viewOf(linked(lab));
+		if (!repos.has(repo.toLowerCase())) throw new HttpError(404, "not found");
+		const got = await github.fileAt(repo, ref, path);
+		if (got === null) throw new HttpError(404, "file not found");
+		if (got === "too large") throw new HttpError(413, "over 10 MB");
+		const type = SHOWABLE.find(([, is]) => is(got))?.[0];
+		res.writeHead(200, {
+			"content-type": type ?? "application/octet-stream",
+			...(type ? {} : { "content-disposition": "attachment" }),
+			"content-length": got.length,
+			"x-content-type-options": "nosniff",
+			"content-security-policy": "sandbox; default-src 'none'",
+			// a commit's file never changes; other refs may
+			"cache-control": /^[0-9a-f]{40}$/.test(ref) ? "private, max-age=31536000, immutable" : "no-store",
+		});
+		res.end(got);
+	}
+
 	async function summarizeItem(req: IncomingMessage, lab: string) {
 		const s = await summaryFor(req, lab);
 		if ("kept" in s) return { summary: s.kept, cached: true };
@@ -643,6 +690,9 @@ export function createApp(opts: AppOptions): App {
 		}
 		if (method === "GET" && path === "/api/prs/files") {
 			return send(res, 200, await prFilesFor(lab, url.searchParams.get("repo"), Number(url.searchParams.get("number"))));
+		}
+		if (method === "GET" && path === "/api/file") {
+			return fileBytes(res, lab, url.searchParams.get("repo"), url.searchParams.get("ref"), url.searchParams.get("path"));
 		}
 		if (method === "POST" && path === "/api/diff") {
 			return send(res, 200, await diffFiles(req, lab));

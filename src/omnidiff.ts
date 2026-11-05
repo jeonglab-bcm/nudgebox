@@ -13,13 +13,15 @@ import { promisify } from "node:util";
 
 const run = promisify(execFile);
 
-export type DiffSide = { path: string; text: string };
+export type DiffSide = { path: string; text?: string; bytes?: Buffer }; // text, or a binary file's bytes
 export type Pos = { row: number; col: number };
 export type Hunk = { op: "insert" | "delete" | "update" | "move"; from: Pos; to: Pos; target?: { from: Pos; to: Pos } };
 export type DiffResult = {
 	before: { hunks: Hunk[] };
 	after: { hunks: Hunk[] };
 	largeResidual: boolean;
+	binary?: true; // a binary pair: no hunks; `content` says what changed, when omnidiff knows the kind
+	content?: unknown; // omnidiff's own "content" object (picture or container), passed on as is
 	language?: string;
 	summary?: "no_changes" | "new_file" | "deleted_file" | "whitespace_only" | "comment_only" | "refactor_moved_only";
 };
@@ -44,10 +46,16 @@ export function createOmnidiff(bin = "omnidiff", timeoutMs = 15_000): Differ {
 			const name = basename((after ?? before)!.path) || "file";
 			const files = { before: join(dir, "before", name), after: join(dir, "after", name) };
 			await Promise.all([mkdir(join(dir, "before")), mkdir(join(dir, "after"))]);
-			await Promise.all([writeFile(files.before, before?.text ?? ""), writeFile(files.after, after?.text ?? "")]);
+			const data = (s: DiffSide | null) => s?.bytes ?? s?.text ?? "";
+			await Promise.all([writeFile(files.before, data(before)), writeFile(files.after, data(after))]);
 			const { stdout } = await run(bin, ["--mode", "json", files.before, files.after], { timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 });
 			const raw = JSON.parse(stdout);
 			const col = { before: columns(before?.text ?? ""), after: columns(after?.text ?? "") };
+			if (raw.binary) {
+				const out: DiffResult = { before: { hunks: [] }, after: { hunks: [] }, largeResidual: Boolean(raw.large_residual), binary: true };
+				if (raw.content) out.content = raw.content;
+				return out;
+			}
 			const range = (side: "before" | "after", r: RawRange) => ({
 				from: { row: r.start_row, col: col[side](r.start_row, r.start_column) },
 				to: { row: r.end_row, col: col[side](r.end_row, r.end_column) },

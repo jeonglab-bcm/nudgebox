@@ -73,6 +73,12 @@ async function fakeGitHub(opts: { allowMergeCommit?: boolean; prState?: string; 
 				case "GET /repos/jeonglab-bcm/labbot/issues/80/comments": return ok([{ user: { login: "jorge" }, body: "Same here." }]);
 				case "GET /repos/jeonglab-bcm/labbot/actions/runs":
 					return ok({ total_count: 3, workflow_runs: [{ id: 101, conclusion: "failure" }, { id: 102, conclusion: "success" }, { id: 103, conclusion: "timed_out" }] });
+				// SPEC 15: file content; over 1 MB the contents API sends none, the git blob API does
+				case "GET /repos/jeonglab-bcm/labbot/contents/small.png":
+					return ok({ type: "file", size: 4, encoding: "base64", content: Buffer.from([1, 2, 0, 3]).toString("base64"), sha: "s1" });
+				case "GET /repos/jeonglab-bcm/labbot/contents/scan.tif": return ok({ type: "file", size: 2_000_000, encoding: "none", content: "", sha: "blob-big" });
+				case "GET /repos/jeonglab-bcm/labbot/contents/huge.tif": return ok({ type: "file", size: 11_000_000, encoding: "none", content: "", sha: "blob-huge" });
+				case "GET /repos/jeonglab-bcm/labbot/git/blobs/blob-big": return ok({ sha: "blob-big", size: 2_000_000, encoding: "base64", content: Buffer.alloc(2_000_000, 9).toString("base64") });
 				case "POST /repos/jeonglab-bcm/labbot/actions/runs/101/rerun-failed-jobs":
 				case "POST /repos/jeonglab-bcm/labbot/actions/runs/103/rerun-failed-jobs": return ok({}, 201);
 			}
@@ -214,4 +220,19 @@ test("12. summary content is read with the App's token: description, diffs, revi
 test("statusCheckRollup states map to the four check states", () => {
 	const with_ = (state: string | null) => toPullRequest({ ...NODE, commits: { nodes: [{ commit: { statusCheckRollup: state && { state } } }] } }).checks;
 	assert.deepEqual(["SUCCESS", "FAILURE", "ERROR", "PENDING", "EXPECTED", null].map(with_), ["success", "failure", "failure", "pending", "pending", "none"]);
+});
+
+test("15. file bytes: inline under 1 MB, through the git blob API up to 10 MB, refused above", async () => {
+	const f = await fakeGitHub();
+	try {
+		assert.deepEqual([...((await f.gh.fileAt("jeonglab-bcm/labbot", "abc", "small.png")) as Buffer)], [1, 2, 0, 3]);
+		const big = (await f.gh.fileAt("jeonglab-bcm/labbot", "abc", "scan.tif")) as Buffer;
+		assert.equal(big.length, 2_000_000);
+		assert.ok(f.seen.some((s) => s.path.startsWith("/repos/jeonglab-bcm/labbot/git/blobs/blob-big")));
+		assert.equal(await f.gh.fileAt("jeonglab-bcm/labbot", "abc", "huge.tif"), "too large");
+		assert.ok(!f.seen.some((s) => s.path.includes("blob-huge")), "a file over 10 MB was downloaded");
+		assert.equal(await f.gh.fileAt("jeonglab-bcm/labbot", "abc", "missing.png"), null);
+	} finally {
+		f.close();
+	}
 });

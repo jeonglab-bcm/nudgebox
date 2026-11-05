@@ -48,8 +48,6 @@ const REVIEW = { APPROVED: ["✓", "approved"], CHANGES_REQUESTED: ["✎", "chan
 const PR_TABS = [["needs_you", "Needs you"], ["waiting", "WIP"], ["ci_failing", "CI failing"], ["all", "All"]];
 // row tint by the section a PR sits in (SPEC 5), so "All" still shows what needs you
 const TONE = { needs_you: "you", ci_failing: "bad", waiting: "wait" };
-// mirrors readyToMerge in src/inbox.ts: only then is Merge the highlighted button
-const ready = (pr) => !pr.draft && pr.mergeable !== "CONFLICTING" && ["success", "none"].includes(pr.checks) && [null, "APPROVED"].includes(pr.reviewDecision);
 const byRepo = (xs) => (view.repo ? xs.filter((x) => x.repo === view.repo) : xs);
 const keyOf = (x) => `${x.repo}#${x.number}`;
 const stale = (x) => Date.now() - Date.parse(x.updatedAt) > (data.pr?.staleDays ?? 3) * 86400000;
@@ -191,7 +189,6 @@ function issueLine(i) {
 
 function detail(entry) {
 	const { item: x, kind, hidden } = entry;
-	const mine = x.author.toLowerCase() === data.login.toLowerCase();
 	const facts = kind === "pr"
 		? [CHECKS[x.checks]?.[1], REVIEW[x.reviewDecision]?.[1], x.draft ? "draft" : null, x.mergeable === "CONFLICTING" ? "merge conflicts" : null, `updated ${age(x.updatedAt)} ago`]
 		: [x.assignees.length ? `assigned to ${x.assignees.join(", ")}` : "unassigned", x.comments ? `${x.comments} comments` : null, ...x.labels, `updated ${age(x.updatedAt)} ago`];
@@ -200,13 +197,10 @@ function detail(entry) {
 		el("div", { class: "facts" }, facts.filter(Boolean).join(" · ")),
 		summaryBox(kind, x),
 		el("div", { class: "actions" },
-			kind === "pr" && !mine ? btn("a", "Approve", "approve") : null,
-			kind === "pr" ? btn("m", "Merge", "merge", mine && ready(x) ? "primary" : "") : null,
+			// SPEC 13: Approve, Merge, Comment and Open are keys only (fewer buttons)
 			kind === "pr" && x.checks === "failure" ? btn("r", "Re-run failed", "rerun") : null,
-			kind === "pr" ? btn("c", "Comment", "comment") : null,
 			data[kind]?.summarize ? btn("s", "Summarize", "summarize") : null,
-			btn("h", hidden ? "Unhide" : "Hide", "hide"),
-			el("a", { class: "btn", href: x.url, target: "_blank", rel: "noopener" }, el("kbd", {}, "↵"), "Open")));
+			btn("h", hidden ? "Unhide" : "Hide", "hide")));
 }
 
 function row(entry) {

@@ -173,8 +173,10 @@ stack of cards.
   as the stale digest) shows its age in the warning colour.
 - On the **All** tab, PRs that would be in **Needs you** carry a small "you" mark.
 - **One row is selected.** Its details (checks and review in words, AI summary) and its
-  actions (Approve, Merge, Re-run failed, Comment, Summarize, Hide/Unhide, Open) show
-  under it only when it is opened; other rows show no buttons. A tap or click selects
+  buttons (Re-run failed when checks failed, Summarize, Hide/Unhide) show under it only
+  when it is opened; other rows show no buttons. Approve, Merge, Comment and Open have
+  no buttons (Dr. Jeong, 2026-11-04: fewer buttons); they stay on the keyboard, and a tap
+  on the title of the selected row opens it on GitHub. A tap or click selects
   and opens a row; tapping it again closes it.
 - **Keyboard** (computers only; ignored while typing in a field or with Ctrl, Cmd or
   Alt held):

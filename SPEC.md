@@ -259,3 +259,11 @@ text (headings, lists, links, code, tables), each block that has a change marked
 of context around each change and longer runs of unchanged blocks folded. A switch shows the plain diff instead. The
 rendered text is cleaned first: no scripts, event handlers or embedded frames from the
 file run in Nudgebox; links open in a new tab.
+
+**Compare two files.** Each file in a Files view has **Pick**. Picked files, from one PR
+or from different PRs and repos, wait in a bar at the bottom (at most two; a third pick
+replaces the oldest; × drops one), kept while you move around Nudgebox in this tab.
+**Compare** diffs the first pick (before) against the second (after), each at the
+version its PR has now (a removed file: its last version), the same way as above,
+Markdown rendered included. **Swap** turns the comparison around. The address is
+`#compare`; Back returns.

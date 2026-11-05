@@ -247,6 +247,12 @@ function fold(id, title, entries) {
 }
 
 function render() {
+	renderPage();
+	renderTray();
+}
+
+function renderPage() {
+	if (onCompare()) return renderCompare();
 	if (onFiles()) return renderFiles();
 	document.body.classList.remove("files");
 	if (onSettings()) {
@@ -304,7 +310,7 @@ document.addEventListener("keydown", (e) => {
 		if (e.key === "Escape") t.blur();
 		return;
 	}
-	if (onFiles()) { // SPEC 15
+	if (onFiles() || onCompare()) { // SPEC 15
 		if (e.key === "Escape") goBack();
 		return;
 	}
@@ -586,7 +592,7 @@ async function loadDiff(f) {
 }
 
 // one side of a diff: changed lines with 3 lines of context, the rest folded
-function pane(side, ref, text, hunks) {
+function pane(side, ref, text, hunks, label) {
 	const lines = text.split("\n");
 	if (text.endsWith("\n")) lines.pop();
 	const marks = lines.map(() => []);
@@ -627,7 +633,7 @@ function pane(side, ref, text, hunks) {
 	});
 	fold();
 	return el("section", { class: `pane ${side}` },
-		el("h4", {}, side === "before" ? "Before" : "After", el("span", { class: "sha" }, ref.slice(0, 7))),
+		el("h4", {}, label ?? (side === "before" ? "Before" : "After"), el("span", { class: "sha" }, ref.slice(0, 7))),
 		el("div", { class: "lines" }, out));
 }
 
@@ -647,7 +653,7 @@ function loadMd() {
 const isMd = (path) => /\.(md|markdown)$/i.test(path);
 
 // one side, rendered: top-level blocks, each marked if a change touches its lines
-function mdPane(side, ref, text, hunks, lib) {
+function mdPane(side, ref, text, hunks, lib, label) {
 	const tokens = lib.marked.lexer(text);
 	const blocks = [];
 	let row = 0;
@@ -690,23 +696,24 @@ function mdPane(side, ref, text, hunks, lib) {
 	});
 	fold();
 	return el("section", { class: `md-pane ${side}` },
-		el("h4", {}, side === "before" ? "Before" : "After", el("span", { class: "sha" }, ref.slice(0, 7))),
+		el("h4", {}, label ?? (side === "before" ? "Before" : "After"), el("span", { class: "sha" }, ref.slice(0, 7))),
 		el("div", { class: "md-body" }, out));
 }
 
-function diffView(f, r, prUrl) {
+// `github`: where to see it instead; `modes`: rendered/plain per path; `labels`: pane titles
+function diffView(f, r, github, modes = files.mdMode, labels = {}) {
 	if (!r) return el("div", { class: "diff" }, el("p", { class: "pending" }, "Diffing…"));
 	if (r.error) return el("div", { class: "diff" }, el("p", { class: "note" }, r.error));
-	const github = el("a", { href: `${prUrl}/files`, target: "_blank", rel: "noopener" }, "See it on GitHub");
-	if (r.skipped) return el("div", { class: "diff" }, el("p", { class: "note" }, r.skipped === "binary" ? "Binary file: not diffed. " : "Over 1 MB: not diffed. ", github));
+	const link = el("a", { href: github, target: "_blank", rel: "noopener" }, "See it on GitHub");
+	if (r.skipped) return el("div", { class: "diff" }, el("p", { class: "note" }, r.skipped === "binary" ? "Binary file: not diffed. " : "Over 1 MB: not diffed. ", link));
 	const note = NOTE[r.result.summary];
 	const md = isMd(f.path);
-	const rendered = md && files.mdMode.get(f.path) !== "plain";
+	const rendered = md && modes.get(f.path) !== "plain";
 	const lib = rendered ? loadMd() : null;
-	const choose = (mode) => (e) => { e.stopPropagation(); files.mdMode.set(f.path, mode); render(); };
+	const choose = (mode) => (e) => { e.stopPropagation(); modes.set(f.path, mode); render(); };
 	const side = (name) => r[name] && (rendered
-		? mdPane(name, r[name].ref, r[name].text, r.result[name].hunks, lib)
-		: pane(name, r[name].ref, r[name].text, r.result[name].hunks));
+		? mdPane(name, r[name].ref, r[name].text, r.result[name].hunks, lib, labels[name])
+		: pane(name, r[name].ref, r[name].text, r.result[name].hunks, labels[name]));
 	return el("div", { class: "diff" },
 		md ? el("div", { class: "md-switch seg", role: "group", "aria-label": "Show" },
 			el("button", { "aria-pressed": String(rendered), class: rendered ? "on" : "", onclick: choose("rendered") }, "Rendered"),
@@ -734,7 +741,8 @@ function renderFiles() {
 		const row = el("li", { class: `file${isOpen ? " open" : ""}`, role: "button", tabindex: "0", "aria-expanded": String(isOpen) },
 			el("span", { class: `status s-${f.status}`, title: f.status }, STATUS[f.status] ?? "?"),
 			el("span", { class: "path", title: f.previous ? `renamed from ${f.previous}` : null }, f.path),
-			el("span", { class: "counts" }, el("span", { class: "add" }, `+${f.additions}`), " ", el("span", { class: "del" }, `−${f.deletions}`)));
+			el("span", { class: "counts" }, el("span", { class: "add" }, `+${f.additions}`), " ", el("span", { class: "del" }, `−${f.deletions}`)),
+			pickButton(pickOf(t, f, files.data)));
 		const toggle = () => {
 			if (isOpen) files.open.delete(f.path);
 			else {
@@ -745,7 +753,7 @@ function renderFiles() {
 		};
 		row.addEventListener("click", toggle);
 		row.addEventListener("keydown", (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle()));
-		return [row, isOpen ? el("li", { class: "file-diff" }, diffView(f, files.diffs.get(f.path), prUrl)) : null];
+		return [row, isOpen ? el("li", { class: "file-diff" }, diffView(f, files.diffs.get(f.path), `${prUrl}/files`)) : null];
 	})) : el("p", { class: "hint" }, files.error ?? "Loading the files…");
 	main.replaceChildren(el("div", { id: "files-page" },
 		el("div", { class: "set-head" }, el("button", { id: "back", class: "quiet", onclick: goBack }, "← Back"),
@@ -753,6 +761,77 @@ function renderFiles() {
 		pr ? el("p", { class: "pr-title" }, el("a", { href: prUrl, target: "_blank", rel: "noopener" }, pr.title)) : null,
 		files.data ? el("p", { class: "hint" }, `${files.data.files.length} changed file${files.data.files.length === 1 ? "" : "s"}, compared with where the branch left its base.`) : null,
 		list));
+}
+
+// -- compare two files (SPEC 15) -----------------------------------------------------
+// picks: at most two files, kept in this tab while moving around
+const onCompare = () => location.hash === "#compare";
+let picks = (() => { try { return JSON.parse(sessionStorage.getItem("ghd-picks") || "[]"); } catch { return []; } })();
+const savePicks = () => { try { sessionStorage.setItem("ghd-picks", JSON.stringify(picks)); } catch {} };
+const pickKey = (p) => `${p.repo}@${p.ref}:${p.path}`;
+const pickLabel = (p) => `${p.repo.split("/")[1]}#${p.number} ${p.path}`;
+
+// the version a PR has now; a removed file at its last version
+const pickOf = (t, f, d) => ({ repo: t.repo, number: t.number, path: f.path, ref: f.status === "removed" ? d.base : d.head });
+
+function togglePick(p) {
+	const i = picks.findIndex((x) => pickKey(x) === pickKey(p));
+	if (i >= 0) picks.splice(i, 1);
+	else {
+		picks.push(p);
+		if (picks.length > 2) picks.shift(); // a third pick replaces the oldest
+	}
+	savePicks();
+	render();
+}
+
+function pickButton(p) {
+	const on = picks.some((x) => pickKey(x) === pickKey(p));
+	return el("button", { class: `pick quiet${on ? " on" : ""}`, "aria-pressed": String(on), title: "Pick this file to compare it with another",
+		onclick: (e) => { e.stopPropagation(); togglePick(p); } }, on ? "Picked" : "Pick");
+}
+
+function renderTray() {
+	let tray = $("#tray");
+	if (!tray) document.body.append((tray = el("div", { id: "tray", role: "region", "aria-label": "Files to compare" })));
+	const show = picks.length > 0 && !onCompare();
+	tray.hidden = !show;
+	document.body.classList.toggle("has-tray", show);
+	if (!show) return;
+	tray.replaceChildren(el("span", { class: "label" }, "Compare"),
+		...picks.map((p) => el("span", { class: "picked" }, pickLabel(p),
+			el("button", { class: "quiet", "aria-label": `Drop ${p.path}`, onclick: () => togglePick(p) }, "×"))),
+		el("button", { class: "compare primary", disabled: picks.length < 2, onclick: () => (location.hash = "#compare") }, "Compare"));
+}
+
+let cmp = { key: null, result: null, modes: new Map() };
+
+async function loadCompare(key, a, b) {
+	const { status, data: r } = await api("/api/diff", { before: { repo: a.repo, ref: a.ref, path: a.path }, after: { repo: b.repo, ref: b.ref, path: b.path } });
+	if (cmp.key !== key) return;
+	cmp.result = status === 200 ? r : { error: r.error || `Could not compare (${status})` };
+	render();
+}
+
+function renderCompare() {
+	document.body.classList.add("files");
+	document.body.classList.remove("settings");
+	$("#tabs").hidden = true;
+	const head = el("div", { class: "set-head" }, el("button", { id: "back", class: "quiet", onclick: () => history.back() }, "← Back"), el("h2", {}, "Compare"));
+	if (picks.length < 2) {
+		main.replaceChildren(el("div", { id: "compare-page" }, head, el("p", { class: "hint" }, "Pick two files in a PR's Files view first (Pick on each file).")));
+		return;
+	}
+	const [a, b] = picks;
+	const key = JSON.stringify([pickKey(a), pickKey(b)]);
+	if (cmp.key !== key) {
+		cmp = { key, result: null, modes: cmp.modes };
+		loadCompare(key, a, b);
+	}
+	main.replaceChildren(el("div", { id: "compare-page" }, head,
+		el("p", { class: "compare-what" }, el("span", {}, pickLabel(a)), el("span", { class: "arrow" }, " → "), el("span", {}, pickLabel(b)),
+			el("button", { class: "quiet", onclick: () => { picks = [b, a]; savePicks(); render(); } }, "Swap")),
+		diffView({ path: b.path }, cmp.result, `https://github.com/${b.repo}/blob/${b.ref}/${b.path}`, cmp.modes, { before: pickLabel(a), after: pickLabel(b) })));
 }
 
 window.addEventListener("hashchange", () => render());

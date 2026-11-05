@@ -124,7 +124,15 @@ body.files #kind, body.files #repo, body.files #tabs, body.files .keys, body.fil
 /* files and diffs (SPEC 15) */
 #files-page { max-width: 1400px; margin: 0 auto; padding: 8px 16px 48px; }
 .files { list-style: none; margin: 12px 0 0; padding: 0; }
-.file { display: grid; grid-template-columns: 1.6rem minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 9px 8px; cursor: pointer; }
+.file { display: grid; grid-template-columns: 1.6rem minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 9px 8px; cursor: pointer; }
+/* the compare tray (SPEC 15): picked files wait at the bottom */
+#tray { position: fixed; left: 0; right: 0; bottom: 0; z-index: 3; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+  padding: 10px max(16px, calc((100% - 1120px) / 2)) calc(10px + env(safe-area-inset-bottom)); }
+body.has-tray .keys { display: none !important; }
+body.has-tray main { padding-bottom: 120px; }
+#tray .picked { display: inline-flex; align-items: center; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+#tray .compare { margin-left: auto; }
+.compare-what { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; overflow-wrap: anywhere; }
 .file .path { overflow-wrap: anywhere; }
 .file .counts { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .file-diff { padding: 4px 0 16px; }
@@ -274,7 +282,7 @@ kbd { font: 500 11px var(--mono); padding: 1px 5px; border-radius: 4px; backgrou
 .pane { border: 1px solid var(--line); border-radius: 8px; padding: 8px 0; background: var(--bg); }
 .pane h4 { padding: 0 12px; font: 500 11px var(--sans); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
 .pane .sha { font: 11px var(--mono); text-transform: none; letter-spacing: 0; }
-.lines { font: 12.5px/1.6 var(--mono); }
+.lines { font: 12.5px/1.6 var(--mono); font-variant-ligatures: none; } /* code shows exactly what is typed: no => as ⇒ */
 .code-line .ln { color: var(--muted); opacity: .7; }
 .code-line.changed { background: var(--faint); }
 .fold { font: 11.5px var(--sans); color: var(--muted); background: repeating-linear-gradient(90deg, transparent 0 6px, var(--faint) 6px 8px); }
@@ -282,10 +290,20 @@ kbd { font: 500 11px var(--mono); padding: 1px 5px; border-radius: 4px; backgrou
 .m-delete { background: color-mix(in oklch, var(--bad) 22%, transparent); border-radius: 2px; text-decoration: line-through; text-decoration-color: color-mix(in oklch, var(--bad) 60%, transparent); }
 .m-update { background: color-mix(in oklch, var(--wait) 30%, transparent); border-radius: 2px; }
 .m-move { background: color-mix(in oklch, var(--move) 22%, transparent); border-radius: 2px; outline: 1px dashed color-mix(in oklch, var(--move) 70%, transparent); outline-offset: -1px; }
+#tray { background: var(--bg); border-top: 1px solid var(--line); box-shadow: 0 -4px 16px oklch(0% 0 0 / .06); font-size: 13px; }
+#tray .label { font: 500 11px var(--sans); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+#tray .picked { font: 12.5px var(--mono); background: var(--faint); border-radius: 6px; padding: 3px 4px 3px 8px; }
+#tray .picked button { padding: 0 6px; }
+#tray .compare { border: 1px solid var(--fg); background: var(--fg); color: var(--bg); border-radius: 6px; padding: 6px 14px; font-weight: 600; }
+#tray .compare:disabled { opacity: .4; }
+.file .pick { font-size: 12px; padding: 3px 8px; border: 1px solid var(--line); }
+.file .pick.on { border-color: var(--accent); color: var(--accent); background: var(--sel); }
+.compare-what { font: 13px var(--mono); color: var(--muted); }
+.compare-what .arrow { color: var(--fg); }
 .md-pane { border: 1px solid var(--line); border-radius: 8px; padding: 8px 0; background: var(--bg); }
 .md-pane h4 { padding: 0 12px; margin: 0 0 6px; font: 500 11px var(--sans); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); display: flex; gap: 8px; }
 .md-body { font-size: 14.5px; line-height: 1.6; }
-.md-body code { font: 12.5px var(--mono); background: var(--faint); padding: 1px 4px; border-radius: 4px; }
+.md-body code { font-variant-ligatures: none; font: 12.5px var(--mono); background: var(--faint); padding: 1px 4px; border-radius: 4px; }
 .md-body pre { background: var(--faint); padding: 10px; border-radius: 6px; overflow-x: auto; }
 .md-body pre code { background: none; padding: 0; }
 .md-body th, .md-body td { border: 1px solid var(--line); padding: 4px 8px; }

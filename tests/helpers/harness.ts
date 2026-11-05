@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { createHmac, randomBytes } from "node:crypto";
 import { createApp, type App } from "../../src/app.ts";
 import { FakeGitHub } from "./fake-github.ts";
+import type { DiffResult, DiffSide, Differ } from "../../src/omnidiff.ts";
 
 export const ORIGIN = "https://gh.bioinfolder.com";
 export const WEBHOOK_SECRET = "test-webhook-secret";
@@ -21,13 +22,15 @@ export type LlmCall = { system: string; user: string };
 export type Pushed = { endpoint: string; payload: { title: string; body: string; url?: string; badge?: number }; urgency?: string };
 
 /** `llm: false` starts the app with no LLM configured (SPEC 12: no Summarize). */
-export async function start(opts: { staleDays?: number; oldDays?: number; now?: () => Date; llm?: false } = {}) {
+export async function start(opts: { staleDays?: number; oldDays?: number; now?: () => Date; llm?: false; diff?: Differ } = {}) {
 	const dir = mkdtempSync(join(tmpdir(), "ghd-"));
 	const github = new FakeGitHub();
 	const pushed: Pushed[] = [];
 	const gone = new Set<string>(); // push endpoints that answer 410 Gone
 	// in-memory stand-in for llm.bioinfolder.com: records prompts, answers "summary N"
 	const llm = { calls: [] as LlmCall[], failNext: false, reply: undefined as string | undefined };
+	// stand-in for omnidiff (SPEC 15): records what it was asked, answers `reply`
+	const differ = { calls: [] as (DiffSide | null)[][], reply: { largeResidual: false, before: { hunks: [] }, after: { hunks: [] } } as DiffResult };
 	const summarize = async (prompt: LlmCall) => {
 		llm.calls.push(prompt);
 		if (llm.failNext) {
@@ -53,6 +56,10 @@ export async function start(opts: { staleDays?: number; oldDays?: number; now?: 
 		},
 		now: opts.now ?? (() => new Date()),
 		summarize: opts.llm === false ? undefined : summarize,
+		diff: async (a, b) => {
+			differ.calls.push([a, b]);
+			return opts.diff ? opts.diff(a, b) : differ.reply;
+		},
 	});
 	const server: Server = createServer(app.handler);
 	await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
@@ -131,7 +138,7 @@ export async function start(opts: { staleDays?: number; oldDays?: number; now?: 
 		server.close();
 		rmSync(dir, { recursive: true, force: true });
 	};
-	return { app, github, llm, pushed, gone, base, dir, logs, req, link, inbox, issues, hide, summary, webhook, subscribe, seen, close };
+	return { app, github, llm, differ, pushed, gone, base, dir, logs, req, link, inbox, issues, hide, summary, webhook, subscribe, seen, close };
 }
 
 /** "owner/repo#n" ids per section, for compact assertions. */

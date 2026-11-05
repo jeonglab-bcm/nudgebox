@@ -3,7 +3,7 @@
  * users, repo access, teams and PRs here, and read back what the app asked GitHub
  * to do. No network.
  */
-import type { GitHubPort, Issue, ItemContent, PullRequest, UserTokens } from "../../src/github.ts";
+import type { GitHubPort, Issue, ItemContent, PrFiles, PullRequest, UserTokens } from "../../src/github.ts";
 
 export type Call = { op: string; token?: string; repo?: string; number?: number; body?: string };
 
@@ -14,6 +14,8 @@ export class FakeGitHub implements GitHubPort {
 	teams = new Map<string, string[]>(); // github login -> "org/team" slugs
 	codes = new Map<string, string>(); // oauth code -> github login
 	content = new Map<string, ItemContent>(); // "owner/repo#n" -> text a summary reads (SPEC 12)
+	prFileSets = new Map<string, PrFiles>(); // "owner/repo#n" -> changed files (SPEC 15)
+	blobs = new Map<string, string | Buffer>(); // "owner/repo@ref:path" -> file content (SPEC 15)
 	calls: Call[] = [];
 	failNext: { status: number; message: string } | null = null;
 	tokenTtlMs = 8 * 3600_000;
@@ -114,6 +116,16 @@ export class FakeGitHub implements GitHubPort {
 	async prContent(repo: string, number: number): Promise<ItemContent> {
 		this.calls.push({ op: "prContent", repo, number });
 		return this.content.get(`${repo}#${number}`) ?? { body: "", comments: [], files: [] };
+	}
+
+	async prFiles(repo: string, number: number): Promise<PrFiles | null> {
+		const f = this.prFileSets.get(`${repo}#${number}`);
+		return f ? structuredClone(f) : null;
+	}
+
+	async fileAt(repo: string, ref: string, path: string): Promise<Buffer | null> {
+		const b = this.blobs.get(`${repo}@${ref}:${path}`);
+		return b === undefined ? null : Buffer.from(b);
 	}
 
 	async issueContent(repo: string, number: number): Promise<ItemContent> {

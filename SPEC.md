@@ -173,7 +173,8 @@ stack of cards.
   as the stale digest) shows its age in the warning colour.
 - On the **All** tab, PRs that would be in **Needs you** carry a small "you" mark.
 - **One row is selected.** Its details (checks and review in words, AI summary) and its
-  buttons (Re-run failed when checks failed, Summarize, Hide/Unhide) show under it only
+  buttons (Files for a PR (section 15), Re-run failed when checks failed, Summarize,
+  Hide/Unhide) show under it only
   when it is opened; other rows show no buttons. Approve, Merge, Comment and Open have
   no buttons (Dr. Jeong, 2026-11-04: fewer buttons); they stay on the keyboard, and a tap
   on the title of the selected row opens it on GitHub. A tap or click selects
@@ -190,6 +191,7 @@ stack of cards.
   | `m` | merge (still asks first) |
   | `r` | re-run failed checks |
   | `c` | comment |
+  | `f` | Files and diffs (section 15) |
   | `s` | AI summary |
   | `h` | hide / unhide |
   | `1`–`4` | Needs you, WIP, CI failing, All |
@@ -232,3 +234,25 @@ or `Escape` returns to the list. List keys (section 13) do nothing on this page.
 **Header bell.** Next to the gear, a bell shows this device's notification state at a
 glance: a plain bell when on, a crossed-out bell with a dot when off, a crossed-out
 grey bell when not possible here. It opens the notifications part of Settings.
+
+## 15. Files and diffs
+
+**Files** on an opened PR (key `f`) shows the PR's changed files, compared with the
+point where the PR's branch left its base (as GitHub's "Files changed" does): status
+(added, modified, removed, renamed), path, and lines added and removed. `Escape` or Back
+returns to the list; the address is `#files/<owner>/<repo>/<number>`.
+
+A file opens its diff, made by **omnidiff** (github.com/ivankovic/omnidiff, a pinned
+release run on the server) from the file's two whole versions:
+
+- **Only the changed parts are marked**, not whole lines: removed (before), added
+  (after), changed (both), and **moved** code marked as moved, with the line it moved
+  to or from. Unchanged lines more than 3 lines from a change fold into "N unchanged
+  lines".
+- **Before and after** side by side on a computer, one above the other on a phone.
+- A note when omnidiff names the shape of the change: only whitespace, only comments,
+  only moved code, a new file, a deleted file.
+- Binary files and files over 1 MB are not diffed; the view says so and links to
+  GitHub.
+- Only for PRs and repos you can see (section 4). Read-only. The same two versions are
+  diffed once and kept.

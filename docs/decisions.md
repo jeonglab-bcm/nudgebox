@@ -119,3 +119,15 @@ After a day with the glass look, Dr. Jeong asked to switch Nudgebox to the **bol
 minimal** skin from the 2026-11-03 comparison: monochrome with a coral accent and big
 tab counts, light first. The list's structure and keys are unchanged. Fonts are now
 Inter, Space Grotesk and JetBrains Mono, still served by Nudgebox.
+
+## 2026-11-04: Diffs with omnidiff
+
+Dr. Jeong asked for a better diff than GitHub's, pointing at omnidiff
+(github.com/ivankovic/omnidiff, v0.3.0 of 2026-11-01, one author). Proof of concept
+before building: on this repo's own `public/app.js` (about 550 lines) it took 0.09 s and
+73 MB, and its `--mode json` gives per-side hunks (insert, delete, update, move with a
+target) with byte columns, which Nudgebox turns into UTF-16 columns for the page.
+Accuracy figures are the author's own. It is AGPL-3.0; Nudgebox runs the unmodified
+release as a separate program inside its private image, pinned by version and SHA-256.
+It does not parse Markdown (diffed as plain text); rendered Markdown diffs are
+Nudgebox's own work. He chose "any two files" for compare and rendered `.md` files.

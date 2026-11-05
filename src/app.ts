@@ -415,7 +415,7 @@ export function createApp(opts: AppOptions): App {
 	}
 
 	/** SPEC 12: one click on Summarize. Kept per item version; one model call at a time per version. */
-	const summarizing = new Map<string, Promise<string>>();
+	const summarizing = new Map<string, SummaryRun>(); // by "kind:repo#n@version"
 	// -- files and diffs (SPEC 15) -----------------------------------------------
 
 	const MAX_FILE = 1_000_000;
@@ -469,7 +469,12 @@ export function createApp(opts: AppOptions): App {
 		}
 	}
 
-	async function summarizeItem(req: IncomingMessage, lab: string) {
+	// One model call per item version at a time; everyone asking meanwhile watches it (SPEC 12).
+	type SummaryEvent = { stage: "reading" | "writing" } | { delta: string };
+	type SummaryRun = { text: string; stage: "reading" | "writing"; watchers: Set<(e: SummaryEvent) => void>; done: Promise<string> };
+
+	/** The kept summary, or the run making it (started if need be). Throws HttpError for refusals. */
+	async function summaryFor(req: IncomingMessage, lab: string): Promise<{ kept: string } | { run: SummaryRun }> {
 		const llm = opts.summarize;
 		if (!llm) throw new HttpError(503, "AI summary is not set up");
 		const b = await json(req);
@@ -483,32 +488,78 @@ export function createApp(opts: AppOptions): App {
 		const key = `${b.kind}:${item.repo}#${item.number}`;
 		const version = `${SUMMARY_FORMAT}|${pr ? `${pr.updatedAt}|${pr.headSha}` : item.updatedAt}`;
 		const kept = store.summary(key, version);
-		if (kept !== undefined) return { summary: kept, cached: true };
+		if (kept !== undefined) return { kept };
 		const id = `${key}@${version}`;
 		let run = summarizing.get(id);
 		if (!run) {
-			run = (async () => {
-				const prompt = pr
-					? prPrompt(pr, await github.prContent(pr.repo, pr.number))
-					: issuePrompt(issue!, await github.issueContent(issue!.repo, issue!.number));
+			const r: SummaryRun = { text: "", stage: "reading", watchers: new Set(), done: Promise.resolve("") };
+			const tell = (e: SummaryEvent) => r.watchers.forEach((w) => w(e));
+			r.done = (async () => {
+				let content;
+				try {
+					content = pr ? await github.prContent(pr.repo, pr.number) : await github.issueContent(issue!.repo, issue!.number);
+				} catch (e) {
+					throw new HttpError(502, `could not read it from GitHub: ${(e as Error).message}`);
+				}
+				const prompt = pr ? prPrompt(pr, content) : issuePrompt(issue!, content);
+				r.stage = "writing";
+				tell({ stage: "writing" });
 				let text: string;
 				try {
-					text = await llm(prompt);
+					text = await llm(prompt, (delta) => {
+						r.text += delta;
+						tell({ delta });
+					});
 				} catch (e) {
 					throw new HttpError(502, `LLM failed: ${(e as Error).message}`);
 				}
 				store.saveSummary(key, version, text, opts.now().toISOString());
 				return text;
 			})().finally(() => summarizing.delete(id));
+			r.done.catch(() => {}); // watchers get the error; an unwatched run must not crash the process
+			run = r;
 			summarizing.set(id, run);
 		}
+		return { run };
+	}
+
+	/** Summarize as one JSON answer. */
+	async function summarizeItem(req: IncomingMessage, lab: string) {
+		const s = await summaryFor(req, lab);
+		if ("kept" in s) return { summary: s.kept, cached: true };
+		return { summary: await s.run.done, cached: false };
+	}
+
+	/** Summarize as server-sent events: stage, then text pieces, then done or error (SPEC 12). */
+	async function summarizeStream(req: IncomingMessage, res: ServerResponse, lab: string) {
+		const s = await summaryFor(req, lab); // refusals are plain JSON errors, before the stream starts
+		res.writeHead(200, {
+			"content-type": "text/event-stream", "cache-control": "no-store", "x-content-type-options": "nosniff",
+			"x-accel-buffering": "no", // nginx: pass each event on at once
+		});
+		const emit = (event: string | null, data: unknown) => {
+			if (!res.writableEnded) res.write(`${event ? `event: ${event}\n` : ""}data: ${JSON.stringify(data)}\n\n`);
+		};
+		if ("kept" in s) {
+			emit("done", { summary: s.kept, cached: true });
+			return res.end();
+		}
+		const run = s.run;
+		emit("stage", { stage: "reading" });
+		if (run.stage === "writing") emit("stage", { stage: "writing" });
+		if (run.text) emit(null, { delta: run.text }); // what was written before this watcher came
+		const watch = (e: SummaryEvent) => ("delta" in e ? emit(null, { delta: e.delta }) : emit("stage", e));
+		run.watchers.add(watch);
 		try {
-			return { summary: await run, cached: false };
+			emit("done", { summary: await run.done, cached: false });
 		} catch (e) {
-			if (e instanceof HttpError) throw e;
-			throw new HttpError(502, `could not read it from GitHub: ${(e as Error).message}`);
+			emit("error", { error: (e as Error).message });
+		} finally {
+			run.watchers.delete(watch);
+			res.end();
 		}
 	}
+
 
 	async function route(req: IncomingMessage, res: ServerResponse) {
 		const url = new URL(req.url ?? "/", "http://x");
@@ -595,6 +646,9 @@ export function createApp(opts: AppOptions): App {
 		}
 		if (method === "POST" && path === "/api/diff") {
 			return send(res, 200, await diffFiles(req, lab));
+		}
+		if (method === "POST" && path === "/api/summarize" && String(req.headers.accept ?? "").includes("text/event-stream")) {
+			return summarizeStream(req, res, lab);
 		}
 		if (method === "POST" && path === "/api/summarize") {
 			return send(res, 200, await summarizeItem(req, lab));

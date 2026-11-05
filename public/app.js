@@ -78,13 +78,24 @@ const summaries = new Map();
 // model text -> nodes: **bold** dropped to plain, `code` kept as <code>; never HTML
 const inline = (s) => s.replace(/\*\*(.+?)\*\*/g, "$1").split(/`([^`]+)`/).map((part, i) => (i % 2 ? el("code", {}, part) : part));
 
+// SPEC 12: summaries being streamed in, "kind:repo#n" -> "reading" | "writing"
+const streaming = new Map();
+
 function summaryBox(kind, item) {
-	const s = summaries.get(`${kind}:${keyOf(item)}`);
-	if (!s) return null;
+	const k = `${kind}:${keyOf(item)}`;
+	const s = summaries.get(k) ?? "";
+	const stage = streaming.get(k);
+	const live = stage !== undefined ? " streaming" : "";
 	const lines = s.split("\n").map((l) => l.trim()).filter(Boolean);
 	const bullet = (l) => l.replace(/^[-*•]\s*/, "");
 	// SPEC 12: labelled rows (What, Key points, Status, Next); "- " lines under a label are its list
 	const LABEL = /^(What|Key points|Status|Next):\s*(.*)$/i;
+	// while streaming, wait until the first line shows which form it takes
+	if (live && !LABEL.test(lines[0] ?? "") && !/^[-*•]\s/.test(lines[0] ?? "")) {
+		return el("div", { class: "summary streaming pending", role: "status", "data-summary": k },
+			stage === "reading" ? `Reading the ${kind === "pr" ? "PR" : "issue"}…` : "Writing…");
+	}
+	if (!s) return null;
 	if (LABEL.test(lines[0] ?? "")) {
 		const rows = [];
 		for (const l of lines) {
@@ -93,22 +104,73 @@ function summaryBox(kind, item) {
 			else if (/^[-*•]\s/.test(l)) rows.at(-1).items.push(bullet(l));
 			else rows.at(-1).text += ` ${l}`;
 		}
-		return el("dl", { class: "summary" }, rows.flatMap((r) => [el("dt", {}, r.label),
+		return el("dl", { class: `summary${live}`, "data-summary": k }, rows.flatMap((r) => [el("dt", {}, r.label),
 			el("dd", {}, r.text ? el("p", {}, inline(r.text)) : null, r.items.length ? el("ul", {}, r.items.map((i) => el("li", {}, inline(i)))) : null)]));
 	}
 	// a summary kept in the older bullet form shows as a list
-	return el("div", { class: "summary" }, el("ul", {}, lines.map((l) => el("li", {}, inline(bullet(l))))));
+	return el("div", { class: `summary${live}`, "data-summary": k }, el("ul", {}, lines.map((l) => el("li", {}, inline(bullet(l))))));
 }
 
+// while text streams in, redraw only that summary, at most once a frame, so the row's
+// buttons stay put under a finger
+const painting = new Set();
+function paint(kind, item) {
+	const k = `${kind}:${keyOf(item)}`;
+	if (painting.has(k)) return;
+	painting.add(k);
+	requestAnimationFrame(() => {
+		painting.delete(k);
+		const old = main.querySelector(`[data-summary="${CSS.escape(k)}"]`);
+		const box = summaryBox(kind, item);
+		if (old && box) old.replaceWith(box);
+		else if (!old) render();
+	});
+}
+
+// SPEC 12: the summary as server-sent events: stage, text pieces, then done or error
 async function summarize(kind, item) {
-	toast("Summarizing…");
-	const { status, data: d } = await api("/api/summarize", { kind, repo: item.repo, number: item.number });
-	if (status === 200) {
-		summaries.set(`${kind}:${keyOf(item)}`, d.summary);
-		view.expanded = true;
-		toast("Summary ready");
+	const k = `${kind}:${keyOf(item)}`;
+	if (streaming.has(k)) return;
+	streaming.set(k, "reading");
+	summaries.set(k, "");
+	view.expanded = true;
+	render();
+	try {
+		const r = await fetch("/api/summarize", {
+			method: "POST", headers: { "content-type": "application/json", accept: "text/event-stream" },
+			body: JSON.stringify({ kind, repo: item.repo, number: item.number }),
+		});
+		if (!(r.headers.get("content-type") ?? "").includes("text/event-stream")) {
+			const d = await r.json().catch(() => ({}));
+			throw new Error(d.error || `Summary failed (${r.status})`);
+		}
+		const reader = r.body.pipeThrough(new TextDecoderStream()).getReader();
+		let buf = "";
+		for (let done = false; !done;) {
+			const chunk = await reader.read();
+			done = chunk.done;
+			buf += chunk.value ?? "";
+			let end;
+			while ((end = buf.indexOf("\n\n")) >= 0) {
+				const block = buf.slice(0, end);
+				buf = buf.slice(end + 2);
+				const event = block.match(/^event: (.+)$/m)?.[1] ?? "message";
+				const data = JSON.parse(block.match(/^data: (.+)$/m)?.[1] ?? "null");
+				if (event === "stage") streaming.set(k, data.stage);
+				else if (event === "message") summaries.set(k, summaries.get(k) + data.delta);
+				else if (event === "done") summaries.set(k, data.summary), streaming.delete(k);
+				else if (event === "error") throw new Error(data.error);
+				paint(kind, item);
+			}
+		}
+		if (streaming.has(k)) throw new Error("The summary stopped before the end; try again");
+	} catch (e) {
+		summaries.delete(k);
+		toast(e.message);
+	} finally {
+		streaming.delete(k);
 		render();
-	} else toast(d.error || `Summary failed (${status})`);
+	}
 }
 
 // -- the triage list (SPEC 13) ------------------------------------------------------

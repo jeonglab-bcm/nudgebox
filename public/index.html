@@ -227,6 +227,10 @@ main[data-view="all"] .tone-you .title { font-weight: 650; }
 .summary dt { font: 600 11px/1.9 var(--sans); text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
 .summary dd { overflow-wrap: anywhere; }
 .summary code { font: 13px var(--mono); padding: 1px 5px; border-radius: 4px; background: var(--faint); }
+.summary.pending { color: var(--muted); font-size: 14px; }
+.summary.streaming { border-left-style: dashed; }
+.summary.streaming dd:last-child > p:last-child::after, .summary.streaming dd:last-child li:last-child::after, div.summary.streaming li:last-child::after { content: "▍"; color: var(--accent); animation: blink 1s steps(1) infinite; margin-left: 2px; }
+@keyframes blink { 50% { opacity: 0; } }
 .actions button, .actions .btn { border: 1px solid var(--line); background: var(--bg); color: var(--fg); border-radius: 6px; padding: 5px 10px; font-size: 13px; font-weight: 500;
   transition: transform var(--fast) var(--ease), border-color var(--fast) var(--ease); }
 .actions button:hover, .actions .btn:hover { border-color: var(--fg); }

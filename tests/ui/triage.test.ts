@@ -317,3 +317,18 @@ test("13. no Approve, Merge, Comment or Open buttons; Re-run failed only when ch
 		await s.close();
 	}
 });
+
+test("12. a summary appears while the model writes it", async () => {
+	const s = await open();
+	try {
+		s.t.llm.reply = "What: This PR fixes the offset.\nKey points:\n- One.\n- Two.\n- Three.\nStatus: All checks pass.\nNext: @hwan must review the PR.";
+		s.t.llm.delayMs = 40;
+		await s.page.keyboard.press("s");
+		await s.page.waitForSelector(".summary.streaming dt"); // part of it, labelled already
+		assert.ok((await s.page.locator(".summary.streaming").textContent())!.length < s.t.llm.reply.length);
+		await s.page.waitForSelector(".summary:not(.streaming) dt >> text=Next", { timeout: 10_000 });
+		assert.deepEqual(await s.page.locator(".summary dt").allTextContents(), ["What", "Key points", "Status", "Next"]);
+	} finally {
+		await s.close();
+	}
+});

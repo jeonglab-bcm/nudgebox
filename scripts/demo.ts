@@ -72,6 +72,8 @@ t.github.prFileSets.set(`${L("AURORA")}#311`, {
 for (const rev of ["015c1e5", "fbb18e9"]) for (const p of ["src/summary.ts", "public/sw.js", "SPEC.md"]) t.github.blobs.set(`${L("AURORA")}@${rev}:${p}`, git(rev, p));
 t.github.blobs.set(`${L("AURORA")}@fbb18e9:public/fonts/Inter-400-700.woff2`, Buffer.from([0x77, 0x4f, 0x46, 0x32, 0, 1]));
 
+t.llm.delayMs = 30; // summaries stream in like the real model
+
 await t.link("hyunhwanj", "hwan");
 await t.subscribe("hyunhwanj", "https://web.push.apple.com/demo-iphone");
 await t.subscribe("hyunhwanj", "https://fcm.googleapis.com/fcm/send/demo-chrome");

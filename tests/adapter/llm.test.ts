@@ -63,3 +63,50 @@ test("12. an error status, an empty answer, or no answer in time is an error", a
 		slow.close();
 	}
 });
+
+/** A fake that answers a `stream: true` request with server-sent events, one chunk per piece. */
+async function fakeStreamingLlm(pieces: string[], delayMs = 5) {
+	const seen: any[] = [];
+	const server = createServer((req, res) => {
+		let raw = "";
+		req.on("data", (c) => (raw += c));
+		req.on("end", async () => {
+			seen.push(JSON.parse(raw));
+			res.writeHead(200, { "content-type": "text/event-stream" });
+			for (const p of pieces) {
+				res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: p } }] })}\n\n`);
+				await new Promise((r) => setTimeout(r, delayMs));
+			}
+			res.end("data: [DONE]\n\n");
+		});
+	});
+	await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+	const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`;
+	return { baseUrl, seen, close: () => { server.closeAllConnections(); server.close(); } };
+}
+
+test("12. streamed: the text arrives piece by piece and the whole answer is returned", async () => {
+	const f = await fakeStreamingLlm(["What: Adds", " export.\nStatus:", " Ready.\nNext: Nothing."]);
+	try {
+		const got: string[] = [];
+		const text = await createSummarizer({ baseUrl: f.baseUrl, apiKey: "k", model: "m" })({ system: "s", user: "u" }, (d) => got.push(d));
+		assert.equal(f.seen[0].stream, true);
+		assert.equal(text, "What: Adds export.\nStatus: Ready.\nNext: Nothing.");
+		assert.equal(got.join(""), text);
+		assert.ok(got.length >= 3, `only ${got.length} pieces`);
+	} finally {
+		f.close();
+	}
+});
+
+test("12. streamed: a <think> block is never passed on", async () => {
+	const f = await fakeStreamingLlm(["<think>", "let me see", "</think>\n", "What: X."]);
+	try {
+		const got: string[] = [];
+		const text = await createSummarizer({ baseUrl: f.baseUrl, apiKey: "k", model: "m" })({ system: "s", user: "u" }, (d) => got.push(d));
+		assert.equal(text, "What: X.");
+		assert.ok(!got.join("").includes("think") && !got.join("").includes("let me see"), got.join("|"));
+	} finally {
+		f.close();
+	}
+});

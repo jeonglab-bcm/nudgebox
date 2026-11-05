@@ -4,11 +4,15 @@
  * http://127.0.0.1:<port>/. A small proxy in front plays the Keycloak sidecar (you are
  * lab user "hyunhwanj", GitHub "hwan").
  */
+import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { start } from "../tests/helpers/harness.ts";
+import { createOmnidiff } from "../src/omnidiff.ts";
 import { sidecar } from "../tests/helpers/browser.ts";
 
 const port = Number(process.argv[2] ?? 8099);
-const t = await start();
+// the real omnidiff when scripts/get-omnidiff.sh has fetched it (SPEC 15)
+const t = await start(existsSync("bin/omnidiff") ? { diff: createOmnidiff("bin/omnidiff") } : {});
 const DAY = 86400_000;
 const ago = (d: number) => new Date(Date.now() - d * DAY).toISOString();
 const L = (r: string) => `jeonglab-bcm/${r}`;
@@ -53,6 +57,20 @@ t.llm.reply = [
 	"",
 	"Next: @hwan must review the PR after the checks pass.",
 ].join("\n");
+
+// Files of AURORA#311 (SPEC 15): real file versions from this repo's own history
+const git = (rev: string, path: string) => execFileSync("git", ["show", `${rev}:${path}`]);
+t.github.prFileSets.set(`${L("AURORA")}#311`, {
+	base: "015c1e5", head: "fbb18e9",
+	files: [
+		{ path: "src/summary.ts", status: "modified", additions: 19, deletions: 2 },
+		{ path: "public/sw.js", status: "modified", additions: 3, deletions: 1 },
+		{ path: "SPEC.md", status: "modified", additions: 60, deletions: 4 },
+		{ path: "public/fonts/Inter-400-700.woff2", status: "added", additions: 0, deletions: 0 },
+	],
+});
+for (const rev of ["015c1e5", "fbb18e9"]) for (const p of ["src/summary.ts", "public/sw.js", "SPEC.md"]) t.github.blobs.set(`${L("AURORA")}@${rev}:${p}`, git(rev, p));
+t.github.blobs.set(`${L("AURORA")}@fbb18e9:public/fonts/Inter-400-700.woff2`, Buffer.from([0x77, 0x4f, 0x46, 0x32, 0, 1]));
 
 await t.link("hyunhwanj", "hwan");
 await t.subscribe("hyunhwanj", "https://web.push.apple.com/demo-iphone");

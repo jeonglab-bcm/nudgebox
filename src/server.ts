@@ -15,6 +15,7 @@ import webpush from "web-push";
 import { parse } from "yaml";
 import { createApp } from "./app.ts";
 import { createSummarizer } from "./llm.ts";
+import { createOmnidiff } from "./omnidiff.ts";
 import { OctokitGitHub } from "./octokit-github.ts";
 import { publicOnly } from "./public.ts";
 
@@ -70,6 +71,7 @@ const app = createApp({
 	now: () => new Date(),
 	log,
 	summarize,
+	diff: createOmnidiff(process.env.OMNIDIFF_BIN ?? "omnidiff"), // SPEC 15; the image has it on PATH
 });
 
 const host = process.env.LISTEN_HOST ?? "0.0.0.0";

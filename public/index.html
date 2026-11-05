@@ -105,7 +105,8 @@ button.icon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; s
 #bell[data-state="off"] .slash, #bell[data-state="blocked"] .slash, #bell[data-state="unavailable"] .slash { display: inline; }
 #bell[data-state="off"] .pip, #bell[data-state="blocked"] .pip { display: block; position: absolute; top: 3px; right: 3px; width: 8px; height: 8px; border-radius: 50%; }
 /* settings page (SPEC 14): the list's filters do not apply there */
-body.settings #kind, body.settings #repo, body.settings #tabs, body.settings .keys, body.settings #keys-btn { display: none !important; }
+body.settings #kind, body.settings #repo, body.settings #tabs, body.settings .keys, body.settings #keys-btn,
+body.files #kind, body.files #repo, body.files #tabs, body.files .keys, body.files #keys-btn { display: none !important; }
 #settings-page { max-width: 640px; margin: 0 auto; padding: 8px 16px 48px; }
 .set-head { display: flex; align-items: center; gap: 12px; margin: 8px 0 4px; }
 .set-head h2 { margin: 0; }
@@ -120,6 +121,39 @@ body.settings #kind, body.settings #repo, body.settings #tabs, body.settings .ke
 .device .since { grid-column: 1; }
 .device .here, .device button { grid-column: 2; grid-row: 1 / span 2; }
 .plain li { padding: 6px 0; }
+/* files and diffs (SPEC 15) */
+#files-page { max-width: 1400px; margin: 0 auto; padding: 8px 16px 48px; }
+.files { list-style: none; margin: 12px 0 0; padding: 0; }
+.file { display: grid; grid-template-columns: 1.6rem minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 9px 8px; cursor: pointer; }
+/* the compare tray (SPEC 15): picked files wait at the bottom */
+#tray { position: fixed; left: 0; right: 0; bottom: 0; z-index: 3; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+  padding: 10px max(16px, calc((100% - 1120px) / 2)) calc(10px + env(safe-area-inset-bottom)); }
+body.has-tray .keys { display: none !important; }
+body.has-tray main { padding-bottom: 120px; }
+#tray .picked { display: inline-flex; align-items: center; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+#tray .compare { margin-left: auto; }
+.compare-what { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; overflow-wrap: anywhere; }
+.file .path { overflow-wrap: anywhere; }
+.file .counts { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.file-diff { padding: 4px 0 16px; }
+.diff { min-width: 0; }
+.panes { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+@media (min-width: 900px) { .panes:has(.before):has(.after) { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+.pane, .md-pane { min-width: 0; }
+.md-switch { display: inline-flex; margin: 4px 0 10px; }
+.md-body { padding: 0 16px; overflow-wrap: anywhere; }
+.md-body img { max-width: 100%; }
+.md-body table { display: block; overflow-x: auto; border-collapse: collapse; }
+.md-block { padding: 2px 10px; margin: 0 -10px; }
+.md-item > ul, .md-item > ol { margin: 0; } /* list items render one by one; keep them together */
+.md-item + :not(.md-item) { margin-top: 1em; }
+.pane h4 { margin: 0 0 6px; display: flex; gap: 8px; align-items: baseline; }
+.lines { overflow-x: auto; }
+.code-line { display: grid; grid-template-columns: 3.2em minmax(0, 1fr); }
+.code-line .ln { text-align: right; padding-right: 10px; user-select: none; }
+.code-line .code { white-space: pre-wrap; overflow-wrap: anywhere; padding-right: 12px; } /* long lines wrap: nothing hides off to the side */
+.fold { padding: 2px 0 2px 3.2em; }
+.pr-title { margin: 0 0 4px; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; } }
 </style>
 <style id="skin">
@@ -132,18 +166,18 @@ body.settings #kind, body.settings #repo, body.settings #tabs, body.settings .ke
 :root { color-scheme: light;
   --bg: oklch(99% 0 0); --fg: oklch(18% 0 0); --muted: oklch(46% 0 0); --faint: oklch(95% 0 0); --line: oklch(91% 0 0);
   --accent: oklch(60% 0.21 32); --accent-ink: oklch(99% 0 0); --sel: oklch(96.5% 0.014 32);
-  --ok: oklch(52% 0.13 150); --bad: oklch(55% 0.2 27); --wait: oklch(62% 0.13 75);
+  --ok: oklch(52% 0.13 150); --bad: oklch(55% 0.2 27); --wait: oklch(62% 0.13 75); --move: oklch(55% 0.13 255);
   --sans: "Inter", system-ui, sans-serif; --display: "Space Grotesk", var(--sans); --mono: "JetBrains Mono", ui-monospace, monospace;
   --fast: 150ms; --ease: cubic-bezier(0.4, 0, 0.2, 1); }
 /* theme (SPEC 14): light unless the device is dark; a choice in Settings wins either way */
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark;
   --bg: oklch(15% 0 0); --fg: oklch(94% 0 0); --muted: oklch(68% 0 0); --faint: oklch(21% 0 0); --line: oklch(26% 0 0);
   --accent: oklch(70% 0.17 32); --accent-ink: oklch(15% 0 0); --sel: oklch(20.5% 0.022 32);
-  --ok: oklch(74% 0.14 150); --bad: oklch(70% 0.17 27); --wait: oklch(80% 0.13 80); } }
+  --ok: oklch(74% 0.14 150); --bad: oklch(70% 0.17 27); --wait: oklch(80% 0.13 80); --move: oklch(74% 0.1 255); } }
 :root[data-theme="dark"] { color-scheme: dark;
   --bg: oklch(15% 0 0); --fg: oklch(94% 0 0); --muted: oklch(68% 0 0); --faint: oklch(21% 0 0); --line: oklch(26% 0 0);
   --accent: oklch(70% 0.17 32); --accent-ink: oklch(15% 0 0); --sel: oklch(20.5% 0.022 32);
-  --ok: oklch(74% 0.14 150); --bad: oklch(70% 0.17 27); --wait: oklch(80% 0.13 80); }
+  --ok: oklch(74% 0.14 150); --bad: oklch(70% 0.17 27); --wait: oklch(80% 0.13 80); --move: oklch(74% 0.1 255); }
 body { background: var(--bg); color: var(--fg); font: 14px/1.45 var(--sans); font-feature-settings: "cv11", "ss01"; }
 .chrome { background: var(--bg); }
 .bar { padding-top: 18px; padding-bottom: 12px; }
@@ -235,6 +269,50 @@ kbd { font: 500 11px var(--mono); padding: 1px 5px; border-radius: 4px; backgrou
 .device button.quiet, .set-head button.quiet { background: var(--faint); }
 .plain li { padding-left: 16px; position: relative; }
 .plain li::before { content: ""; position: absolute; left: 0; top: 14px; width: 6px; height: 6px; border-radius: 50%; background: var(--fg); }
+/* files and diffs (SPEC 15): one colour per kind of change, faint enough to read through */
+.file { border-bottom: 1px solid var(--line); border-radius: 0; }
+.file:hover, .file.open { background: var(--faint); }
+.file .status { font: 600 12px var(--mono); text-align: center; border-radius: 4px; padding: 1px 0; background: var(--faint); color: var(--muted); }
+.file .s-added { color: var(--ok); } .file .s-removed { color: var(--bad); } .file .s-renamed, .file .s-modified { color: var(--wait); }
+.file .path { font: 13px var(--mono); }
+.file .counts { font: 12px var(--mono); } .counts .add { color: var(--ok); } .counts .del { color: var(--bad); }
+.pr-title a { color: var(--fg); font-weight: 600; text-decoration: none; }
+.diff .note, .diff .pending { color: var(--muted); font-size: 13.5px; margin: 6px 0 10px; }
+.diff .note a { color: var(--fg); }
+.pane { border: 1px solid var(--line); border-radius: 8px; padding: 8px 0; background: var(--bg); }
+.pane h4 { padding: 0 12px; font: 500 11px var(--sans); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.pane .sha { font: 11px var(--mono); text-transform: none; letter-spacing: 0; }
+.lines { font: 12.5px/1.6 var(--mono); font-variant-ligatures: none; } /* code shows exactly what is typed: no => as ⇒ */
+.code-line .ln { color: var(--muted); opacity: .7; }
+.code-line.changed { background: var(--faint); }
+.fold { font: 11.5px var(--sans); color: var(--muted); background: repeating-linear-gradient(90deg, transparent 0 6px, var(--faint) 6px 8px); }
+.m-insert { background: color-mix(in oklch, var(--ok) 24%, transparent); border-radius: 2px; }
+.m-delete { background: color-mix(in oklch, var(--bad) 22%, transparent); border-radius: 2px; text-decoration: line-through; text-decoration-color: color-mix(in oklch, var(--bad) 60%, transparent); }
+.m-update { background: color-mix(in oklch, var(--wait) 30%, transparent); border-radius: 2px; }
+.m-move { background: color-mix(in oklch, var(--move) 22%, transparent); border-radius: 2px; outline: 1px dashed color-mix(in oklch, var(--move) 70%, transparent); outline-offset: -1px; }
+#tray { background: var(--bg); border-top: 1px solid var(--line); box-shadow: 0 -4px 16px oklch(0% 0 0 / .06); font-size: 13px; }
+#tray .label { font: 500 11px var(--sans); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+#tray .picked { font: 12.5px var(--mono); background: var(--faint); border-radius: 6px; padding: 3px 4px 3px 8px; }
+#tray .picked button { padding: 0 6px; }
+#tray .compare { border: 1px solid var(--fg); background: var(--fg); color: var(--bg); border-radius: 6px; padding: 6px 14px; font-weight: 600; }
+#tray .compare:disabled { opacity: .4; }
+.file .pick { font-size: 12px; padding: 3px 8px; border: 1px solid var(--line); }
+.file .pick.on { border-color: var(--accent); color: var(--accent); background: var(--sel); }
+.compare-what { font: 13px var(--mono); color: var(--muted); }
+.compare-what .arrow { color: var(--fg); }
+.md-pane { border: 1px solid var(--line); border-radius: 8px; padding: 8px 0; background: var(--bg); }
+.md-pane h4 { padding: 0 12px; margin: 0 0 6px; font: 500 11px var(--sans); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); display: flex; gap: 8px; }
+.md-body { font-size: 14.5px; line-height: 1.6; }
+.md-body code { font-variant-ligatures: none; font: 12.5px var(--mono); background: var(--faint); padding: 1px 4px; border-radius: 4px; }
+.md-body pre { background: var(--faint); padding: 10px; border-radius: 6px; overflow-x: auto; }
+.md-body pre code { background: none; padding: 0; }
+.md-body th, .md-body td { border: 1px solid var(--line); padding: 4px 8px; }
+.md-body a { color: var(--fg); }
+.md-block.changed { border-left: 3px solid; border-radius: 0 6px 6px 0; }
+.md-added { border-color: var(--ok); background: color-mix(in oklch, var(--ok) 10%, transparent); }
+.md-removed { border-color: var(--bad); background: color-mix(in oklch, var(--bad) 9%, transparent); }
+.md-updated { border-color: var(--wait); background: color-mix(in oklch, var(--wait) 12%, transparent); }
+.md-moved { border-color: var(--move); border-left-style: dashed; background: color-mix(in oklch, var(--move) 9%, transparent); }
 @media (max-width: 720px) {
   .bar { padding-top: 12px; }
   .tabs { gap: 20px; }
@@ -278,6 +356,7 @@ kbd { font: 500 11px var(--mono); padding: 1px 5px; border-radius: 4px; backgrou
     <dt><kbd>m</kbd></dt><dd>merge (asks first)</dd>
     <dt><kbd>r</kbd></dt><dd>re-run failed checks</dd>
     <dt><kbd>c</kbd></dt><dd>comment</dd>
+    <dt><kbd>f</kbd></dt><dd>files and diffs</dd>
     <dt><kbd>s</kbd></dt><dd>AI summary</dd>
     <dt><kbd>h</kbd></dt><dd>hide / unhide</dd>
     <dt><kbd>1</kbd>–<kbd>4</kbd></dt><dd>Needs you, WIP, CI failing, All</dd>

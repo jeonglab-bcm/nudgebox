@@ -9,7 +9,7 @@
  *   permissions.
  */
 import { App, Octokit } from "octokit";
-import type { Checks, GitHubPort, Issue, ItemContent, PullRequest, ReviewDecision, UserTokens } from "./github.ts";
+import type { Checks, GitHubPort, Issue, ItemContent, PrFiles, PullRequest, ReviewDecision, UserTokens } from "./github.ts";
 
 export interface OctokitGitHubOptions {
 	appId: string;
@@ -271,6 +271,42 @@ export class OctokitGitHub implements GitHubPort {
 				...lines.map((c) => ({ author: who(c), body: `${c.path}: ${c.body}` })),
 			],
 		};
+	}
+
+	/** SPEC 15: changed files against the merge base, like GitHub's "Files changed" (max 300). */
+	async prFiles(repo: string, number: number): Promise<PrFiles | null> {
+		const [owner, name] = repo.split("/");
+		const o = await this.installationFor(owner);
+		try {
+			const { data: pr } = await o.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", { owner, repo: name, pull_number: number });
+			const { data: cmp } = await o.request("GET /repos/{owner}/{repo}/compare/{basehead}", { owner, repo: name, basehead: `${pr.base.sha}...${pr.head.sha}`, per_page: 300 });
+			return {
+				base: cmp.merge_base_commit.sha,
+				head: pr.head.sha,
+				files: (cmp.files ?? []).map((f) => ({
+					path: f.filename, status: f.status, additions: f.additions, deletions: f.deletions,
+					...(f.previous_filename ? { previous: f.previous_filename } : {}),
+				})),
+			};
+		} catch (e) {
+			if ((e as { status?: number }).status === 404) return null;
+			throw e;
+		}
+	}
+
+	/** SPEC 15: one file's bytes at a commit; "too large" over 1 MB (the API sends no content then); null when not there. */
+	async fileAt(repo: string, ref: string, path: string): Promise<Buffer | "too large" | null> {
+		const [owner, name] = repo.split("/");
+		const o = await this.installationFor(owner);
+		try {
+			const { data } = await o.request("GET /repos/{owner}/{repo}/contents/{path}", { owner, repo: name, path, ref });
+			if (Array.isArray(data) || data.type !== "file") return null;
+			if (data.size > 1_000_000 || data.encoding !== "base64") return "too large";
+			return Buffer.from(data.content, "base64");
+		} catch (e) {
+			if ((e as { status?: number }).status === 404) return null;
+			throw e;
+		}
 	}
 
 	async issueContent(repo: string, number: number): Promise<ItemContent> {

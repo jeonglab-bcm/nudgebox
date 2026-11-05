@@ -17,6 +17,7 @@ import { buildInbox, isMine, reviewRequested, type Viewer } from "./inbox.ts";
 import { verifySignature } from "./webhook.ts";
 import type { Summarize } from "./llm.ts";
 import { issuePrompt, prPrompt, SUMMARY_FORMAT } from "./summary.ts";
+import type { Differ, DiffSide } from "./omnidiff.ts";
 
 export interface Config {
 	orgs: string[]; // accounts the GitHub App is installed on
@@ -54,6 +55,7 @@ export interface AppOptions {
 	now: () => Date;
 	log?: (msg: string) => void;
 	summarize?: Summarize; // SPEC 12: the lab LLM; absent -> no Summarize button
+	diff?: Differ; // SPEC 15: omnidiff; absent -> no diffs
 }
 
 export interface App {
@@ -75,6 +77,8 @@ const STATIC: Record<string, string> = {
 	"/icon.svg": "image/svg+xml",
 	"/icon-180.png": "image/png",
 	"/icon-512.png": "image/png",
+	"/vendor/marked-18.1.3.esm.js": "text/javascript", // SPEC 15: rendered Markdown (MIT)
+	"/vendor/purify-3.4.17.es.mjs": "text/javascript", // SPEC 15: cleans it (MPL-2.0 or Apache-2.0)
 	"/fonts/Inter-400-700.woff2": "font/woff2",
 	"/fonts/SpaceGrotesk-500-700.woff2": "font/woff2",
 	"/fonts/JetBrainsMono-400-600.woff2": "font/woff2",
@@ -412,6 +416,59 @@ export function createApp(opts: AppOptions): App {
 
 	/** SPEC 12: one click on Summarize. Kept per item version; one model call at a time per version. */
 	const summarizing = new Map<string, Promise<string>>();
+	// -- files and diffs (SPEC 15) -----------------------------------------------
+
+	const MAX_FILE = 1_000_000;
+	const diffs = new Map<string, Promise<unknown>>(); // kept diffs, newest last (the versions are commits, so they never change)
+
+	async function prFilesFor(lab: string, repo: string | null, number: number) {
+		const { repos } = await viewOf(linked(lab));
+		const pr = repo && Number.isInteger(number) ? store.pr(repo, number) : undefined;
+		if (!pr || !repos.has(pr.repo.toLowerCase())) throw new HttpError(404, "no such pull request");
+		const files = await github.prFiles(pr.repo, pr.number);
+		if (!files) throw new HttpError(404, "no such pull request");
+		return files;
+	}
+
+	type FileRef = { repo: string; ref: string; path: string };
+	const isRef = (x: unknown): x is FileRef => !!x && typeof x === "object" &&
+		["repo", "ref", "path"].every((k) => typeof (x as Record<string, unknown>)[k] === "string" && (x as Record<string, string>)[k] !== "");
+
+	async function diffFiles(req: IncomingMessage, lab: string) {
+		const differ = opts.diff;
+		if (!differ) throw new HttpError(503, "diffs are not set up");
+		const b = await json(req);
+		const sides = [b.before ?? null, b.after ?? null] as (FileRef | null)[];
+		if (!sides.some(Boolean) || !sides.every((s) => s === null || isRef(s))) throw new HttpError(400, "give before and/or after as {repo, ref, path}");
+		const { repos } = await viewOf(linked(lab));
+		if (!sides.every((s) => !s || repos.has(s.repo.toLowerCase()))) throw new HttpError(404, "not found");
+		const key = JSON.stringify(sides.map((s) => s && [s.repo.toLowerCase(), s.ref, s.path]));
+		let run = diffs.get(key);
+		if (!run) {
+			run = (async () => {
+				const got = await Promise.all(sides.map((s) => (s ? github.fileAt(s.repo, s.ref, s.path) : null)));
+				if (sides.some((s, i) => s && got[i] === null)) throw new HttpError(404, "file not found");
+				const view = (i: number) => (sides[i] ? { ...sides[i]!, text: null as string | null } : null);
+				const skipped = got.some((g) => g === "too large" || (g && g.length > MAX_FILE)) ? "too large"
+					: got.some((g) => g instanceof Buffer && g.subarray(0, 8000).includes(0)) ? "binary" : null;
+				if (skipped) return { before: view(0), after: view(1), skipped };
+				const text = got.map((g) => (g instanceof Buffer ? g.toString("utf8") : null));
+				const arg = (i: number): DiffSide | null => (sides[i] ? { path: sides[i]!.path, text: text[i]! } : null);
+				const result = await differ(arg(0), arg(1));
+				return { before: sides[0] && { ...sides[0], text: text[0] }, after: sides[1] && { ...sides[1], text: text[1] }, result };
+			})();
+			diffs.set(key, run);
+			run.catch(() => diffs.delete(key)); // a failure is not kept
+			if (diffs.size > 200) diffs.delete(diffs.keys().next().value!);
+		}
+		try {
+			return await run;
+		} catch (e) {
+			if (e instanceof HttpError) throw e;
+			throw new HttpError(502, `could not diff: ${(e as Error).message}`);
+		}
+	}
+
 	async function summarizeItem(req: IncomingMessage, lab: string) {
 		const llm = opts.summarize;
 		if (!llm) throw new HttpError(503, "AI summary is not set up");
@@ -532,6 +589,12 @@ export function createApp(opts: AppOptions): App {
 			store.deleteUser(lab);
 			access.delete(lab);
 			return send(res, 200, { ok: true });
+		}
+		if (method === "GET" && path === "/api/prs/files") {
+			return send(res, 200, await prFilesFor(lab, url.searchParams.get("repo"), Number(url.searchParams.get("number"))));
+		}
+		if (method === "POST" && path === "/api/diff") {
+			return send(res, 200, await diffFiles(req, lab));
 		}
 		if (method === "POST" && path === "/api/summarize") {
 			return send(res, 200, await summarizeItem(req, lab));

@@ -48,8 +48,6 @@ const REVIEW = { APPROVED: ["✓", "approved"], CHANGES_REQUESTED: ["✎", "chan
 const PR_TABS = [["needs_you", "Needs you"], ["waiting", "WIP"], ["ci_failing", "CI failing"], ["all", "All"]];
 // row tint by the section a PR sits in (SPEC 5), so "All" still shows what needs you
 const TONE = { needs_you: "you", ci_failing: "bad", waiting: "wait" };
-// mirrors readyToMerge in src/inbox.ts: only then is Merge the highlighted button
-const ready = (pr) => !pr.draft && pr.mergeable !== "CONFLICTING" && ["success", "none"].includes(pr.checks) && [null, "APPROVED"].includes(pr.reviewDecision);
 const byRepo = (xs) => (view.repo ? xs.filter((x) => x.repo === view.repo) : xs);
 const keyOf = (x) => `${x.repo}#${x.number}`;
 const stale = (x) => Date.now() - Date.parse(x.updatedAt) > (data.pr?.staleDays ?? 3) * 86400000;
@@ -129,6 +127,7 @@ const ACTIONS = {
 		if (b && b.trim()) await doAction(x, "comment", { body: b });
 	},
 	summarize: (x, k) => (data[k]?.summarize ? summarize(k, x) : "Summaries are not set up"),
+	files: (x, k) => (k !== "pr" ? "Files are for pull requests" : void (location.hash = `#files/${x.repo}/${x.number}`)),
 	hide: (x, k, hidden) => {
 		// hiding the selected row hands the selection to the next live row (or the one above)
 		const i = shown.findIndex((r) => r.key === view.sel);
@@ -139,7 +138,7 @@ const ACTIONS = {
 		return setHidden(k, x, !hidden);
 	},
 };
-const KEYS = { Enter: "open", o: "open", a: "approve", m: "merge", r: "rerun", c: "comment", s: "summarize", h: "hide" };
+const KEYS = { f: "files", Enter: "open", o: "open", a: "approve", m: "merge", r: "rerun", c: "comment", s: "summarize", h: "hide" };
 
 async function act(name, entry = selected()) {
 	if (!entry) return;
@@ -191,7 +190,6 @@ function issueLine(i) {
 
 function detail(entry) {
 	const { item: x, kind, hidden } = entry;
-	const mine = x.author.toLowerCase() === data.login.toLowerCase();
 	const facts = kind === "pr"
 		? [CHECKS[x.checks]?.[1], REVIEW[x.reviewDecision]?.[1], x.draft ? "draft" : null, x.mergeable === "CONFLICTING" ? "merge conflicts" : null, `updated ${age(x.updatedAt)} ago`]
 		: [x.assignees.length ? `assigned to ${x.assignees.join(", ")}` : "unassigned", x.comments ? `${x.comments} comments` : null, ...x.labels, `updated ${age(x.updatedAt)} ago`];
@@ -200,13 +198,11 @@ function detail(entry) {
 		el("div", { class: "facts" }, facts.filter(Boolean).join(" · ")),
 		summaryBox(kind, x),
 		el("div", { class: "actions" },
-			kind === "pr" && !mine ? btn("a", "Approve", "approve") : null,
-			kind === "pr" ? btn("m", "Merge", "merge", mine && ready(x) ? "primary" : "") : null,
+			// SPEC 13: Approve, Merge, Comment and Open are keys only (fewer buttons)
+			kind === "pr" ? btn("f", "Files", "files") : null,
 			kind === "pr" && x.checks === "failure" ? btn("r", "Re-run failed", "rerun") : null,
-			kind === "pr" ? btn("c", "Comment", "comment") : null,
 			data[kind]?.summarize ? btn("s", "Summarize", "summarize") : null,
-			btn("h", hidden ? "Unhide" : "Hide", "hide"),
-			el("a", { class: "btn", href: x.url, target: "_blank", rel: "noopener" }, el("kbd", {}, "↵"), "Open")));
+			btn("h", hidden ? "Unhide" : "Hide", "hide")));
 }
 
 function row(entry) {
@@ -251,6 +247,14 @@ function fold(id, title, entries) {
 }
 
 function render() {
+	renderPage();
+	renderTray();
+}
+
+function renderPage() {
+	if (onCompare()) return renderCompare();
+	if (onFiles()) return renderFiles();
+	document.body.classList.remove("files");
 	if (onSettings()) {
 		if (devices === null) loadDevices();
 		return renderSettings();
@@ -304,6 +308,10 @@ document.addEventListener("keydown", (e) => {
 	const t = e.target;
 	if (t.closest?.("input, textarea, select, [contenteditable]")) {
 		if (e.key === "Escape") t.blur();
+		return;
+	}
+	if (onFiles() || onCompare()) { // SPEC 15
+		if (e.key === "Escape") goBack();
 		return;
 	}
 	if (onSettings()) { // SPEC 14: list keys do nothing here
@@ -581,6 +589,281 @@ function openSettings(part) {
 	renderSettings.scrollTo = part ?? null;
 	if (!onSettings()) location.hash = "#settings"; // hashchange renders it
 	else renderSettings();
+}
+
+// -- files and diffs (SPEC 15) --------------------------------------------------------
+const onFiles = () => location.hash.startsWith("#files/");
+let files = { key: null, data: null, error: null, open: new Set(), diffs: new Map(), mdMode: new Map() };
+const STATUS = { added: "A", removed: "D", modified: "M", renamed: "R", copied: "C", changed: "M", unchanged: "·" };
+const NOTE = {
+	whitespace_only: "Only whitespace changed.", comment_only: "Only comments changed.", refactor_moved_only: "Only moved code: nothing else changed.",
+	new_file: "New file.", deleted_file: "Deleted file.", no_changes: "No changes.",
+};
+
+function filesTarget() {
+	const m = location.hash.match(/^#files\/([^/]+\/[^/]+)\/(\d+)$/);
+	return m && { repo: decodeURIComponent(m[1]), number: Number(m[2]) };
+}
+
+async function loadFiles(key, t) {
+	const { status, data: d } = await api(`/api/prs/files?repo=${encodeURIComponent(t.repo)}&number=${t.number}`);
+	if (files.key !== key) return;
+	if (status === 200) files.data = d;
+	else files.error = d.error || `Could not load the files (${status})`;
+	render();
+}
+
+async function loadDiff(f) {
+	const { repo } = filesTarget();
+	const d = files.data;
+	const before = f.status === "added" ? null : { repo, ref: d.base, path: f.previous ?? f.path };
+	const after = f.status === "removed" ? null : { repo, ref: d.head, path: f.path };
+	const { status, data: r } = await api("/api/diff", { before, after });
+	files.diffs.set(f.path, status === 200 ? r : { error: r.error || `Could not diff (${status})` });
+	render();
+}
+
+// one side of a diff: changed lines with 3 lines of context, the rest folded
+function pane(side, ref, text, hunks, label) {
+	const lines = text.split("\n");
+	if (text.endsWith("\n")) lines.pop();
+	const marks = lines.map(() => []);
+	for (const h of hunks) {
+		for (let row = h.from.row; row <= Math.min(h.to.row, lines.length - 1); row++) {
+			const start = row === h.from.row ? h.from.col : 0;
+			const end = row === h.to.row ? h.to.col : lines[row].length;
+			if (row === h.to.row && row !== h.from.row && end === 0) continue; // a range that ends at the start of a row
+			const title = h.op === "move" && h.target
+				? side === "before" ? `moved to line ${h.target.from.row + 1}` : `moved from line ${h.target.from.row + 1}`
+				: { insert: "added", delete: "removed", update: "changed" }[h.op];
+			marks[row].push({ start, end: Math.max(end, start), op: h.op, title });
+		}
+	}
+	const show = lines.map(() => false);
+	marks.forEach((m, row) => {
+		if (m.length) for (let r = Math.max(0, row - 3); r <= Math.min(lines.length - 1, row + 3); r++) show[r] = true;
+	});
+	const out = [];
+	let hidden = 0;
+	const fold = () => {
+		if (hidden) out.push(el("div", { class: "fold" }, `${hidden} unchanged line${hidden > 1 ? "s" : ""}`));
+		hidden = 0;
+	};
+	lines.forEach((line, row) => {
+		if (!show[row]) return void hidden++;
+		fold();
+		const parts = [];
+		let at = 0;
+		for (const m of marks[row].sort((a, b) => a.start - b.start)) {
+			if (m.start < at) continue; // overlapping ranges: keep the first
+			if (m.start > at) parts.push(line.slice(at, m.start));
+			parts.push(el("span", { class: `m-${m.op}`, title: m.title }, line.slice(m.start, m.end)));
+			at = m.end;
+		}
+		if (at < line.length) parts.push(line.slice(at));
+		out.push(el("div", { class: `code-line${marks[row].length ? " changed" : ""}` }, el("span", { class: "ln" }, row + 1), el("span", { class: "code" }, parts)));
+	});
+	fold();
+	return el("section", { class: `pane ${side}` },
+		el("h4", {}, label ?? (side === "before" ? "Before" : "After"), el("span", { class: "sha" }, ref.slice(0, 7))),
+		el("div", { class: "lines" }, out));
+}
+
+// SPEC 15: Markdown files render; the libraries load only when one is opened
+let mdLib = null;
+function loadMd() {
+	mdLib ??= Promise.all([import("/vendor/marked-18.1.3.esm.js"), import("/vendor/purify-3.4.17.es.mjs")]).then(([m, p]) => {
+		const purify = p.default;
+		purify.addHook("afterSanitizeAttributes", (n) => {
+			if (n.tagName === "A") n.setAttribute("target", "_blank"), n.setAttribute("rel", "noopener noreferrer");
+		});
+		mdLib.ready = { marked: m.marked, purify };
+		render();
+	});
+	return mdLib.ready;
+}
+const isMd = (path) => /\.(md|markdown)$/i.test(path);
+
+// one side, rendered: top-level blocks, each marked if a change touches its lines
+function mdPane(side, ref, text, hunks, lib, label) {
+	const tokens = lib.marked.lexer(text);
+	const blocks = [];
+	let row = 0;
+	const lines = (s) => (s.match(/\n/g) || []).length;
+	for (const tk of tokens) {
+		const start = row;
+		row += lines(tk.raw);
+		if (tk.type === "space") continue;
+		if (tk.type !== "list") {
+			blocks.push({ tk, start, end: start + lines(tk.raw.replace(/\n+$/, "")) });
+			continue;
+		}
+		// a list is one block per item, so a change marks only its item
+		let at = start;
+		tk.items.forEach((item, i) => {
+			const one = { ...tk, raw: item.raw, items: [item], start: tk.ordered ? (tk.start || 1) + i : "" };
+			blocks.push({ tk: one, start: at, end: at + lines(item.raw.replace(/\n+$/, "")), item: true });
+			at += lines(item.raw);
+		});
+	}
+	for (const b of blocks) {
+		const hit = hunks.filter((h) => h.from.row <= b.end && h.to.row >= b.start && !(h.to.row === b.start && h.to.col === 0 && h.from.row < b.start));
+		b.kind = !hit.length ? null : hit.every((h) => h.op === "move") ? "moved"
+			: hit.some((h) => h.op === "update") ? "updated" : side === "before" ? "removed" : "added";
+	}
+	const any = blocks.some((b) => b.kind);
+	const show = blocks.map((b, i) => !any || [i - 1, i, i + 1].some((j) => blocks[j]?.kind));
+	const out = [];
+	let hidden = 0;
+	const fold = () => {
+		if (hidden) out.push(el("div", { class: "fold" }, `${hidden} unchanged block${hidden > 1 ? "s" : ""}`));
+		hidden = 0;
+	};
+	blocks.forEach((b, i) => {
+		if (!show[i]) return void hidden++;
+		fold();
+		const div = el("div", { class: `md-block${b.item ? " md-item" : ""}${b.kind ? ` changed md-${b.kind}` : ""}`, title: b.kind ?? null });
+		div.innerHTML = lib.purify.sanitize(lib.marked.parser(Object.assign([b.tk], { links: tokens.links }))); // cleaned: no scripts or handlers
+		out.push(div);
+	});
+	fold();
+	return el("section", { class: `md-pane ${side}` },
+		el("h4", {}, label ?? (side === "before" ? "Before" : "After"), el("span", { class: "sha" }, ref.slice(0, 7))),
+		el("div", { class: "md-body" }, out));
+}
+
+// `github`: where to see it instead; `modes`: rendered/plain per path; `labels`: pane titles
+function diffView(f, r, github, modes = files.mdMode, labels = {}) {
+	if (!r) return el("div", { class: "diff" }, el("p", { class: "pending" }, "Diffing…"));
+	if (r.error) return el("div", { class: "diff" }, el("p", { class: "note" }, r.error));
+	const link = el("a", { href: github, target: "_blank", rel: "noopener" }, "See it on GitHub");
+	if (r.skipped) return el("div", { class: "diff" }, el("p", { class: "note" }, r.skipped === "binary" ? "Binary file: not diffed. " : "Over 1 MB: not diffed. ", link));
+	const note = NOTE[r.result.summary];
+	const md = isMd(f.path);
+	const rendered = md && modes.get(f.path) !== "plain";
+	const lib = rendered ? loadMd() : null;
+	const choose = (mode) => (e) => { e.stopPropagation(); modes.set(f.path, mode); render(); };
+	const side = (name) => r[name] && (rendered
+		? mdPane(name, r[name].ref, r[name].text, r.result[name].hunks, lib, labels[name])
+		: pane(name, r[name].ref, r[name].text, r.result[name].hunks, labels[name]));
+	return el("div", { class: "diff" },
+		md ? el("div", { class: "md-switch seg", role: "group", "aria-label": "Show" },
+			el("button", { "aria-pressed": String(rendered), class: rendered ? "on" : "", onclick: choose("rendered") }, "Rendered"),
+			el("button", { "aria-pressed": String(!rendered), class: rendered ? "" : "on", onclick: choose("plain") }, "Plain diff")) : null,
+		note ? el("p", { class: "note" }, note) : null,
+		rendered && !lib ? el("p", { class: "pending" }, "Rendering…")
+			: el("div", { class: "panes" }, side("before"), side("after")));
+}
+
+function renderFiles() {
+	document.body.classList.add("files");
+	document.body.classList.remove("settings");
+	$("#tabs").hidden = true;
+	const t = filesTarget();
+	if (!t) return goBack();
+	const key = `${t.repo}#${t.number}`;
+	if (files.key !== key) {
+		files = { key, data: null, error: null, open: new Set(), diffs: new Map(), mdMode: new Map() };
+		loadFiles(key, t);
+	}
+	const pr = data.pr && [...data.pr.sections.flatMap((s) => s.prs), ...data.pr.old, ...data.pr.hidden].find((p) => p.repo === t.repo && p.number === t.number);
+	const prUrl = pr?.url ?? `https://github.com/${t.repo}/pull/${t.number}`;
+	const list = files.data ? el("ul", { class: "files" }, files.data.files.flatMap((f) => {
+		const isOpen = files.open.has(f.path);
+		const row = el("li", { class: `file${isOpen ? " open" : ""}`, role: "button", tabindex: "0", "aria-expanded": String(isOpen) },
+			el("span", { class: `status s-${f.status}`, title: f.status }, STATUS[f.status] ?? "?"),
+			el("span", { class: "path", title: f.previous ? `renamed from ${f.previous}` : null }, f.path),
+			el("span", { class: "counts" }, el("span", { class: "add" }, `+${f.additions}`), " ", el("span", { class: "del" }, `−${f.deletions}`)),
+			pickButton(pickOf(t, f, files.data)));
+		const toggle = () => {
+			if (isOpen) files.open.delete(f.path);
+			else {
+				files.open.add(f.path);
+				if (!files.diffs.has(f.path)) { files.diffs.set(f.path, null); loadDiff(f); }
+			}
+			render();
+		};
+		row.addEventListener("click", toggle);
+		row.addEventListener("keydown", (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle()));
+		return [row, isOpen ? el("li", { class: "file-diff" }, diffView(f, files.diffs.get(f.path), `${prUrl}/files`)) : null];
+	})) : el("p", { class: "hint" }, files.error ?? "Loading the files…");
+	main.replaceChildren(el("div", { id: "files-page" },
+		el("div", { class: "set-head" }, el("button", { id: "back", class: "quiet", onclick: goBack }, "← Back"),
+			el("h2", {}, `${t.repo.split("/")[1]}#${t.number}`)),
+		pr ? el("p", { class: "pr-title" }, el("a", { href: prUrl, target: "_blank", rel: "noopener" }, pr.title)) : null,
+		files.data ? el("p", { class: "hint" }, `${files.data.files.length} changed file${files.data.files.length === 1 ? "" : "s"}, compared with where the branch left its base.`) : null,
+		list));
+}
+
+// -- compare two files (SPEC 15) -----------------------------------------------------
+// picks: at most two files, kept in this tab while moving around
+const onCompare = () => location.hash === "#compare";
+let picks = (() => { try { return JSON.parse(sessionStorage.getItem("ghd-picks") || "[]"); } catch { return []; } })();
+const savePicks = () => { try { sessionStorage.setItem("ghd-picks", JSON.stringify(picks)); } catch {} };
+const pickKey = (p) => `${p.repo}@${p.ref}:${p.path}`;
+const pickLabel = (p) => `${p.repo.split("/")[1]}#${p.number} ${p.path}`;
+
+// the version a PR has now; a removed file at its last version
+const pickOf = (t, f, d) => ({ repo: t.repo, number: t.number, path: f.path, ref: f.status === "removed" ? d.base : d.head });
+
+function togglePick(p) {
+	const i = picks.findIndex((x) => pickKey(x) === pickKey(p));
+	if (i >= 0) picks.splice(i, 1);
+	else {
+		picks.push(p);
+		if (picks.length > 2) picks.shift(); // a third pick replaces the oldest
+	}
+	savePicks();
+	render();
+}
+
+function pickButton(p) {
+	const on = picks.some((x) => pickKey(x) === pickKey(p));
+	return el("button", { class: `pick quiet${on ? " on" : ""}`, "aria-pressed": String(on), title: "Pick this file to compare it with another",
+		onclick: (e) => { e.stopPropagation(); togglePick(p); } }, on ? "Picked" : "Pick");
+}
+
+function renderTray() {
+	let tray = $("#tray");
+	if (!tray) document.body.append((tray = el("div", { id: "tray", role: "region", "aria-label": "Files to compare" })));
+	const show = picks.length > 0 && !onCompare();
+	tray.hidden = !show;
+	document.body.classList.toggle("has-tray", show);
+	if (!show) return;
+	tray.replaceChildren(el("span", { class: "label" }, "Compare"),
+		...picks.map((p) => el("span", { class: "picked" }, pickLabel(p),
+			el("button", { class: "quiet", "aria-label": `Drop ${p.path}`, onclick: () => togglePick(p) }, "×"))),
+		el("button", { class: "compare primary", disabled: picks.length < 2, onclick: () => (location.hash = "#compare") }, "Compare"));
+}
+
+let cmp = { key: null, result: null, modes: new Map() };
+
+async function loadCompare(key, a, b) {
+	const { status, data: r } = await api("/api/diff", { before: { repo: a.repo, ref: a.ref, path: a.path }, after: { repo: b.repo, ref: b.ref, path: b.path } });
+	if (cmp.key !== key) return;
+	cmp.result = status === 200 ? r : { error: r.error || `Could not compare (${status})` };
+	render();
+}
+
+function renderCompare() {
+	document.body.classList.add("files");
+	document.body.classList.remove("settings");
+	$("#tabs").hidden = true;
+	const head = el("div", { class: "set-head" }, el("button", { id: "back", class: "quiet", onclick: () => history.back() }, "← Back"), el("h2", {}, "Compare"));
+	if (picks.length < 2) {
+		main.replaceChildren(el("div", { id: "compare-page" }, head, el("p", { class: "hint" }, "Pick two files in a PR's Files view first (Pick on each file).")));
+		return;
+	}
+	const [a, b] = picks;
+	const key = JSON.stringify([pickKey(a), pickKey(b)]);
+	if (cmp.key !== key) {
+		cmp = { key, result: null, modes: cmp.modes };
+		loadCompare(key, a, b);
+	}
+	main.replaceChildren(el("div", { id: "compare-page" }, head,
+		el("p", { class: "compare-what" }, el("span", {}, pickLabel(a)), el("span", { class: "arrow" }, " → "), el("span", {}, pickLabel(b)),
+			el("button", { class: "quiet", onclick: () => { picks = [b, a]; savePicks(); render(); } }, "Swap")),
+		diffView({ path: b.path }, cmp.result, `https://github.com/${b.repo}/blob/${b.ref}/${b.path}`, cmp.modes, { before: pickLabel(a), after: pickLabel(b) })));
 }
 
 window.addEventListener("hashchange", () => render());

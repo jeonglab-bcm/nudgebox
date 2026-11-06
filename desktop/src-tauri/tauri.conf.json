@@ -1,0 +1,22 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Nudgebox",
+  "version": "0.1.0",
+  "identifier": "com.bioinfolder.nudgebox",
+  "build": { "frontendDist": "../dist" },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [],
+    "trayIcon": { "id": "main", "iconPath": "icons/32x32.png", "tooltip": "Nudgebox" },
+    "security": { "csp": null }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg", "appimage", "deb"],
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "category": "DeveloperTool",
+    "shortDescription": "The lab's GitHub inbox, with notifications",
+    "longDescription": "Nudgebox (gh.bioinfolder.com) in its own window, with native notifications for review requests, CI results and issues.",
+    "macOS": { "signingIdentity": "-", "minimumSystemVersion": "11.0" }
+  }
+}

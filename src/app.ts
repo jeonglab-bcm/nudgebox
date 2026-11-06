@@ -195,9 +195,39 @@ export function createApp(opts: AppOptions): App {
 	// Logged per device by push service only: the endpoint itself is a secret address.
 	async function notify(lab: string, payload: PushPayload, pushOpts: PushOptions = {}) {
 		const devices = store.devices(lab);
-		if (!devices.length) return;
+		const apps = [...streams.values()].filter((a) => a.lab === lab);
+		if (!devices.length && !apps.length) return;
 		const badge = store.bumpUnread(lab);
+		for (const a of apps) a.emit("notify", { ...payload, badge }); // SPEC 18: open desktop apps
 		for (const d of devices) await pushTo(lab, d, { ...payload, badge }, pushOpts);
+	}
+
+	// -- desktop app live stream (SPEC 18) -----------------------------------------
+	// Each open Nudgebox desktop app holds one GET /api/events; client id -> its stream.
+	const streams = new Map<string, { lab: string; emit: (event: string, data: unknown) => void; end: () => void }>();
+	const HEARTBEAT_MS = 25_000; // under nginx's and oauth2-proxy's idle timeouts
+
+	function openStream(req: IncomingMessage, res: ServerResponse, lab: string) {
+		res.writeHead(200, {
+			"content-type": "text/event-stream", "cache-control": "no-store", "x-content-type-options": "nosniff",
+			"x-accel-buffering": "no",
+		});
+		const client = randomBytes(12).toString("base64url");
+		const emit = (event: string, data: unknown) => {
+			if (!res.writableEnded) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+		};
+		const beat = setInterval(() => res.writableEnded || res.write(": ping\n\n"), HEARTBEAT_MS);
+		beat.unref?.();
+		const end = () => {
+			clearInterval(beat);
+			streams.delete(client);
+			if (!res.writableEnded) res.end();
+		};
+		streams.set(client, { lab, emit, end });
+		req.on("close", end);
+		res.on("close", end);
+		res.write("retry: 5000\n\n");
+		emit("hello", { client });
 	}
 
 	/** One push to one device; true if the push service took it. */
@@ -913,6 +943,19 @@ export function createApp(opts: AppOptions): App {
 			if (!ok) throw new HttpError(502, "the push service did not take it; turn notifications off and on again");
 			return send(res, 200, { ok: true, id });
 		}
+		if (method === "GET" && path === "/api/events") {
+			return openStream(req, res, lab);
+		}
+		if (method === "POST" && path === "/api/events/test") {
+			// SPEC 14 + 18: Send a test, to this desktop app only; not counted as unread
+			const b = await json(req);
+			const a = typeof b.client === "string" ? streams.get(b.client) : undefined;
+			if (!a || a.lab !== lab) throw new HttpError(404, "not one of your apps");
+			const id = randomBytes(6).toString("base64url");
+			a.emit("notify", { title: "Nudgebox test", body: "Notifications work in this app.", url: "/#settings", test: id });
+			log(`event stream for ${lab}: sent "Nudgebox test"`);
+			return send(res, 200, { ok: true, id });
+		}
 		if (method === "POST" && path === "/api/push/seen") {
 			store.resetUnread(lab); // SPEC 7: Nudgebox was opened
 			return send(res, 200, { ok: true });
@@ -977,6 +1020,7 @@ export function createApp(opts: AppOptions): App {
 			} while (seen !== work);
 		},
 		close: async () => {
+			for (const a of [...streams.values()]) a.end();
 			await work;
 			store.close();
 		},

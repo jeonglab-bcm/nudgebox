@@ -185,3 +185,23 @@ marked with the coral dot.
 change, then corrected it to per file). The server reads both file versions itself and
 sends only the changed runs with 3 lines around them, so a large file still fits and the
 page cannot put text in front of the model.
+
+## 2026-11-06: Desktop app, and the rename to Nudgebox
+
+Web push in Chrome on Dr. Jeong's Mac reached the browser and Chrome reported the
+notification shown, but macOS never showed it. Rather than chase each browser's
+notification settings, he asked for a standalone app for Mac and Linux, built with
+Tauri. Tauri uses the system's WebKit view, which cannot receive web push at all, so
+the app gets its notifications over a **live stream** (`/api/events`, Server-Sent
+Events) from the server and shows them itself. He chose the stream with a menu-bar/tray
+app that keeps running when its window is closed, over a plain window (notifications
+would stop when it closed). Trade-off: no notifications while the app is not running;
+web push to the iPhone covers that.
+
+The app opens the real site rather than bundling the page, so the lab sign-in, the
+page and its updates stay in one place. Releases are built by GitHub Actions (a Mac
+build needs a Mac), unsigned for now: no Apple Developer ID yet.
+
+The repository, package and deployment are renamed from gh-dashboard to **nudgebox**,
+the product's name. The address stays gh.bioinfolder.com. The `ghd-*` keys in the
+browser's storage keep their names so nobody loses their saved theme and view.

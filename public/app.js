@@ -127,6 +127,34 @@ function paint(kind, item) {
 	});
 }
 
+// SPEC 12, 17: a model's answer as server-sent events: stage, text pieces ("message"),
+// then done or error. A refusal before the stream starts comes back as JSON.
+async function streamPost(path, body, onEvent) {
+	const r = await fetch(path, {
+		method: "POST", headers: { "content-type": "application/json", accept: "text/event-stream" }, body: JSON.stringify(body),
+	});
+	if (!(r.headers.get("content-type") ?? "").includes("text/event-stream")) {
+		const d = await r.json().catch(() => ({}));
+		throw new Error(d.error || `Failed (${r.status})`);
+	}
+	const reader = r.body.pipeThrough(new TextDecoderStream()).getReader();
+	let buf = "";
+	for (let done = false; !done;) {
+		const chunk = await reader.read();
+		done = chunk.done;
+		buf += chunk.value ?? "";
+		let end;
+		while ((end = buf.indexOf("\n\n")) >= 0) {
+			const block = buf.slice(0, end);
+			buf = buf.slice(end + 2);
+			const event = block.match(/^event: (.+)$/m)?.[1] ?? "message";
+			const data = JSON.parse(block.match(/^data: (.+)$/m)?.[1] ?? "null");
+			if (event === "error") throw new Error(data.error);
+			onEvent(event, data);
+		}
+	}
+}
+
 // SPEC 12: the summary as server-sent events: stage, text pieces, then done or error
 async function summarize(kind, item) {
 	const k = `${kind}:${keyOf(item)}`;
@@ -136,33 +164,12 @@ async function summarize(kind, item) {
 	view.expanded = true;
 	render();
 	try {
-		const r = await fetch("/api/summarize", {
-			method: "POST", headers: { "content-type": "application/json", accept: "text/event-stream" },
-			body: JSON.stringify({ kind, repo: item.repo, number: item.number }),
+		await streamPost("/api/summarize", { kind, repo: item.repo, number: item.number }, (event, data) => {
+			if (event === "stage") streaming.set(k, data.stage);
+			else if (event === "message") summaries.set(k, summaries.get(k) + data.delta);
+			else if (event === "done") summaries.set(k, data.summary), streaming.delete(k);
+			paint(kind, item);
 		});
-		if (!(r.headers.get("content-type") ?? "").includes("text/event-stream")) {
-			const d = await r.json().catch(() => ({}));
-			throw new Error(d.error || `Summary failed (${r.status})`);
-		}
-		const reader = r.body.pipeThrough(new TextDecoderStream()).getReader();
-		let buf = "";
-		for (let done = false; !done;) {
-			const chunk = await reader.read();
-			done = chunk.done;
-			buf += chunk.value ?? "";
-			let end;
-			while ((end = buf.indexOf("\n\n")) >= 0) {
-				const block = buf.slice(0, end);
-				buf = buf.slice(end + 2);
-				const event = block.match(/^event: (.+)$/m)?.[1] ?? "message";
-				const data = JSON.parse(block.match(/^data: (.+)$/m)?.[1] ?? "null");
-				if (event === "stage") streaming.set(k, data.stage);
-				else if (event === "message") summaries.set(k, summaries.get(k) + data.delta);
-				else if (event === "done") summaries.set(k, data.summary), streaming.delete(k);
-				else if (event === "error") throw new Error(data.error);
-				paint(kind, item);
-			}
-		}
 		if (streaming.has(k)) throw new Error("The summary stopped before the end; try again");
 	} catch (e) {
 		summaries.delete(k);
@@ -704,7 +711,8 @@ const inRanges = (ranges, n) => (ranges ?? []).some(([a, b]) => n >= a && n <= b
 
 // one side of a diff: changed lines with 3 lines of context, the rest folded. `review`
 // (SPEC 16): + on lines GitHub takes a comment on, threads under their line, the open form
-function pane(side, ref, text, hunks, label, review) {
+// a file's lines and, per line, the parts omnidiff marks (op, columns, a title)
+function markLines(side, text, hunks) {
 	const lines = text.split("\n");
 	if (text.endsWith("\n")) lines.pop();
 	const marks = lines.map(() => []);
@@ -719,6 +727,33 @@ function pane(side, ref, text, hunks, label, review) {
 			marks[row].push({ start, end: Math.max(end, start), op: h.op, title });
 		}
 	}
+	return { lines, marks };
+}
+
+// one line's code with omnidiff's marks as spans
+function codeParts(line, marks) {
+	const parts = [];
+	let at = 0;
+	for (const m of [...marks].sort((a, b) => a.start - b.start)) {
+		if (m.start < at) continue; // overlapping ranges: keep the first
+		if (m.start > at) parts.push(line.slice(at, m.start));
+		parts.push(el("span", { class: `m-${m.op}`, title: m.title }, line.slice(m.start, m.end)));
+		at = m.end;
+	}
+	if (at < line.length) parts.push(line.slice(at));
+	return parts;
+}
+
+// a line number; where GitHub takes a comment, tapping it opens the comment box (SPEC 16)
+function lineNo(n, sideKey, review) {
+	const can = review && inRanges(review.commentable?.[sideKey === "LEFT" ? "left" : "right"], n);
+	if (!can) return el("span", { class: "ln" }, n);
+	return el("span", { class: "ln can-comment", role: "button", tabindex: "-1", title: "Comment on this line",
+		onclick: (e) => { e.stopPropagation(); review.onAdd(sideKey, n); } }, n);
+}
+
+function pane(side, ref, text, hunks, label, review) {
+	const { lines, marks } = markLines(side, text, hunks);
 	const show = lines.map(() => false);
 	marks.forEach((m, row) => {
 		if (m.length) for (let r = Math.max(0, row - 3); r <= Math.min(lines.length - 1, row + 3); r++) show[r] = true;
@@ -741,20 +776,12 @@ function pane(side, ref, text, hunks, label, review) {
 	lines.forEach((line, row) => {
 		if (!show[row]) return void hidden++;
 		fold();
-		const parts = [];
-		let at = 0;
-		for (const m of marks[row].sort((a, b) => a.start - b.start)) {
-			if (m.start < at) continue; // overlapping ranges: keep the first
-			if (m.start > at) parts.push(line.slice(at, m.start));
-			parts.push(el("span", { class: `m-${m.op}`, title: m.title }, line.slice(m.start, m.end)));
-			at = m.end;
-		}
-		if (at < line.length) parts.push(line.slice(at));
+		const parts = codeParts(line, marks[row]);
 		const n = row + 1;
 		const add = review && inRanges(review.commentable?.[sideKey === "LEFT" ? "left" : "right"], n)
 			? el("button", { class: "add-comment", "aria-label": `Comment on line ${n}`, title: "Comment on this line",
 				onclick: (e) => { e.stopPropagation(); review.onAdd(sideKey, n); } }, "+") : null;
-		out.push(el("div", { class: `code-line${marks[row].length ? " changed" : ""}` }, add, el("span", { class: "ln" }, n), el("span", { class: "code" }, parts)));
+		out.push(el("div", { class: `code-line${marks[row].length ? " changed" : ""}` }, add, lineNo(n, sideKey, review), el("span", { class: "code" }, parts)));
 		for (const th of threadsAt.get(n) ?? []) out.push(threadView(th, "files"));
 		if (form && form.line === n) out.push(commentForm(form));
 	});
@@ -828,7 +855,48 @@ function mdPane(side, ref, text, hunks, lib, label) {
 }
 
 // `github`: where to see it instead; `modes`: rendered/plain per path; `labels`: pane titles
-function diffView(f, r, github, modes = files.mdMode, labels = {}, review = null) {
+// -- Explain a file's diff (SPEC 17) -----------------------------------------------
+const explained = new Map(); // diff key -> text so far
+const explaining = new Map(); // diff key -> "reading" | "writing" while the model works
+const sideRef = (x) => x && { repo: x.repo, ref: x.ref, path: x.path };
+const diffKey = (r) => JSON.stringify([sideRef(r.before), sideRef(r.after)]);
+let explainFrame = 0;
+const repaint = () => { explainFrame ||= requestAnimationFrame(() => { explainFrame = 0; render(); }); };
+
+async function explain(r, pr) {
+	const k = diffKey(r);
+	if (explaining.has(k)) return;
+	explaining.set(k, "reading");
+	explained.set(k, "");
+	render();
+	try {
+		await streamPost("/api/explain", { before: sideRef(r.before), after: sideRef(r.after), ...(pr ? { pr } : {}) }, (event, data) => {
+			if (event === "stage") explaining.set(k, data.stage);
+			else if (event === "message") explained.set(k, explained.get(k) + data.delta);
+			else if (event === "done") explained.set(k, data.explanation), explaining.delete(k);
+			repaint();
+		});
+		if (explaining.has(k)) throw new Error("The explanation stopped before the end; try again");
+	} catch (e) {
+		explained.delete(k);
+		toast(e.message);
+	} finally {
+		explaining.delete(k);
+		render();
+	}
+}
+
+function explainBox(r) {
+	const k = diffKey(r);
+	const text = explained.get(k);
+	const stage = explaining.get(k);
+	if (!text && !stage) return null;
+	const live = stage ? " streaming" : "";
+	return el("div", { class: `explain${live}`, role: "status" },
+		text ? el("p", {}, inline(text)) : el("p", { class: "pending" }, stage === "reading" ? "Reading the changes…" : "Writing…"));
+}
+
+function diffView(f, r, github, modes = files.mdMode, labels = {}, review = null, pr = null) {
 	if (!r) return el("div", { class: "diff" }, el("p", { class: "pending" }, "Diffing…"));
 	if (r.error) return el("div", { class: "diff" }, el("p", { class: "note" }, r.error));
 	const link = el("a", { href: github, target: "_blank", rel: "noopener" }, "See it on GitHub");
@@ -842,14 +910,83 @@ function diffView(f, r, github, modes = files.mdMode, labels = {}, review = null
 	const side = (name) => r[name] && (rendered
 		? mdPane(name, r[name].ref, r[name].text, r.result[name].hunks, lib, labels[name])
 		: pane(name, r[name].ref, r[name].text, r.result[name].hunks, labels[name], review));
+	const canExplain = Boolean(data.pr?.summarize);
 	return el("div", { class: "diff" },
-		md ? el("div", { class: "md-switch seg", role: "group", "aria-label": "Show" },
-			el("button", { "aria-pressed": String(rendered), class: rendered ? "on" : "", onclick: choose("rendered") }, "Rendered"),
-			el("button", { "aria-pressed": String(!rendered), class: rendered ? "" : "on", onclick: choose("plain") }, "Plain diff")) : null,
+		md || canExplain ? el("div", { class: "diff-tools" },
+			md ? el("div", { class: "md-switch seg", role: "group", "aria-label": "Show" },
+				el("button", { "aria-pressed": String(rendered), class: rendered ? "on" : "", onclick: choose("rendered") }, "Rendered"),
+				el("button", { "aria-pressed": String(!rendered), class: rendered ? "" : "on", onclick: choose("plain") }, "Plain diff")) : null,
+			canExplain ? el("button", { class: "explain-btn", disabled: explaining.has(diffKey(r)), title: "Explain this file's changes (AI)",
+				onclick: (e) => { e.stopPropagation(); explain(r, pr); } }, el("span", { class: "spark", "aria-hidden": "true" }, "✦"), "Explain") : null) : null,
+		explainBox(r),
 		note ? el("p", { class: "note" }, note) : null,
 		rendered && review && (review.threads.length || review.commentable) ? el("p", { class: "note" }, "Line comments are on the Plain diff.") : null,
 		rendered && !lib ? el("p", { class: "pending" }, "Rendering…")
+			: !rendered && phone() ? unifiedView(r, labels, review)
 			: el("div", { class: "panes" }, side("before"), side("after")));
+}
+
+// -- the diff on a phone (SPEC 15): one unified column ----------------------------------
+const phone = () => matchMedia("(max-width: 720px)").matches;
+
+// before and after as one sequence: unchanged lines once, then each run of removed
+// lines followed by the added lines that replace them
+function unify(a, b) {
+	const rows = [];
+	let i = 0, j = 0;
+	const chA = (k) => a.marks[k].length > 0, chB = (k) => b.marks[k].length > 0;
+	while (i < a.lines.length || j < b.lines.length) {
+		if (i < a.lines.length && chA(i)) rows.push({ t: "del", i: i++ });
+		else if (j < b.lines.length && chB(j)) rows.push({ t: "add", j: j++ });
+		else if (i < a.lines.length && j < b.lines.length) {
+			if (a.lines[i] === b.lines[j]) rows.push({ t: "ctx", i: i++, j: j++ });
+			else rows.push({ t: "del", i: i++ }, { t: "add", j: j++ });
+		} else if (i < a.lines.length) rows.push({ t: "del", i: i++ });
+		else rows.push({ t: "add", j: j++ });
+	}
+	return rows;
+}
+
+function uLine(row, a, b, review) {
+	const old = row.i !== undefined ? row.i + 1 : null, now = row.j !== undefined ? row.j + 1 : null;
+	const del = row.t === "del";
+	const k = del ? row.i : row.j;
+	const [lines, marks] = del ? [a.lines, a.marks] : [b.lines, b.marks];
+	return el("div", { class: `u-line u-${row.t}` },
+		del ? lineNo(old, "LEFT", review) : el("span", { class: "ln old" }, old ?? ""),
+		del ? el("span", { class: "ln new" }) : lineNo(now, "RIGHT", review),
+		el("span", { class: "sign", "aria-hidden": "true" }, { del: "−", add: "+", ctx: "" }[row.t]),
+		el("span", { class: "code" }, codeParts(lines[k], marks[k])));
+}
+
+function uExtras(row, review) {
+	const out = [];
+	const at = (side, n) => (review?.threads ?? []).filter((th) => th.side === side && th.line === n);
+	if (row.t === "del") out.push(...at("LEFT", row.i + 1).map((th) => threadView(th, "files")));
+	else out.push(...at("RIGHT", row.j + 1).map((th) => threadView(th, "files")));
+	const f = review?.form;
+	if (f?.subject === "line" && f.path === review.path && ((f.side === "LEFT" && row.t === "del" && f.line === row.i + 1) || (f.side === "RIGHT" && row.t !== "del" && f.line === row.j + 1))) out.push(commentForm(f));
+	return out;
+}
+
+function unifiedView(r, labels, review) {
+	const side = (name) => (r[name] ? markLines(name, r[name].text, r.result[name].hunks) : { lines: [], marks: [] });
+	const a = side("before"), b = side("after");
+	const rows = unify(a, b);
+	const changed = rows.map((x) => x.t !== "ctx");
+	const near = (k) => changed.slice(Math.max(0, k - 3), k + 4).some(Boolean);
+	const show = rows.map((x, k) => near(k) || uExtras(x, review).length > 0);
+	const out = [];
+	let hidden = 0;
+	const fold = () => { if (hidden) out.push(el("div", { class: "fold" }, `${hidden} unchanged line${hidden > 1 ? "s" : ""}`)); hidden = 0; };
+	rows.forEach((x, k) => {
+		if (!show[k]) return void hidden++;
+		fold();
+		out.push(uLine(x, a, b, review), ...uExtras(x, review));
+	});
+	fold();
+	const head = (name, word) => (r[name] ? el("span", {}, labels[name] ?? word, " ", el("span", { class: "sha" }, r[name].ref.slice(0, 7))) : el("span", {}, name === "before" ? "New file" : "Deleted"));
+	return el("div", { class: "unified" }, el("h4", { class: "u-head" }, head("before", "Before"), " → ", head("after", "After")), el("div", { class: "u-lines" }, out));
 }
 
 // the rows of a file list, each opening its diff. `opts` (SPEC 16, the PR's Files changed):
@@ -887,7 +1024,7 @@ function fileList(st, repo, github, opts = {}) {
 		row.addEventListener("keydown", (e) => e.target === row && (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle()));
 		const extra = opts.extra?.(f) ?? null; // a file comment form, outdated threads
 		const review = opts.review?.(f) ?? null;
-		return [row, extra, isOpen ? el("li", { class: "file-diff" }, diffView(f, st.diffs.get(f.path), github, st.mdMode, opts.labels, review)) : null];
+		return [row, extra, isOpen ? el("li", { class: "file-diff" }, diffView(f, st.diffs.get(f.path), github, st.mdMode, opts.labels, review, opts.pr ?? null)) : null];
 	}));
 }
 
@@ -1583,6 +1720,7 @@ function filesChangedView(t, p) {
 	const prUrl = p.url;
 	const list = fileList(files, t.repo, `${prUrl}/files`, {
 		pick: (f) => pickOf(t, f, files.data),
+		pr: { repo: t.repo, number: t.number },
 		viewed: p.viewed,
 		onViewed: async (f, on) => {
 			p.viewed = { ...p.viewed, [f.path]: on ? "VIEWED" : "UNVIEWED" }; // at once; GitHub keeps it

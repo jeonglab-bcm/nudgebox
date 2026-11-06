@@ -15,10 +15,11 @@ import { Store, type LinkedUser } from "./store.ts";
 import { seal, unseal } from "./crypto.ts";
 import { buildInbox, isMine, reviewRequested, type Viewer } from "./inbox.ts";
 import { verifySignature } from "./webhook.ts";
-import type { Summarize } from "./llm.ts";
+import type { Prompt, Summarize } from "./llm.ts";
 import { issuePrompt, prPrompt, SUMMARY_FORMAT } from "./summary.ts";
 import type { Differ, DiffSide } from "./omnidiff.ts";
 import { hasMarkers, planMerge, type ReadFile } from "./conflicts.ts";
+import { EXPLAIN_FORMAT, explainPrompt } from "./explain.ts";
 
 export interface Config {
 	orgs: string[]; // accounts the GitHub App is installed on
@@ -537,14 +538,24 @@ export function createApp(opts: AppOptions): App {
 	const isRef = (x: unknown): x is FileRef => !!x && typeof x === "object" &&
 		["repo", "ref", "path"].every((k) => typeof (x as Record<string, unknown>)[k] === "string" && (x as Record<string, string>)[k] !== "");
 
-	async function diffFiles(req: IncomingMessage, lab: string) {
-		const differ = opts.diff;
-		if (!differ) throw new HttpError(503, "diffs are not set up");
-		const b = await json(req);
+	/** The two sides of a diff from a request body, checked and visible to `lab`. */
+	async function sidesOf(b: any, lab: string): Promise<(FileRef | null)[]> {
 		const sides = [b.before ?? null, b.after ?? null] as (FileRef | null)[];
 		if (!sides.some(Boolean) || !sides.every((s) => s === null || isRef(s))) throw new HttpError(400, "give before and/or after as {repo, ref, path}");
 		const { repos } = await viewOf(linked(lab));
 		if (!sides.every((s) => !s || repos.has(s.repo.toLowerCase()))) throw new HttpError(404, "not found");
+		return sides;
+	}
+
+	async function diffFiles(req: IncomingMessage, lab: string) {
+		if (!opts.diff) throw new HttpError(503, "diffs are not set up");
+		return diffOf(await sidesOf(await json(req), lab));
+	}
+
+	/** SPEC 15: two file versions diffed by omnidiff, once (the versions are commits). */
+	async function diffOf(sides: (FileRef | null)[]): Promise<any> {
+		const differ = opts.diff;
+		if (!differ) throw new HttpError(503, "diffs are not set up");
 		const key = JSON.stringify(sides.map((s) => s && [s.repo.toLowerCase(), s.ref, s.path]));
 		let run = diffs.get(key);
 		if (!run) {
@@ -600,38 +611,69 @@ export function createApp(opts: AppOptions): App {
 		const version = `${SUMMARY_FORMAT}|${pr ? `${pr.updatedAt}|${pr.headSha}` : item.updatedAt}`;
 		const kept = store.summary(key, version);
 		if (kept !== undefined) return { kept };
-		const id = `${key}@${version}`;
-		let run = summarizing.get(id);
-		if (!run) {
-			const r: SummaryRun = { text: "", stage: "reading", watchers: new Set(), done: Promise.resolve("") };
-			const tell = (e: SummaryEvent) => r.watchers.forEach((w) => w(e));
-			r.done = (async () => {
-				let content;
+		return {
+			run: modelRun(key, version, async () => {
 				try {
-					content = pr ? await github.prContent(pr.repo, pr.number) : await github.issueContent(issue!.repo, issue!.number);
+					const content = pr ? await github.prContent(pr.repo, pr.number) : await github.issueContent(issue!.repo, issue!.number);
+					return pr ? prPrompt(pr, content) : issuePrompt(issue!, content);
 				} catch (e) {
 					throw new HttpError(502, `could not read it from GitHub: ${(e as Error).message}`);
 				}
-				const prompt = pr ? prPrompt(pr, content) : issuePrompt(issue!, content);
-				r.stage = "writing";
-				tell({ stage: "writing" });
-				let text: string;
-				try {
-					text = await llm(prompt, (delta) => {
-						r.text += delta;
-						tell({ delta });
-					});
-				} catch (e) {
-					throw new HttpError(502, `LLM failed: ${(e as Error).message}`);
-				}
-				store.saveSummary(key, version, text, opts.now().toISOString());
-				return text;
-			})().finally(() => summarizing.delete(id));
-			r.done.catch(() => {}); // watchers get the error; an unwatched run must not crash the process
-			run = r;
-			summarizing.set(id, run);
-		}
-		return { run };
+			}),
+		};
+	}
+
+	/**
+	 * One model call per (key, version) at a time, kept in the store when it succeeds;
+	 * everyone asking meanwhile watches the same run (SPEC 12, 17).
+	 */
+	function modelRun(key: string, version: string, prompt: () => Promise<Prompt>): SummaryRun {
+		const llm = opts.summarize!;
+		const id = `${key}@${version}`;
+		let run = summarizing.get(id);
+		if (run) return run;
+		const r: SummaryRun = { text: "", stage: "reading", watchers: new Set(), done: Promise.resolve("") };
+		const tell = (e: SummaryEvent) => r.watchers.forEach((w) => w(e));
+		r.done = (async () => {
+			const p = await prompt();
+			r.stage = "writing";
+			tell({ stage: "writing" });
+			let text: string;
+			try {
+				text = await llm(p, (delta) => {
+					r.text += delta;
+					tell({ delta });
+				});
+			} catch (e) {
+				throw new HttpError(502, `LLM failed: ${(e as Error).message}`);
+			}
+			store.saveSummary(key, version, text, opts.now().toISOString());
+			return text;
+		})().finally(() => summarizing.delete(id));
+		r.done.catch(() => {}); // watchers get the error; an unwatched run must not crash the process
+		summarizing.set(id, r);
+		return r;
+	}
+
+	/** SPEC 17: Explain a file's diff. The kept explanation, or the run making it. */
+	async function explainFor(req: IncomingMessage, lab: string): Promise<{ kept: string } | { run: SummaryRun }> {
+		if (!opts.summarize) throw new HttpError(503, "AI explanations are not set up");
+		const b = await json(req);
+		const sides = await sidesOf(b, lab);
+		const d = await diffOf(sides);
+		// a binary side comes back with its size and no text
+		const text = (x: { text?: unknown } | null) => (x === null ? null : typeof x.text === "string" ? x.text : undefined);
+		const [before, after] = [text(d.before), text(d.after)];
+		if (d.skipped || before === undefined || after === undefined) throw new HttpError(400, "only a text file's diff can be explained");
+		const { repos } = await viewOf(linked(lab));
+		const pr = b.pr && typeof b.pr.repo === "string" && Number.isInteger(b.pr.number) ? store.pr(b.pr.repo, b.pr.number) : undefined;
+		const title = pr && repos.has(pr.repo.toLowerCase()) ? pr.title : null;
+		const key = `explain:${JSON.stringify(sides.map((s) => s && [s.repo.toLowerCase(), s.ref, s.path]))}`;
+		const version = `${EXPLAIN_FORMAT}|${title ?? ""}`;
+		const kept = store.summary(key, version);
+		if (kept !== undefined) return { kept };
+		const path = (sides[1] ?? sides[0])!.path;
+		return { run: modelRun(key, version, async () => explainPrompt(path, title, before, after, d.result)) };
 	}
 
 	/** Summarize as one JSON answer. */
@@ -678,7 +720,11 @@ export function createApp(opts: AppOptions): App {
 
 	/** Summarize as server-sent events: stage, then text pieces, then done or error (SPEC 12). */
 	async function summarizeStream(req: IncomingMessage, res: ServerResponse, lab: string) {
-		const s = await summaryFor(req, lab); // refusals are plain JSON errors, before the stream starts
+		return streamRun(res, await summaryFor(req, lab), "summary"); // refusals are plain JSON errors, before the stream starts
+	}
+
+	/** A model run as server-sent events: stage, text pieces, then done ({[name], cached}) or error. */
+	async function streamRun(res: ServerResponse, s: { kept: string } | { run: SummaryRun }, name: string) {
 		res.writeHead(200, {
 			"content-type": "text/event-stream", "cache-control": "no-store", "x-content-type-options": "nosniff",
 			"x-accel-buffering": "no", // nginx: pass each event on at once
@@ -687,7 +733,7 @@ export function createApp(opts: AppOptions): App {
 			if (!res.writableEnded) res.write(`${event ? `event: ${event}\n` : ""}data: ${JSON.stringify(data)}\n\n`);
 		};
 		if ("kept" in s) {
-			emit("done", { summary: s.kept, cached: true });
+			emit("done", { [name]: s.kept, cached: true });
 			return res.end();
 		}
 		const run = s.run;
@@ -697,7 +743,7 @@ export function createApp(opts: AppOptions): App {
 		const watch = (e: SummaryEvent) => ("delta" in e ? emit(null, { delta: e.delta }) : emit("stage", e));
 		run.watchers.add(watch);
 		try {
-			emit("done", { summary: await run.done, cached: false });
+			emit("done", { [name]: await run.done, cached: false });
 		} catch (e) {
 			emit("error", { error: (e as Error).message });
 		} finally {
@@ -828,6 +874,11 @@ export function createApp(opts: AppOptions): App {
 		}
 		if (method === "POST" && path === "/api/diff") {
 			return send(res, 200, await diffFiles(req, lab));
+		}
+		if (method === "POST" && path === "/api/explain") { // SPEC 17
+			const s = await explainFor(req, lab);
+			if (String(req.headers.accept ?? "").includes("text/event-stream")) return streamRun(res, s, "explanation");
+			return send(res, 200, "kept" in s ? { explanation: s.kept, cached: true } : { explanation: await s.run.done, cached: false });
 		}
 		if (method === "POST" && path === "/api/summarize" && String(req.headers.accept ?? "").includes("text/event-stream")) {
 			return summarizeStream(req, res, lab);

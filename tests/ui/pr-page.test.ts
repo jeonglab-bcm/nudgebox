@@ -418,3 +418,63 @@ test("16. Close pull request asks first; a closed PR offers Reopen", async () =>
 		await closed.close();
 	}
 });
+
+test("16. on a phone, tapping a line number GitHub takes a comment on opens the comment box", async () => {
+	const s = await open({ device: PHONE, hash: `${PR}/files` });
+	try {
+		await s.page.waitForSelector(".file");
+		await s.page.locator(".file", { hasText: "src/limit.ts" }).locator(".path").tap();
+		await s.page.waitForSelector(".unified .u-add");
+		assert.equal(await s.page.locator(".add-comment:visible").count(), 0); // no + buttons over the numbers
+		await s.page.locator(".u-add .ln.can-comment", { hasText: /^15$/ }).tap();
+		await s.page.locator(".comment-form textarea").fill("Why 20?");
+		await button(s.page, "Add single comment").tap();
+		await until(() => s.calls("addReviewComment").length === 1, "line comment");
+		assert.deepEqual(s.calls("addReviewComment")[0].args, { mode: "single", subject: "line", path: "src/limit.ts", line: 15, side: "RIGHT", body: "Why 20?" });
+		assert.equal(await s.page.locator(".u-ctx .ln.can-comment", { hasText: /^20$/ }).count(), 0); // outside the hunks: not tappable
+	} finally {
+		await s.close();
+	}
+});
+
+test("16. on a phone the open file's row stays at the top while its diff scrolls", async () => {
+	const s = await open({ device: PHONE, hash: `${PR}/files` });
+	try {
+		// a long file with a change every 5 lines, so the diff is much taller than the screen
+		const long = (w: string) => Array.from({ length: 200 }, (_, i) => (i % 5 ? `line ${i + 1}` : `${w} ${i + 1}`)).join("\n") + "\n";
+		s.t.github.blobs.set(`${LAB}@base-sha:src/limit.ts`, long("old"));
+		s.t.github.blobs.set(`${LAB}@head-sha:src/limit.ts`, long("new"));
+		const every = Array.from({ length: 40 }, (_, k) => ({ op: "update" as const, ...at(k * 5, 0, 3) }));
+		s.t.differ.reply = { largeResidual: false, before: { hunks: every }, after: { hunks: every } };
+		await s.page.waitForSelector(".file");
+		await s.page.locator(".file", { hasText: "src/limit.ts" }).locator(".path").tap();
+		await s.page.waitForSelector(".unified .u-add");
+		await s.page.evaluate(() => window.scrollBy(0, document.querySelector(".file.open")!.getBoundingClientRect().top + 600));
+		const top = await s.page.locator(".file.open").evaluate((e) => e.getBoundingClientRect().top);
+		assert.ok(Math.abs(top) < 2, `the file row is at ${top}px, not the top`);
+	} finally {
+		await s.close();
+	}
+});
+
+for (const [device, name] of [[DESKTOP, "a computer"], [PHONE, "a phone"]] as const) {
+	test(`17. Explain on a file's diff shows the model's explanation above the diff, on ${name}`, async () => {
+		const s = await open({ device, hash: `${PR}/files` });
+		try {
+			s.t.llm.reply = "The change raises `limit` from 10 to 20.";
+			await s.page.waitForSelector(".file");
+			await s.page.locator(".file", { hasText: "src/limit.ts" }).locator(".path").click();
+			await s.page.waitForSelector(".file-diff .m-update");
+			await s.page.locator(".file-diff").getByRole("button", { name: "Explain", exact: true }).click();
+			await s.page.waitForSelector(".explain:not(.streaming) code");
+			assert.equal(await s.page.locator(".explain").textContent(), "The change raises limit from 10 to 20.");
+			assert.equal(await s.page.locator(".explain code").textContent(), "limit");
+			const [ex, diff] = await Promise.all([".explain", device === PHONE ? ".unified" : ".panes"].map((x) => s.page.locator(x).boundingBox()));
+			assert.ok(ex!.y < diff!.y, "the explanation is not above the diff");
+			const [call] = s.t.llm.calls;
+			assert.ok(call.user.includes("Raise the limit") && call.user.includes("const limit = 20;"));
+		} finally {
+			await s.close();
+		}
+	});
+}

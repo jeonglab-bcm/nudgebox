@@ -244,6 +244,41 @@ button.link { border: 0; background: none; padding: 0; font: inherit; text-decor
 .conflict-pick { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-bottom: 6px; }
 .conflict-text { min-height: 16em; white-space: pre; overflow: auto; }
 .commit-merge { justify-content: flex-start; }
+/* Explain a file's diff (SPEC 17) */
+.diff-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 4px 0 10px; }
+.diff-tools .md-switch { margin: 0; }
+.explain-btn { border: 1px solid var(--line); background: var(--bg); color: var(--fg); border-radius: 6px; padding: 4px 12px; font-size: 13px; font-weight: 500; }
+.explain-btn { display: inline-flex; align-items: center; gap: 6px; } .explain-btn .spark { color: var(--accent); }
+.explain-btn:hover { border-color: var(--fg); }
+.explain { margin: 0 0 12px; padding: 10px 14px; border-left: 2px solid var(--accent); background: var(--faint); border-radius: 0 8px 8px 0; max-width: 78ch; font-size: 14.5px; line-height: 1.55; }
+.explain p { margin: 0; }
+.explain code { font: 12.5px var(--mono); padding: 1px 5px; border-radius: 4px; background: var(--bg); }
+.explain.streaming { border-left-style: dashed; }
+.explain .pending { color: var(--muted); }
+/* the diff on a phone (SPEC 15): one unified column, old and new line numbers */
+.u-lines { font: 11.5px/1.55 var(--mono); font-variant-ligatures: none; }
+.u-line { display: grid; grid-template-columns: 2.4em 2.4em 1.1em minmax(0, 1fr); align-items: start; }
+.u-line .ln { text-align: right; padding-right: 6px; color: var(--muted); opacity: .7; user-select: none; }
+.u-line .sign { text-align: center; user-select: none; }
+.u-line .code { white-space: pre-wrap; overflow-wrap: anywhere; padding-right: 8px; }
+.u-del { background: color-mix(in oklch, var(--bad) 9%, transparent); } .u-del .sign { color: var(--bad); }
+.u-add { background: color-mix(in oklch, var(--ok) 10%, transparent); } .u-add .sign { color: var(--ok); }
+.u-del .m-delete, .u-del .m-update { background: color-mix(in oklch, var(--bad) 26%, transparent); text-decoration: none; }
+.u-add .m-insert, .u-add .m-update { background: color-mix(in oklch, var(--ok) 30%, transparent); }
+.unified { border: 1px solid var(--line); border-radius: 8px; padding: 6px 0; background: var(--bg); }
+.u-head { margin: 0 0 6px; padding: 0 10px; font: 500 11px var(--sans); color: var(--muted); }
+.unified .fold { padding-left: 5.9em; }
+.ln.can-comment { cursor: pointer; }
+@media (max-width: 720px) {
+  .u-lines .thread, .u-lines .comment-form { margin: 6px 8px 8px; }
+  .add-comment { display: none; } /* a tap on the line number comments instead */
+  .ln.can-comment { color: var(--accent); opacity: 1; text-decoration: underline dotted; text-underline-offset: 3px; }
+  body.files .chrome { position: static; } /* the page's own header scrolls away; the open file's row stays */
+  .file.open { position: sticky; top: 0; z-index: 2; background: var(--bg); box-shadow: 0 2px 6px oklch(0% 0 0 / .06); }
+  .lines { font-size: 11.5px; }
+  .code-line { grid-template-columns: 2.6em minmax(0, 1fr); }
+  .lines .thread { margin-left: 8px; }
+}
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; } }
 </style>
 <style id="skin">

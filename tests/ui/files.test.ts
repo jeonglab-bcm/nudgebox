@@ -83,20 +83,42 @@ test("15. a file's diff marks only the changed part and folds unchanged lines", 
 	}
 });
 
-test("15. before and after side by side on a computer, one above the other on a phone", async () => {
-	for (const [device, sideBySide] of [[DESKTOP, true], [PHONE, false]] as const) {
-		const s = await open(device);
-		try {
-			await s.page.keyboard.press("f").catch(() => {});
-			if (!(await s.page.locator(".file").count())) await s.page.evaluate(() => (location.hash = "#files/jeonglab-bcm/labbot/4"));
-			await s.page.locator(".file").first().click();
-			await s.page.waitForSelector(".pane.after .m-update");
-			const [b, a] = await Promise.all([".pane.before", ".pane.after"].map((p) => s.page.locator(p).boundingBox()));
-			assert.equal(Math.abs(b!.y - a!.y) < 5, sideBySide, `before at ${b!.x},${b!.y}; after at ${a!.x},${a!.y}`);
-			assert.ok(await s.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "page scrolls sideways");
-		} finally {
-			await s.close();
-		}
+test("15. before and after side by side on a computer", async () => {
+	const s = await open(DESKTOP);
+	try {
+		await s.page.keyboard.press("f");
+		await s.page.locator(".file").first().click();
+		await s.page.waitForSelector(".pane.after .m-update");
+		const [b, a] = await Promise.all([".pane.before", ".pane.after"].map((p) => s.page.locator(p).boundingBox()));
+		assert.ok(Math.abs(b!.y - a!.y) < 5 && a!.x > b!.x, `before at ${b!.x},${b!.y}; after at ${a!.x},${a!.y}`);
+		assert.ok(await s.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "page scrolls sideways");
+	} finally {
+		await s.close();
+	}
+});
+
+test("15. on a phone the diff is one unified column: the removed line just above its replacement", async () => {
+	const s = await open(PHONE);
+	try {
+		await s.page.evaluate(() => (location.hash = "#pr/jeonglab-bcm/labbot/4/files"));
+		await s.page.locator(".file", { hasText: "src/limit.ts" }).locator(".path").click();
+		await s.page.waitForSelector(".unified .u-add");
+		assert.equal(await s.page.locator(".file-diff .pane").count(), 0);
+		const rows = await s.page.locator(".unified .u-line").evaluateAll((xs) => xs.map((x) => [x.className.replace("u-line ", ""), x.querySelector(".code")!.textContent]));
+		assert.deepEqual(rows, [
+			["u-ctx", "line 12"], ["u-ctx", "line 13"], ["u-ctx", "line 14"],
+			["u-del", "const limit = 10; // café"], ["u-add", "const limit = 20; // café"],
+			["u-ctx", "line 16"], ["u-ctx", "line 17"], ["u-ctx", "line 18"],
+		]);
+		assert.deepEqual(await s.page.locator(".u-del .m-update").allTextContents(), ["10"]);
+		assert.deepEqual(await s.page.locator(".u-add .m-update").allTextContents(), ["20"]);
+		// old and new line numbers
+		assert.deepEqual(await s.page.locator(".u-del .ln").allTextContents(), ["15", ""]);
+		assert.deepEqual(await s.page.locator(".u-add .ln").allTextContents(), ["", "15"]);
+		assert.match((await s.page.locator(".unified .fold").first().textContent())!, /11 unchanged lines/);
+		assert.ok(await s.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "page scrolls sideways");
+	} finally {
+		await s.close();
 	}
 });
 

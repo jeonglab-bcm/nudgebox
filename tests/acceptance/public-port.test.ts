@@ -6,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { start, WEBHOOK_SECRET, ORIGIN } from "../helpers/harness.ts";
 import { publicOnly } from "../../src/public.ts";
 
@@ -33,6 +33,24 @@ test("9. public port: only the webhook and static files; forged identity is igno
 		assert.equal((await t.req("/api/inbox", { as: "hyunhwanj" })).status, 200);
 	} finally {
 		pub.close();
+		await t.close();
+	}
+});
+
+test("13. the icon is the triage list: three rows, the top one marked coral, in every size", async () => {
+	const t = await start();
+	try {
+		const svg = await (await fetch(`${t.base}/icon.svg`)).text();
+		assert.equal((svg.match(/<rect /g) ?? []).length, 4, "a tile and three rows");
+		assert.match(svg, /<circle[^>]*fill="#e8503a"/);
+		for (const [path, size] of [["/icon-180.png", 180], ["/icon-512.png", 512]] as const) {
+			const png = Buffer.from(await (await fetch(t.base + path)).arrayBuffer());
+			assert.deepEqual([png.readUInt32BE(16), png.readUInt32BE(20)], [size, size], path);
+		}
+		const old = "e520d660f3eebd225a56b68c1f44caa29bb187af3f02e56924111904bb95b383"; // the GitHub-style icon before 2026-11-06
+		const now = createHash("sha256").update(Buffer.from(await (await fetch(`${t.base}/icon-180.png`)).arrayBuffer())).digest("hex");
+		assert.notEqual(now, old, "icon-180.png is still the old icon");
+	} finally {
 		await t.close();
 	}
 });

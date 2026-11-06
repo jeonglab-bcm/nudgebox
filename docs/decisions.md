@@ -166,3 +166,22 @@ tap on a title now open this page; `g` opens GitHub.
   fast-forward, so it never overwrites a push made meanwhile. Rename and delete
   conflicts and binary files are left to the command line, as on GitHub.
 
+
+## 2026-11-06: Phone diff, icon, Explain
+
+Dr. Jeong found the diff hard to follow on a phone: the whole old file, then the whole
+new one below it. Three working layouts were built and shown side by side as phone
+screenshots (unified column, a Before/After switch, change-by-change cards); he chose the
+**unified column**, as GitHub shows on a phone, with omnidiff's in-line marks kept. On
+a phone a line number is tapped to comment (the + buttons covered the numbers), and the
+open file's row stays at the top. Computers keep before and after side by side.
+
+The icon was GitHub's own pull-request symbol in green, which said nothing about
+Nudgebox and clashed with the coral look. Of four designs in Nudgebox's palette, shown
+at tab and Home Screen size, he chose the **triage list**: three rows, the top one
+marked with the coral dot.
+
+**Explain** asks the lab LLM about one file's changes, per file (he first picked per
+change, then corrected it to per file). The server reads both file versions itself and
+sends only the changed runs with 3 lines around them, so a large file still fits and the
+page cannot put text in front of the model.

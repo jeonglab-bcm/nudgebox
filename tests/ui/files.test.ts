@@ -50,12 +50,12 @@ async function open(device: BrowserContextOptions = DESKTOP) {
 	return { t, page, close };
 }
 
-test("15. f opens the Files view of the selected PR; Escape returns to the list", async () => {
+test("15. f opens the Files changed tab of the selected PR; Escape returns to the list", async () => {
 	const s = await open();
 	try {
 		await s.page.keyboard.press("f");
 		await s.page.waitForSelector(".file");
-		assert.match(s.page.url(), /#files\/jeonglab-bcm\/labbot\/4$/);
+		assert.match(s.page.url(), /#pr\/jeonglab-bcm\/labbot\/4\/files$/); // SPEC 16: the PR page's Files changed tab
 		const rows = await s.page.locator(".file .path").allTextContents();
 		assert.deepEqual(rows, ["src/limit.ts", "assets/logo.png", "docs/new.md"]);
 		assert.match((await s.page.locator(".file").first().textContent())!, /\+1.*−1/);

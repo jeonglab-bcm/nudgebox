@@ -69,7 +69,14 @@ From a PR row, as the signed-in person:
 - **Re-run failed checks** (GitHub Actions jobs that failed on the head commit).
 - **Comment**.
 
-Nothing destructive: no close, delete branch, force-push, or edit. GitHub still
+The PR page (section 16) adds more, all as the signed-in person: reviews with line
+comments, replies and resolving threads, merge with a chosen method, Update branch,
+resolving conflicts, Ready for review / Convert to draft, Viewed, reviewers,
+assignees, labels and milestone, and **Close** (asks first) / **Reopen** (Dr. Jeong,
+2026-11-05).
+
+Nothing else destructive: no delete branch, force-push, or edit of the title or
+description. A commit Nudgebox makes (resolving conflicts) only adds to the branch. GitHub still
 enforces branch protection and permissions; the app shows GitHub's error if it
 refuses.
 
@@ -181,7 +188,7 @@ stack of cards.
   Hide/Unhide) show under it only
   when it is opened; other rows show no buttons. Approve, Merge, Comment and Open have
   no buttons (Dr. Jeong, 2026-11-04: fewer buttons); they stay on the keyboard, and a tap
-  on the title of the selected row opens it on GitHub. A tap or click selects
+  on the title of the selected row opens the PR page (section 16), or an issue on GitHub. A tap or click selects
   and opens a row; tapping it again closes it.
 - **Keyboard** (computers only; ignored while typing in a field or with Ctrl, Cmd or
   Alt held):
@@ -190,12 +197,13 @@ stack of cards.
   |---|---|
   | `j` / `↓`, `k` / `↑` | next / previous row |
   | `x` or space | open / close the selected row |
-  | `Enter` or `o` | open on GitHub |
+  | `Enter` or `o` | open the PR page (section 16); an issue on GitHub |
+  | `g` | open on GitHub |
   | `a` | approve |
   | `m` | merge (still asks first) |
   | `r` | re-run failed checks |
   | `c` | comment |
-  | `f` | Files and diffs (section 15) |
+  | `f` | the PR page on Files changed (sections 15, 16) |
   | `s` | AI summary |
   | `h` | hide / unhide |
   | `1`–`4` | Needs you, WIP, CI failing, All |
@@ -244,7 +252,8 @@ grey bell when not possible here. It opens the notifications part of Settings.
 **Files** on an opened PR (key `f`) shows the PR's changed files, compared with the
 point where the PR's branch left its base (as GitHub's "Files changed" does): status
 (added, modified, removed, renamed), path, and lines added and removed. `Escape` or Back
-returns to the list; the address is `#files/<owner>/<repo>/<number>`.
+returns to the list. Files is the **Files changed** tab of the PR page (section 16); the
+old address `#files/<owner>/<repo>/<number>` still works.
 
 A file opens its diff, made by **omnidiff** (github.com/ivankovic/omnidiff, a pinned
 release run on the server) from the file's two whole versions:
@@ -288,3 +297,113 @@ replaces the oldest; × drops one), kept while you move around Nudgebox in this 
 version its PR has now (a removed file: its last version), the same way as above,
 Markdown rendered included. **Swap** turns the comparison around. The address is
 `#compare`; Back returns.
+
+## 16. The PR page
+
+A PR opens in Nudgebox as a page laid out like GitHub's own PR page, with the same
+buttons, so a PR can be read, reviewed and merged without going to github.com. Every
+diff on it is made by omnidiff (section 15). Dr. Jeong, 2026-11-05: "the same button
+and user interface".
+
+The address is `#pr/<owner>/<repo>/<number>` (Conversation), `…/commits`, `…/checks` and
+`…/files`.
+`Enter`, `o` or a tap on the selected row's title opens it from the list; `f` opens it
+on Files changed; `Escape` or Back returns to the list. **Open on GitHub** is in the
+header, and `g` on the list. Only for PRs in repos you can see (section 4). The page
+is read with your own GitHub token, so it shows what GitHub shows you (your pending
+review, your Viewed ticks).
+
+**Header.** The title and number; a state badge (Open, Draft, Merged, Closed); "*author*
+wants to merge *N* commits into *base* from *head*"; tabs **Conversation**, **Commits**,
+**Checks** and **Files changed**, each with its count; lines added and removed.
+
+**Sidebar** (beside the tabs on a computer, above them on a phone):
+
+- **Reviewers**: each requested person or team, and each person who reviewed with
+  their latest state (approved, changes requested, commented). The gear lists people
+  who can be asked (the repo's assignable people, not the author); ticking one requests
+  a review, unticking removes the request. **Re-request review** beside someone who
+  reviewed. "Still in progress? Convert to draft" under it.
+- **Assignees**: gear with the repo's assignable people; "No one — assign yourself".
+- **Labels**: gear with the repo's labels, in their colours.
+- **Milestone**: gear with the repo's open milestones, or none.
+
+**Conversation tab.** The description first (as a comment by the author), then, oldest
+first: comments, reviews (who, approved / requested changes / commented, the review's
+text and its line comments), commits pushed, and events (labels, assignees, review
+requests, ready for review, converted to draft, force-pushed). A review's line comments
+show as a thread: the file and line, the code around it, the comments, a **Reply**
+box, and **Resolve conversation** / **Unresolve conversation**; a resolved thread is
+folded. Outdated threads (their line has changed since) say so.
+
+Under the timeline, the **merge box**, as on GitHub:
+
+- Review state: "Changes approved", "Changes requested" or "Review required".
+- Checks: "All checks have passed", "Some checks were not successful" or "Some checks
+  haven't completed yet", with **Show all checks** (the Checks tab).
+- Branch state, one of:
+  - Draft: "This pull request is still a work in progress" and **Ready for review**.
+  - Conflicts: "This branch has conflicts that must be resolved", the conflicting
+    files, and **Resolve conflicts** (below).
+  - Behind its base: "This branch is out-of-date with the base branch" and **Update
+    branch** (merges the base into it, as GitHub does).
+  - Otherwise: "This branch has no conflicts with the base branch".
+- **Merge pull request** with a menu of the methods the repo allows (Create a merge
+  commit, Squash and merge, Rebase and merge); the choice is remembered per repo on
+  this device. It opens a confirm step with the commit title and message (not for
+  rebase), then **Confirm merge** or **Cancel**. Not offered on a draft or with
+  conflicts. GitHub's refusal (branch protection, failing required checks) is shown.
+
+Then a comment box with **Comment** and **Close pull request** ("Close with comment"
+when the box has text), which asks first. A closed PR shows **Reopen pull request**
+instead; a merged one neither.
+
+**Commits tab.** The PR's commits, oldest first, grouped by day ("Commits on Nov 2"):
+first line of the message, author, short sha and time. A commit opens its changed files
+(`…/commits/<sha>`), each diffed by omnidiff against the commit's first parent, as in
+section 15. Back returns to the list of commits.
+
+**Checks tab.** Each check on the head commit: name (and workflow), state (passed,
+failed, running, queued, skipped, cancelled), how long it took, and **Details** (its
+log on GitHub). **Re-run failed jobs** when some failed (section 6).
+
+**Files changed tab.** The Files view of section 15 (omnidiff, rendered Markdown,
+binary diffs, Pick), plus GitHub's review tools:
+
+- **Line comments.** A line GitHub can take a comment on (a line inside the PR's diff
+  hunks, as on GitHub) shows **+** by its number; other lines do not. **+** opens a box
+  with **Add single comment** (posted now) and **Start a review** (or **Add review
+  comment** once one is started), which adds it to your **pending review** on GitHub,
+  seen by no one else until submitted. A line on the before side comments on the old
+  line, on the after side the new line.
+- **Comment on file** in each file's header, for a comment that is not about one line.
+- **Threads** show under their line in the diff, with Reply and Resolve as in
+  Conversation; pending comments are marked Pending.
+- **Viewed** tick per file, the same tick as GitHub's (kept by GitHub). A viewed file
+  folds; the header says "*n* / *m* files viewed".
+- **Review changes** (with the number of pending comments) opens the review form: a
+  summary, then **Comment**, **Approve** or **Request changes**, and **Submit review**.
+  Approve and Request changes are not offered on your own PR. **Cancel review** drops
+  your pending review and its comments, after asking.
+
+**Resolving conflicts** (`#pr/<owner>/<repo>/<number>/conflicts`), like GitHub's
+conflict editor:
+
+- Each file changed on both the PR's branch and the base since they split, whose changes
+  overlap, opens in an editor with the conflict markers GitHub uses
+  (`<<<<<<< head-branch`, `=======`, `>>>>>>> base-branch`).
+- Above each conflict: **Accept current change** (the PR's), **Accept incoming change**
+  (the base's), **Accept both changes**; the text can also be edited by hand.
+- **Mark as resolved** once a file has no markers left. When every file is resolved,
+  **Commit merge** makes one merge commit on the PR's branch ("Merge branch '*base*'
+  into *head*", as GitHub writes it), with the PR's head and the base's head as its
+  parents. Files changed only on the base are taken as they are; files changed on both
+  sides without overlapping are merged as git would.
+- Conflicts the editor cannot show (a file deleted on one side and changed on the other,
+  a rename against a change, a binary file) are listed with "Resolve this on the
+  command line" and Commit merge is not offered, as on GitHub.
+- If the branch moved while you were resolving, nothing is committed and the page says
+  to reload.
+
+**Fresh.** After each action the page reads the PR again; it also does when the
+window comes back to the front.

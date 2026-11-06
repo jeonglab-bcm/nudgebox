@@ -10,7 +10,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { GitHubPort, Issue, PullRequest } from "./github.ts";
+import type { GitHubPort, Issue, NewReviewComment, PullRequest } from "./github.ts";
 import { Store, type LinkedUser } from "./store.ts";
 import { seal, unseal } from "./crypto.ts";
 import { buildInbox, isMine, reviewRequested, type Viewer } from "./inbox.ts";
@@ -18,6 +18,7 @@ import { verifySignature } from "./webhook.ts";
 import type { Summarize } from "./llm.ts";
 import { issuePrompt, prPrompt, SUMMARY_FORMAT } from "./summary.ts";
 import type { Differ, DiffSide } from "./omnidiff.ts";
+import { hasMarkers, planMerge, type ReadFile } from "./conflicts.ts";
 
 export interface Config {
 	orgs: string[]; // accounts the GitHub App is installed on
@@ -379,12 +380,106 @@ export function createApp(opts: AppOptions): App {
 		if (req.headers.origin !== opts.origin) throw new HttpError(403, "cross-site request refused");
 	}
 
+	/** GitHub's refusal, as the page should see it. */
+	function fromGitHub(e: unknown): never {
+		if (e instanceof HttpError) throw e;
+		const status = (e as { status?: number }).status ?? 0;
+		const message = (e as Error).message;
+		if ([405, 409, 422].includes(status)) throw new HttpError(409, message);
+		if (status === 403 || status === 404) throw new HttpError(status, message);
+		if (status === 401) throw new HttpError(409, "GitHub link expired, link again", { link: "/auth/github" });
+		throw new HttpError(502, message || "GitHub request failed");
+	}
+
+	// -- request checks (SPEC 16) ------------------------------------------------
+	const bad = (what: string): never => {
+		throw new HttpError(400, what);
+	};
+	const text = (v: unknown, what: string) => (typeof v === "string" && v.trim() ? v : bad(`${what} is empty`));
+	const flag = (v: unknown, what: string) => (typeof v === "boolean" ? v : bad(`${what} must be true or false`));
+	const names = (v: unknown, what: string) => (Array.isArray(v) && v.every((x) => typeof x === "string" && x) ? (v as string[]) : bad(`${what} must be a list of names`));
+	const line = (v: unknown, what: string) => (Number.isInteger(v) && (v as number) > 0 ? (v as number) : bad(`${what} must be a line number`));
+
+	function reviewComment(b: any): NewReviewComment {
+		const mode = b.mode === "single" || b.mode === "review" ? b.mode : bad("mode must be single or review");
+		const path = text(b.path, "path");
+		const body = text(b.body, "comment");
+		if (b.subject === "file") return { mode, subject: "file", path, body };
+		const side = b.side === "LEFT" || b.side === "RIGHT" ? b.side : bad("side must be LEFT or RIGHT");
+		const c: NewReviewComment = { mode, subject: "line", path, line: line(b.line, "line"), side, body };
+		if (b.startLine !== undefined) {
+			c.startLine = line(b.startLine, "startLine");
+			if (c.startLine >= c.line!) bad("startLine must come before line");
+		}
+		return c;
+	}
+
+	/** SPEC 16: a PR's files as text at a commit, or "binary"; the repo's own copy of each commit. */
+	const readFile = (repo: string): ReadFile => async (ref, path) => {
+		const got = await github.fileAt(repo, ref, path);
+		if (got === null) return null;
+		if (got === "too large" || got.length > MAX_TEXT || isBinary(got)) return "binary";
+		return got.toString("utf8");
+	};
+
+	async function conflictsOf(repo: string, number: number) {
+		const m = await github.mergeInputs(repo, number);
+		if (!m) throw new HttpError(404, "no such pull request");
+		return { m, plan: await planMerge(m, readFile(repo)) };
+	}
+
+	async function resolveConflicts(t: string, repo: string, n: number, b: any) {
+		const { m, plan } = await conflictsOf(repo, n);
+		if (b.head !== m.headSha) throw new HttpError(409, "The branch has changed since you opened this; reload and resolve again.");
+		if (plan.unsupported.length) throw new HttpError(409, `Some conflicts must be resolved on the command line: ${plan.unsupported.map((u) => u.path).join(", ")}`);
+		const files = Array.isArray(b.files) && b.files.every((f: any) => typeof f?.path === "string" && typeof f?.text === "string")
+			? (b.files as { path: string; text: string }[]) : bad("files must be a list of {path, text}");
+		const want = new Set(plan.conflicts.map((c) => c.path));
+		const got = new Set(files.map((f) => f.path));
+		if (files.length !== got.size || got.size !== want.size || [...got].some((p) => !want.has(p))) bad(`resolve exactly these files: ${[...want].join(", ")}`);
+		const left = files.find((f) => hasMarkers(f.text));
+		if (left) bad(`${left.path} still has conflict markers`);
+		await github.commitMerge(t, m.headRepo, m.headRef, {
+			message: `Merge branch '${m.baseRef}' into ${m.headRef}`, parents: [m.headSha, m.baseSha],
+			take: plan.take, remove: plan.remove, write: [...plan.clean, ...files.map((f) => ({ path: f.path, text: f.text }))],
+		});
+	}
+
 	async function act(req: IncomingMessage, lab: string, action: string) {
 		const ops: Record<string, (t: string, repo: string, n: number, b: any) => Promise<void>> = {
 			merge: (t, r, n, b) => {
 				if (b.confirm !== true) throw new HttpError(400, "merge needs confirm: true");
-				return github.merge(t, r, n);
+				if (b.method === undefined) return github.merge(t, r, n);
+				if (!["merge", "squash", "rebase"].includes(b.method)) bad("method must be merge, squash or rebase");
+				if ((b.title !== undefined && typeof b.title !== "string") || (b.message !== undefined && typeof b.message !== "string")) bad("title and message must be text");
+				return github.merge(t, r, n, { method: b.method, ...(b.title !== undefined ? { title: b.title } : {}), ...(b.message !== undefined ? { message: b.message } : {}) });
 			},
+			// SPEC 16: the PR page's buttons
+			"review-comment": (t, r, n, b) => github.addReviewComment(t, r, n, reviewComment(b)),
+			reply: (t, r, n, b) => github.replyToThread(t, r, n, text(b.thread, "thread"), text(b.body, "reply")),
+			"resolve-thread": (t, r, n, b) => github.setThreadResolved(t, r, n, text(b.thread, "thread"), flag(b.resolved, "resolved")),
+			"submit-review": (t, r, n, b) => {
+				if (!["COMMENT", "APPROVE", "REQUEST_CHANGES"].includes(b.event)) bad("event must be COMMENT, APPROVE or REQUEST_CHANGES");
+				return github.submitReview(t, r, n, b.event, typeof b.body === "string" ? b.body : "");
+			},
+			"cancel-review": (t, r, n) => github.cancelReview(t, r, n),
+			"update-branch": (t, r, n) => github.updateBranch(t, r, n),
+			draft: (t, r, n, b) => github.setDraft(t, r, n, flag(b.draft, "draft")),
+			viewed: (t, r, n, b) => github.setViewed(t, r, n, text(b.path, "path"), flag(b.viewed, "viewed")),
+			reviewers: (t, r, n, b) => github.requestReviewers(t, r, n, b.add === undefined ? [] : names(b.add, "add"), b.remove === undefined ? [] : names(b.remove, "remove")),
+			assignees: (t, r, n, b) => github.setAssignees(t, r, n, names(b.logins, "logins")),
+			labels: (t, r, n, b) => github.setLabels(t, r, n, names(b.names, "names")),
+			milestone: (t, r, n, b) => github.setMilestone(t, r, n, b.milestone === null ? null : Number.isInteger(b.milestone) ? b.milestone : bad("milestone must be a number or null")),
+			close: (t, r, n, b) => {
+				if (b.confirm !== true) throw new HttpError(400, "close needs confirm: true");
+				return github.setState(t, r, n, "closed");
+			},
+			reopen: async (t, r, n) => {
+				const page = await github.prPage(t, r, n);
+				if (page?.state !== "CLOSED") throw new HttpError(409, "only a closed pull request can be reopened");
+				return github.setState(t, r, n, "open");
+			},
+			"resolve-conflicts": resolveConflicts,
 			approve: (t, r, n) => github.approve(t, r, n),
 			rerun: (t, r, n) => github.rerunFailedChecks(t, r, n),
 			comment: (t, r, n, b) => {
@@ -398,22 +493,26 @@ export function createApp(opts: AppOptions): App {
 		const b = await json(req);
 		const u = linked(lab);
 		const { repos } = await viewOf(u);
-		const pr = typeof b.repo === "string" && Number.isInteger(b.number) ? store.pr(b.repo, b.number) : undefined;
+		const ok = typeof b.repo === "string" && Number.isInteger(b.number);
+		// a closed PR is no longer in the store; Reopen asks GitHub about it instead
+		const pr = ok ? store.pr(b.repo, b.number) ?? (action === "reopen" && inConfig(b.repo) ? { repo: b.repo as string, number: b.number as number } : undefined) : undefined;
 		if (!pr || !repos.has(pr.repo.toLowerCase())) throw new HttpError(404, "no such pull request");
 		const token = await tokenFor(u);
 		try {
 			await op(token, pr.repo, pr.number, b);
 		} catch (e) {
-			if (e instanceof HttpError) throw e;
-			const status = (e as { status?: number }).status ?? 0;
-			const message = (e as Error).message;
-			if ([405, 409, 422].includes(status)) throw new HttpError(409, message);
-			if (status === 403 || status === 404) throw new HttpError(status, message);
-			if (status === 401) throw new HttpError(409, "GitHub link expired, link again", { link: "/auth/github" });
-			throw new HttpError(502, message || "GitHub request failed");
+			fromGitHub(e);
 		}
 		later(async () => void (await refreshPr(pr.repo, pr.number)));
 		return { ok: true };
+	}
+
+	/** SPEC 16: a visible repo in an account Nudgebox serves, and the person's token. */
+	async function asReader(lab: string, repo: string | null) {
+		const u = linked(lab);
+		const { repos } = await viewOf(u);
+		if (!repo || !inConfig(repo) || !repos.has(repo.toLowerCase())) throw new HttpError(404, "not found");
+		return { u, repo, token: await tokenFor(u) };
 	}
 
 	/** SPEC 12: one click on Summarize. Kept per item version; one model call at a time per version. */
@@ -690,6 +789,39 @@ export function createApp(opts: AppOptions): App {
 		}
 		if (method === "GET" && path === "/api/prs/files") {
 			return send(res, 200, await prFilesFor(lab, url.searchParams.get("repo"), Number(url.searchParams.get("number"))));
+		}
+		// SPEC 16: the PR page, read as the person
+		if (method === "GET" && path === "/api/pr") {
+			const { u, repo, token } = await asReader(lab, url.searchParams.get("repo"));
+			const n = Number(url.searchParams.get("number"));
+			if (!Number.isInteger(n)) throw new HttpError(404, "no such pull request");
+			const page = await github.prPage(token, repo, n).catch(fromGitHub);
+			if (!page) throw new HttpError(404, "no such pull request");
+			return send(res, 200, { page, login: u.login });
+		}
+		if (method === "GET" && path === "/api/repo/options") {
+			const { repo, token } = await asReader(lab, url.searchParams.get("repo"));
+			return send(res, 200, await github.repoOptions(token, repo).catch(fromGitHub));
+		}
+		if (method === "GET" && path === "/api/prs/commits") {
+			const { repo } = await asReader(lab, url.searchParams.get("repo"));
+			const commits = await github.prCommits(repo, Number(url.searchParams.get("number"))).catch(fromGitHub);
+			if (!commits) throw new HttpError(404, "no such pull request");
+			return send(res, 200, commits);
+		}
+		if (method === "GET" && path === "/api/commit/files") {
+			const { repo } = await asReader(lab, url.searchParams.get("repo"));
+			const sha = url.searchParams.get("sha") ?? "";
+			const files = /^[\w.-]{1,100}$/.test(sha) ? await github.commitFiles(repo, sha).catch(fromGitHub) : null;
+			if (!files) throw new HttpError(404, "no such commit");
+			return send(res, 200, files);
+		}
+		if (method === "GET" && path === "/api/prs/conflicts") {
+			const { repos } = await viewOf(linked(lab));
+			const pr = store.pr(url.searchParams.get("repo") ?? "", Number(url.searchParams.get("number")));
+			if (!pr || !repos.has(pr.repo.toLowerCase())) throw new HttpError(404, "no such pull request");
+			const { m, plan } = await conflictsOf(pr.repo, pr.number).catch(fromGitHub);
+			return send(res, 200, { head: m.headSha, base: m.baseSha, headRef: m.headRef, baseRef: m.baseRef, files: plan.conflicts, unsupported: plan.unsupported });
 		}
 		if (method === "GET" && path === "/api/file") {
 			return fileBytes(res, lab, url.searchParams.get("repo"), url.searchParams.get("ref"), url.searchParams.get("path"));

@@ -141,3 +141,28 @@ pages) of a container. So Nudgebox draws them: pictures from a new `/api/file`
 (type from the bytes only, sandbox CSP), and, as he chose, changed PDF pages with pdf.js
 6.5.438 (Mozilla, Apache-2.0, vendored, loaded only for a PDF). Binary files go to
 10 MB (through the git blob API above 1 MB); text diffs stay at 1 MB.
+
+## 2026-11-05: The PR page
+
+Dr. Jeong asked for "the GitHub PR page, but OmniDiff": GitHub itself has no way to use
+another diff viewer, and a browser extension that rewrites github.com would break with
+each GitHub change, so Nudgebox has its own PR page instead. He chose GitHub's layout
+and buttons ("the same button and user interface") in Nudgebox's own look; the
+Conversation, Commits, Checks and Files changed tabs; inline review on the omnidiff
+view; Viewed; the sidebar; the merge box with conflicts; and a Close button (so SPEC 6
+now allows Close and Reopen, still no delete branch, force-push or edits). Enter and a
+tap on a title now open this page; `g` opens GitHub.
+
+- **Read as the person**, not the App: a pending review and Viewed ticks belong to each
+  reader, and GitHub only shows them to their owner.
+- **Line comments only where GitHub takes them**: GitHub anchors review comments to the
+  PR's unified diff hunks, which are not omnidiff's hunks, so the + comes from the
+  patch's hunk ranges, not from omnidiff's marks.
+- **Pending reviews live on GitHub** (as on github.com), so a review started in Nudgebox
+  can be finished on GitHub or on another device.
+- **Conflicts**: there is no GitHub API for its conflict editor. Nudgebox merges each
+  file with `git merge-file` (installed in the image), lets the person resolve, then
+  writes one merge commit with the Git Data API and moves the branch only as a
+  fast-forward, so it never overwrites a push made meanwhile. Rename and delete
+  conflicts and binary files are left to the command line, as on GitHub.
+

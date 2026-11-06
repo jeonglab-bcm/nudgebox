@@ -82,8 +82,9 @@ refuses.
 
 ## 7. Notifications
 
-iPhone and Mac push only (Web Push from the installed web app). Each person turns it
-on per device and can see which devices are on. A device the push service reports as
+iPhone and Mac push (Web Push from the installed web app), and the Nudgebox desktop
+app for Mac and Linux (section 18). Each person turns web push on per device and can
+see which devices are on. A device the push service reports as
 gone is removed. Triggers:
 
 1. **Review requested** from you.
@@ -121,8 +122,8 @@ The vhost and sidecar live in `bioinfolder-srv`; this repo holds the app.
 
 ## 10. Out of scope (for now)
 
-Slack/Alpy, email, self-hosted runner health, stacked-PR tools, a native app, acting
-on issues.
+Slack/Alpy, email, self-hosted runner health, stacked-PR tools, a native phone app,
+acting on issues.
 
 ## 11. Issues
 
@@ -439,3 +440,28 @@ and Compare.
   pair (they never change), shared by everyone who can see it; asking again shows the
   kept one. If the LLM fails, the error is shown and nothing is kept.
 - The file's text is data, never instructions to the model.
+
+## 18. Desktop app (Mac and Linux)
+
+A small **Nudgebox** app for macOS and Linux (Tauri), for notifications that do not
+depend on the browser's push. It opens gh.bioinfolder.com in its own window, behind the
+same lab sign-in (section 3); the sign-in is kept between launches.
+
+- **Live stream.** The page in the app holds one `GET /api/events` stream
+  (Server-Sent Events). Every notification of sections 7 and 11 goes to all of that
+  person's open apps, alongside web push, and counts once as unread. Nobody else's
+  notifications reach it. The stream sends a heartbeat every 25 seconds so proxies
+  keep it open; if it closes for good (the sign-in expired), the page reloads.
+- **Native notifications.** The app shows each one with the system's notifications
+  (Notification Center on a Mac, the desktop's notifications on Linux) and sets the
+  unread count on its Dock icon. Opening Nudgebox clears it, as in section 7.
+- **Stays running.** Closing the window keeps the app in the menu bar (Mac) or tray
+  (Linux), so notifications keep coming; Quit there ends it. Notifications arrive
+  only while the app runs.
+- **Settings** (section 14) in the app says notifications are on in the desktop app;
+  there is no Turn on or Turn off. **Send a test** goes to this app only, does not
+  count as unread, and says whether the app received it and whether the system showed
+  it (with the reason if not).
+- **Release.** A tag `app-v<version>` builds the app on GitHub Actions: a `.dmg` for
+  Apple silicon and Intel Macs, and an `.AppImage` and `.deb` for Linux, attached to a
+  GitHub Release. The Mac app is not signed yet: the first open is right-click → Open.

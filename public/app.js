@@ -459,6 +459,7 @@ async function load() {
 // SPEC 7: opening Nudgebox clears the unread count, on this icon and on the server
 function markSeen() {
 	navigator.clearAppBadge?.().catch(() => {});
+	if (desktop) desktop.invoke("set_badge", { count: 0 }).catch(() => {});
 	api("/api/push/seen", {}).catch(() => {});
 }
 
@@ -493,8 +494,40 @@ function b64url(s) {
 let push = { state: "off", reason: "", sub: null, reg: null };
 let swReg = null;
 
+// SPEC 18: inside the Nudgebox desktop app (Tauri), notifications come over a live stream
+// from the server and are shown by the app itself; web push is not used there.
+const desktop = window.__TAURI__?.core?.invoke ? { invoke: window.__TAURI__.core.invoke, client: null } : null;
+
+function openDesktopStream() {
+	if (window.nudgeboxStream && window.nudgeboxStream.readyState !== EventSource.CLOSED) return;
+	const es = (window.nudgeboxStream = new EventSource("/api/events"));
+	es.addEventListener("hello", (e) => (desktop.client = JSON.parse(e.data).client));
+	es.addEventListener("notify", async (e) => {
+		const n = JSON.parse(e.data);
+		let shown = true;
+		try {
+			await desktop.invoke("notify", { title: n.title, body: n.body, url: n.url ?? "/" });
+		} catch (err) {
+			shown = String(err?.message ?? err);
+		}
+		if (typeof n.badge === "number") desktop.invoke("set_badge", { count: n.badge }).catch(() => {});
+		if (n.test) {
+			const report = { shown: shown === true, error: shown === true ? undefined : shown };
+			// the stream can bring the test before Send a test hears back from the server
+			const wait = testWaits.get(n.test);
+			if (wait) wait(report);
+			else earlyTests.set(n.test, report);
+		}
+	});
+	// a closed stream (the lab sign-in expired, or the server restarted): reload, which signs in again
+	es.addEventListener("error", () => es.readyState === EventSource.CLOSED && setTimeout(() => location.reload(), 10_000));
+}
+
 async function refreshPush() {
-	if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+	if (desktop) {
+		push = { state: "on", desktop: true, sub: null, reg: null, reason: "" };
+		openDesktopStream();
+	} else if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
 		push = { state: "unavailable", sub: null, reg: null, reason: isIOS && !standalone
 			? "On iPhone, notifications only work in the Nudgebox app on your Home Screen. In Safari, tap Share, then Add to Home Screen, then open Nudgebox from the Home Screen."
 			: "This browser can't receive notifications. Use Safari or Chrome." };
@@ -547,6 +580,7 @@ async function turnOff() {
 // SPEC 14: Send a test says which part failed, from the service worker's report
 const PUSH_CHECK_MS = window.pushCheckMs ?? 15000;
 const testWaits = new Map(); // test id -> resolve(report)
+const earlyTests = new Map(); // SPEC 18: test id -> report that came before its wait
 navigator.serviceWorker?.addEventListener?.("message", (e) => {
 	if (e.data?.type === "push-received") testWaits.get(e.data.test)?.(e.data);
 });
@@ -564,15 +598,22 @@ function browserName() {
 
 async function sendTest() {
 	setCheck("Sending a test…");
-	const { status, data: d } = await api("/api/push/test", { endpoint: push.sub.endpoint });
+	const { status, data: d } = push.desktop
+		? await api("/api/events/test", { client: desktop.client })
+		: await api("/api/push/test", { endpoint: push.sub.endpoint });
 	if (status !== 200) return setCheck(d.error || `Could not send the test (${status}).`);
-	setCheck("Test sent to the push service. Waiting for this device to receive it…");
+	setCheck(push.desktop ? "Test sent. Waiting for this app to receive it…" : "Test sent to the push service. Waiting for this device to receive it…");
 	const got = await new Promise((resolve) => {
+		if (earlyTests.has(d.id)) return resolve(earlyTests.get(d.id));
 		testWaits.set(d.id, resolve);
 		setTimeout(() => resolve(null), PUSH_CHECK_MS);
 	});
 	testWaits.delete(d.id);
 	const secs = Math.round(PUSH_CHECK_MS / 1000);
+	if (push.desktop) return setCheck(!got
+		? `The app did not receive the test within ${secs} seconds. Check the internet connection, or quit Nudgebox and open it again.`
+		: got.shown ? "This app received the test and asked the system to show it. If no notification appeared, open System Settings → Notifications → Nudgebox (on Linux, your desktop's notification settings), allow notifications, and check Focus or Do Not Disturb."
+		: `This app received the test but could not show it: ${got.error}.`);
 	if (!got) setCheck(`This device did not receive the test within ${secs} seconds. The push service accepted it, so the problem is between the push service and this browser: keep ${browserName()} open and up to date, or turn notifications off and on again here.`);
 	else if (got.shown) setCheck(isIOS
 		? "This device received the test and asked iOS to show it. If no notification appeared, iOS hides it: check Settings → Notifications → Nudgebox, and Focus."
@@ -623,7 +664,7 @@ function renderSettings() {
 	$("#tabs").hidden = true;
 	const t = theme();
 	const p = push;
-	const stateText = { on: "On for this device.", off: "Off on this device.", blocked: p.reason, unavailable: `Not possible here. ${p.reason}` }[p.state];
+	const stateText = p.desktop ? "On in the Nudgebox desktop app. Notifications come while the app runs; closing the window keeps it in the menu bar." : { on: "On for this device.", off: "Off on this device.", blocked: p.reason, unavailable: `Not possible here. ${p.reason}` }[p.state];
 	const since = (iso) => new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 	main.replaceChildren(el("div", { id: "settings-page" },
 		el("div", { class: "set-head" }, el("button", { id: "back", class: "quiet", onclick: goBack }, "← Back"), el("h2", {}, "Settings")),
@@ -637,7 +678,7 @@ function renderSettings() {
 			el("div", { class: "actions" },
 				p.state === "off" ? el("button", { class: "primary", onclick: busy(turnOn) }, "Turn on notifications") : null,
 				p.state === "on" ? el("button", { onclick: busy(sendTest) }, "Send a test") : null,
-				p.state === "on" ? el("button", { onclick: busy(turnOff) }, "Turn off") : null),
+				p.state === "on" && !p.desktop ? el("button", { onclick: busy(turnOff) }, "Turn off") : null),
 			p.state === "on" ? el("p", { id: "push-check", class: "hint", role: "status" }, pushCheck) : null),
 		section("devices", "Your devices with notifications",
 			devices === null ? el("p", { class: "hint" }, "Loading…")

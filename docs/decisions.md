@@ -205,3 +205,24 @@ build needs a Mac), unsigned for now: no Apple Developer ID yet.
 The repository, package and deployment are renamed from gh-dashboard to **nudgebox**,
 the product's name. The address stays gh.bioinfolder.com. The `ghd-*` keys in the
 browser's storage keep their names so nobody loses their saved theme and view.
+
+## 2026-11-06: Guided review
+
+Dr. Jeong finds big PRs hard to review and asked how tools like CodeRabbit use agents.
+He wants a human in the loop with as little tedium as possible. The design: the agent
+prepares (noise hidden, steps in reading order, draft comments), the person decides
+with one key each, and a push only brings back the steps whose files changed.
+
+He chose the **lab LLM** for preparation, with a later **Deep review** button that
+sends one PR to Claude, and running it **inside the Nudgebox server**. The first
+version is the queue with drafts; tool-using context gathering and asking about a step
+come later.
+
+Each draft is checked by a second call that tries to prove it wrong. Tried on PR #28
+with qwen3.8-flash: the first prompts gave 5 drafts, 4 of them speculative ("no error
+handling if the server sends bad data"), and the check kept them. With both prompts
+naming what is not a problem (own data, guesses about unseen code, missing handling
+without a failure) and the check told to answer false when in doubt, the speculative
+ones are dropped. The lab model will rarely find subtle bugs; that is what Deep review
+is for. Planning the steps worked well on the first try (5 steps, sensible order,
+valid JSON, about 7 s).

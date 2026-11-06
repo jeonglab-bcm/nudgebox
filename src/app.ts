@@ -10,7 +10,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { GitHubPort, Issue, NewReviewComment, PullRequest } from "./github.ts";
+import type { ChangedFile, GitHubPort, Issue, NewReviewComment, PullRequest } from "./github.ts";
 import { Store, type LinkedUser } from "./store.ts";
 import { seal, unseal } from "./crypto.ts";
 import { buildInbox, isMine, reviewRequested, type Viewer } from "./inbox.ts";
@@ -20,6 +20,7 @@ import { issuePrompt, prPrompt, SUMMARY_FORMAT } from "./summary.ts";
 import type { Differ, DiffSide } from "./omnidiff.ts";
 import { hasMarkers, planMerge, type ReadFile } from "./conflicts.ts";
 import { EXPLAIN_FORMAT, explainPrompt } from "./explain.ts";
+import { checkPrompt, commentable, noiseReason, numberedChanges, planPrompt, readCheck, readPlan, readReview, REVIEW_FORMAT, reviewPrompt, type Draft, type FileChanges } from "./review.ts";
 
 export interface Config {
 	orgs: string[]; // accounts the GitHub App is installed on
@@ -361,6 +362,8 @@ export function createApp(opts: AppOptions): App {
 			const n = payload.pull_request?.number ?? payload.number;
 			const pr = payload.action === "closed" ? (store.deletePr(repo, n), null) : await refreshPr(repo, n);
 			if (pr && payload.action === "review_requested") await onReviewRequested(pr, payload);
+			// SPEC 19: ready before anyone opens it
+			if (pr && opts.summarize && ["opened", "synchronize", "reopened", "ready_for_review"].includes(payload.action)) startPrep(pr);
 		} else if (event === "pull_request_review" || event === "pull_request_review_comment") {
 			await refreshPr(repo, payload.pull_request.number);
 		} else if (event === "issue_comment" && payload.issue?.pull_request) {
@@ -706,6 +709,171 @@ export function createApp(opts: AppOptions): App {
 		return { run: modelRun(key, version, async () => explainPrompt(path, title, before, after, d.result)) };
 	}
 
+	// -- guided review (SPEC 19) -------------------------------------------------------
+
+	type PrepFile = FileChanges & { fp: string };
+	type PrepDraft = Draft & { id: string };
+	type PrepStep = { id: string; title: string; summary: string; files: string[]; fps: { path: string; fp: string }[]; drafts: PrepDraft[] };
+	type Prep = { head: string; ai: boolean; summary: string; noise: { path: string; why: string }[]; steps: PrepStep[] };
+	// one preparation per PR head commit at a time; a failure is kept (in memory) until retried
+	const preparing = new Map<string, { state: "preparing" | "failed"; error?: string; done: Promise<void> }>();
+	const prepWork = new Set<Promise<void>>(); // waited for by idle()
+	const short16 = (s: string) => createHash("sha256").update(s).digest("hex").slice(0, 16);
+	const prepKey = (pr: PullRequest) => `${pr.repo.toLowerCase()}#${pr.number}@${pr.headSha}|${REVIEW_FORMAT}`;
+	const prKey = (pr: { repo: string; number: number }) => `${pr.repo.toLowerCase()}#${pr.number}`;
+
+	/** The PR `lab` asks about, if they can see it. */
+	async function reviewTarget(lab: string, repo: unknown, number: unknown): Promise<PullRequest> {
+		const { repos } = await viewOf(linked(lab));
+		const pr = typeof repo === "string" && Number.isInteger(number) ? store.pr(repo, number as number) : undefined;
+		if (!pr || !repos.has(pr.repo.toLowerCase())) throw new HttpError(404, "no such pull request");
+		return pr;
+	}
+
+	/** Starts preparing `pr`'s guided review unless it is kept or under way. */
+	function startPrep(pr: PullRequest) {
+		const key = prepKey(pr);
+		if (store.reviewPrep(key) !== undefined || preparing.get(key)?.state === "preparing") return;
+		const entry: { state: "preparing" | "failed"; error?: string; done: Promise<void> } = { state: "preparing", done: Promise.resolve() };
+		entry.done = (async () => {
+			try {
+				store.saveReviewPrep(key, await prepare(pr), opts.now().toISOString());
+				preparing.delete(key);
+			} catch (e) {
+				entry.state = "failed";
+				entry.error = (e as Error).message;
+				log(`guided review of ${pr.repo}#${pr.number} failed: ${entry.error}`);
+			}
+		})();
+		preparing.set(key, entry);
+		prepWork.add(entry.done);
+		entry.done.finally(() => prepWork.delete(entry.done));
+	}
+
+	/** SPEC 19: noise, steps in reading order, and checked drafts for one head commit. */
+	async function prepare(pr: PullRequest): Promise<Prep> {
+		const set = await github.prFiles(pr.repo, pr.number);
+		if (!set) throw new Error("the pull request is gone");
+		const files: (PrepFile & { why: string | null; file: ChangedFile })[] = [];
+		for (const f of set.files) {
+			const before = f.status === "added" ? null : { repo: pr.repo, ref: set.base, path: f.previous ?? f.path };
+			const after = f.status === "removed" ? null : { repo: pr.repo, ref: set.head, path: f.path };
+			let d: any = null;
+			if (opts.diff) d = await diffOf([before, after]).catch(() => null);
+			const text = (x: { text?: unknown } | null | undefined) => (x === null ? null : typeof x?.text === "string" ? x.text : undefined);
+			const [bt, at] = [text(d?.before), text(d?.after)];
+			const readable = d && !d.skipped && bt !== undefined && at !== undefined;
+			files.push({
+				path: f.path, status: f.status, additions: f.additions, deletions: f.deletions, file: f,
+				text: readable ? numberedChanges(bt, at, d.result) : null,
+				fp: `${f.path}|${short16(String(bt ?? d?.before?.size ?? ""))}|${short16(String(at ?? d?.after?.size ?? ""))}|${f.status}`,
+				why: noiseReason(f.path, d?.result?.summary),
+			});
+		}
+		const noise = files.filter((f) => f.why).map((f) => ({ path: f.path, why: f.why! }));
+		const rest = files.filter((f) => !f.why);
+		const byPath = new Map(rest.map((f) => [f.path, f]));
+		const llm = opts.summarize;
+		const step = (title: string, summary: string, paths: string[], drafts: PrepDraft[] = []): PrepStep => {
+			const fps = paths.map((p) => ({ path: p, fp: byPath.get(p)!.fp }));
+			return { id: short16(fps.map((x) => x.fp).sort().join("\n")), title, summary, files: paths, fps, drafts };
+		};
+		const onePerFile = () => [...byPath.keys()].sort().map((p) => ({ title: p, summary: "", files: [p] }));
+		if (!llm) return { head: pr.headSha, ai: false, summary: "", noise, steps: onePerFile().map((s) => step(s.title, s.summary, s.files)) };
+
+		const ask = async (p: Prompt) => {
+			try {
+				return await llm(p);
+			} catch (e) {
+				throw new Error(`LLM failed: ${(e as Error).message}`);
+			}
+		};
+		const plan = rest.length ? readPlan(await ask(planPrompt(pr, rest)), [...byPath.keys()]) : { summary: "", steps: [] };
+		const dropped = store.learnings(pr.repo);
+		const steps: PrepStep[] = [];
+		for (const s of plan?.steps ?? onePerFile()) {
+			const mine = s.files.map((p) => byPath.get(p)!);
+			const r = readReview(await ask(reviewPrompt(pr, s, mine, dropped)));
+			const drafts: PrepDraft[] = [];
+			for (const d of r.drafts) {
+				const f = byPath.get(d.path);
+				if (!f || !s.files.includes(d.path) || !commentable(d, f.file)) continue;
+				const id = short16(`${d.path}|${d.side}|${d.line}|${d.body}`);
+				if (drafts.some((x) => x.id === id)) continue;
+				if (readCheck(await ask(checkPrompt(pr, d, f)))) drafts.push({ ...d, id });
+			}
+			steps.push(step(s.title, s.summary || r.summary, s.files, drafts));
+		}
+		return { head: pr.headSha, ai: true, summary: plan?.summary ?? "", noise, steps };
+	}
+
+	/** One person's view of a prepared review: what they marked reviewed and did with each draft. */
+	function reviewView(prep: Prep, lab: string, pr: PullRequest) {
+		const marks = store.reviewMarks(lab, prKey(pr));
+		const fps = new Set(marks.map((m) => m.fp));
+		const paths = new Set(marks.map((m) => m.path));
+		const states = store.draftStates(lab, prKey(pr));
+		const steps = prep.steps.map((s) => {
+			const reviewed = s.fps.every((f) => fps.has(f.fp));
+			return {
+				id: s.id, title: s.title, summary: s.summary, files: s.files, reviewed,
+				changed: !reviewed && s.files.some((p) => paths.has(p)), // you reviewed an older version
+				drafts: s.drafts.map((d) => ({ ...d, state: states.get(d.id) ?? "open" })),
+			};
+		});
+		return {
+			state: "ready", head: prep.head, ai: prep.ai, summary: prep.summary, noise: prep.noise, steps,
+			changedSinceReview: steps.filter((s) => s.changed).length,
+			...(prep.ai ? {} : { note: "No AI is set up here: one step per file, and no draft comments." }),
+		};
+	}
+
+	async function reviewGet(lab: string, repo: string | null, number: number) {
+		const pr = await reviewTarget(lab, repo, number);
+		const prep = store.reviewPrep(prepKey(pr)) as Prep | undefined;
+		if (prep) return reviewView(prep, lab, pr);
+		const run = preparing.get(prepKey(pr));
+		if (run?.state === "failed") return { state: "failed", error: run.error };
+		startPrep(pr);
+		return { state: "preparing" };
+	}
+
+	async function reviewPost(req: IncomingMessage, lab: string, what: string) {
+		const b = await json(req);
+		const pr = await reviewTarget(lab, b.repo, b.number);
+		if (what === "prepare") {
+			const key = prepKey(pr);
+			if (preparing.get(key)?.state === "failed") preparing.delete(key);
+			startPrep(pr);
+			return { ok: true };
+		}
+		const prep = store.reviewPrep(prepKey(pr)) as Prep | undefined;
+		if (!prep) throw new HttpError(409, "the guided review is not ready yet");
+		if (what === "step") {
+			const s = prep.steps.find((x) => x.id === b.step);
+			if (!s) throw new HttpError(404, "no such step");
+			if (typeof b.reviewed !== "boolean") throw new HttpError(400, "reviewed must be true or false");
+			store.setReviewMarks(lab, prKey(pr), s.fps, b.reviewed);
+			return { ok: true };
+		}
+		if (what === "draft") {
+			if (b.action !== "keep" && b.action !== "drop") throw new HttpError(400, "action must be keep or drop");
+			const d = prep.steps.flatMap((s) => s.drafts).find((x) => x.id === b.draft);
+			if (!d) throw new HttpError(404, "no such draft");
+			if (b.action === "drop") {
+				store.setDraftState(lab, prKey(pr), d.id, "dropped");
+				store.addLearning(pr.repo, d.body, opts.now().toISOString());
+				return { ok: true };
+			}
+			const body = b.body === undefined ? d.body : typeof b.body === "string" && b.body.trim() ? b.body.trim() : bad("the comment is empty");
+			const u = linked(lab);
+			await github.addReviewComment(await tokenFor(u), pr.repo, pr.number, { mode: "review", path: d.path, body, subject: "line", line: d.line, side: d.side }).catch(fromGitHub);
+			store.setDraftState(lab, prKey(pr), d.id, "kept");
+			return { ok: true };
+		}
+		throw new HttpError(404, "not found");
+	}
+
 	/** Summarize as one JSON answer. */
 	/**
 	 * SPEC 15: a file's bytes for the page to draw (a picture or a PDF). The type comes from
@@ -905,6 +1073,12 @@ export function createApp(opts: AppOptions): App {
 		if (method === "POST" && path === "/api/diff") {
 			return send(res, 200, await diffFiles(req, lab));
 		}
+		if (method === "GET" && path === "/api/review") { // SPEC 19
+			return send(res, 200, await reviewGet(lab, url.searchParams.get("repo"), Number(url.searchParams.get("number"))));
+		}
+		if (method === "POST" && path.startsWith("/api/review/")) {
+			return send(res, 200, await reviewPost(req, lab, path.slice("/api/review/".length)));
+		}
 		if (method === "POST" && path === "/api/explain") { // SPEC 17
 			const s = await explainFor(req, lab);
 			if (String(req.headers.accept ?? "").includes("text/event-stream")) return streamRun(res, s, "explanation");
@@ -1017,7 +1191,8 @@ export function createApp(opts: AppOptions): App {
 			do {
 				seen = work;
 				await seen;
-			} while (seen !== work);
+				await Promise.all([...prepWork]); // SPEC 19 preparations run beside the queue
+			} while (seen !== work || prepWork.size);
 		},
 		close: async () => {
 			for (const a of [...streams.values()]) a.end();

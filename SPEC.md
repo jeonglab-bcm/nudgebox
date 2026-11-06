@@ -214,6 +214,8 @@ stack of cards.
   A key that does not apply (approving your own PR, re-running with no failed checks)
   does nothing to GitHub and says why. A hint line with the main keys sits at the
   bottom on computers, not on phones.
+- **Icon** (browser tab, Home Screen, notifications): the triage list, three rows with
+  the top one marked by the coral dot (Dr. Jeong, 2026-11-06).
 - **Look:** "bold minimal": monochrome with one coral accent for what needs you, the
   tab counts as large numerals, light by default with a dark version that follows the
   system setting (Settings can fix either, section 14). Fonts are served by Nudgebox,
@@ -262,7 +264,11 @@ release run on the server) from the file's two whole versions:
   (after), changed (both), and **moved** code marked as moved, with the line it moved
   to or from. Unchanged lines more than 3 lines from a change fold into "N unchanged
   lines".
-- **Before and after** side by side on a computer, one above the other on a phone.
+- **Before and after** side by side on a computer. **On a phone, one unified column**
+  (Dr. Jeong, 2026-11-06): unchanged lines once, each run of removed lines (red, old line
+  number) directly above the lines that replace it (green, new line number), with
+  omnidiff's marks inside the lines. A rendered Markdown file and a binary file keep
+  their own views.
 - A note when omnidiff names the shape of the change: only whitespace, only comments,
   only moved code, a new file, a deleted file.
 - Text files over 1 MB are not diffed; the view says so and links to GitHub.
@@ -371,7 +377,9 @@ log on GitHub). **Re-run failed jobs** when some failed (section 6).
 binary diffs, Pick), plus GitHub's review tools:
 
 - **Line comments.** A line GitHub can take a comment on (a line inside the PR's diff
-  hunks, as on GitHub) shows **+** by its number; other lines do not. **+** opens a box
+  hunks, as on GitHub) shows **+** by its number on a computer; on a phone its line
+  number is tappable (underlined) instead, and tapping it does the same. Other lines
+  take no comment. **+** opens a box
   with **Add single comment** (posted now) and **Start a review** (or **Add review
   comment** once one is started), which adds it to your **pending review** on GitHub,
   seen by no one else until submitted. A line on the before side comments on the old
@@ -385,6 +393,9 @@ binary diffs, Pick), plus GitHub's review tools:
   summary, then **Comment**, **Approve** or **Request changes**, and **Submit review**.
   Approve and Request changes are not offered on your own PR. **Cancel review** drops
   your pending review and its comments, after asking.
+
+**On a phone** the open file's row stays at the top of the screen while its diff
+scrolls, and the page header scrolls away.
 
 **Resolving conflicts** (`#pr/<owner>/<repo>/<number>/conflicts`), like GitHub's
 conflict editor:
@@ -407,3 +418,24 @@ conflict editor:
 
 **Fresh.** After each action the page reads the PR again; it also does when the
 window comes back to the front.
+
+## 17. Explain a file's diff
+
+An **Explain** button on each file's diff (Dr. Jeong, 2026-11-06), above the diff, on a
+computer and a phone. It works wherever a text diff is shown: Files changed, a commit,
+and Compare.
+
+- The explanation is made by the lab's LLM, as the AI summary is (section 12). Without
+  an LLM the button is not shown.
+- What the model reads: the file's path, the PR's title when there is a PR, and the
+  file's changes: each changed run of lines, old and new, with 3 unchanged lines around
+  it, cut to a fixed size. Nudgebox reads both versions of the file from GitHub itself;
+  the page only names the repo, the two versions and the path. Only for repos you can
+  see (section 4). Not for binary files.
+- What it writes: 2 to 4 sentences in ASD-STE100 Simplified Technical English: what
+  the file's changes do, and their effect. Plain text with `code` names, shown above the
+  diff.
+- Streamed as it is written, like the summary. An explanation is kept per file version
+  pair (they never change), shared by everyone who can see it; asking again shows the
+  kept one. If the LLM fails, the error is shown and nothing is kept.
+- The file's text is data, never instructions to the model.

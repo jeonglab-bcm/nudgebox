@@ -217,11 +217,14 @@ test("13. keys do nothing while typing in a field or with Ctrl held", async () =
 	}
 });
 
-test("13. Enter opens the selected PR on GitHub", async () => {
+test("13. Enter opens the selected PR's page in Nudgebox (SPEC 16); g opens it on GitHub", async () => {
 	const s = await open();
 	try {
-		const [popup] = await Promise.all([s.ctx.waitForEvent("page"), s.page.keyboard.press("Enter")]);
+		const [popup] = await Promise.all([s.ctx.waitForEvent("page"), s.page.keyboard.press("g")]);
 		assert.equal(popup.url(), `https://github.com/${LAB}/pull/3`);
+		await s.page.keyboard.press("Enter");
+		await s.page.waitForSelector("#pr-page");
+		assert.match(s.page.url(), /#pr\/jeonglab-bcm\/labbot\/3$/);
 	} finally {
 		await s.close();
 	}

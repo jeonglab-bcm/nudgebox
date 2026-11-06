@@ -179,7 +179,8 @@ async function summarize(kind, item) {
 
 // what each key does to the selected item; returns a reason when it does not apply
 const ACTIONS = {
-	open: (x) => { window.open(x.url, "_blank", "noopener"); },
+	open: (x, k) => (k === "pr" ? void (location.hash = `#pr/${x.repo}/${x.number}`) : void window.open(x.url, "_blank", "noopener")), // SPEC 16
+	github: (x) => { window.open(x.url, "_blank", "noopener"); },
 	approve: (x, k) => (k !== "pr" ? "Issues cannot be approved" : x.author.toLowerCase() === data.login.toLowerCase() ? "You cannot approve your own PR" : doAction(x, "approve")),
 	merge: (x, k) => (k !== "pr" ? "Issues cannot be merged" : confirm(`Merge ${keyOf(x)}?\n\n${x.title}`) ? doAction(x, "merge", { confirm: true }) : null),
 	rerun: (x, k) => (k !== "pr" || x.checks !== "failure" ? "No failed checks to re-run" : doAction(x, "rerun")),
@@ -189,7 +190,7 @@ const ACTIONS = {
 		if (b && b.trim()) await doAction(x, "comment", { body: b });
 	},
 	summarize: (x, k) => (data[k]?.summarize ? summarize(k, x) : "Summaries are not set up"),
-	files: (x, k) => (k !== "pr" ? "Files are for pull requests" : void (location.hash = `#files/${x.repo}/${x.number}`)),
+	files: (x, k) => (k !== "pr" ? "Files are for pull requests" : void (location.hash = `#pr/${x.repo}/${x.number}/files`)),
 	hide: (x, k, hidden) => {
 		// hiding the selected row hands the selection to the next live row (or the one above)
 		const i = shown.findIndex((r) => r.key === view.sel);
@@ -200,7 +201,7 @@ const ACTIONS = {
 		return setHidden(k, x, !hidden);
 	},
 };
-const KEYS = { f: "files", Enter: "open", o: "open", a: "approve", m: "merge", r: "rerun", c: "comment", s: "summarize", h: "hide" };
+const KEYS = { f: "files", Enter: "open", o: "open", g: "github", a: "approve", m: "merge", r: "rerun", c: "comment", s: "summarize", h: "hide" };
 
 async function act(name, entry = selected()) {
 	if (!entry) return;
@@ -277,7 +278,8 @@ function row(entry) {
 	el("div", { class: "line" },
 		el("span", { class: "mark", "aria-hidden": "true" }),
 		el("span", { class: "ref" }, x.repo.split("/")[1], el("span", { class: "num" }, `#${x.number}`)),
-		el("a", { class: "title", href: x.url, target: "_blank", rel: "noopener", tabindex: "-1" }, x.title),
+		kind === "pr" ? el("a", { class: "title", href: `#pr/${x.repo}/${x.number}`, tabindex: "-1" }, x.title) // SPEC 16: the PR page
+			: el("a", { class: "title", href: x.url, target: "_blank", rel: "noopener", tabindex: "-1" }, x.title),
 		...(kind === "pr" ? prLine(x) : issueLine(x)),
 		el("span", { class: "age", title: `updated ${new Date(x.updatedAt).toLocaleString()}` }, age(x.updatedAt)),
 		el("span", { class: "who" }, x.author)),
@@ -315,7 +317,12 @@ function render() {
 
 function renderPage() {
 	if (onCompare()) return renderCompare();
-	if (onFiles()) return renderFiles();
+	if (onFiles()) { // SPEC 16: the old Files address is the PR page's Files changed tab
+		const t = filesTarget();
+		history.replaceState(null, "", t ? `#pr/${t.repo}/${t.number}/files` : location.pathname + location.search);
+		return renderPage();
+	}
+	if (onPr()) return renderPr();
 	document.body.classList.remove("files");
 	if (onSettings()) {
 		if (devices === null) loadDevices();
@@ -372,7 +379,11 @@ document.addEventListener("keydown", (e) => {
 		if (e.key === "Escape") t.blur();
 		return;
 	}
-	if (onFiles() || onCompare()) { // SPEC 15
+	if (onPr()) { // SPEC 16
+		if (e.key === "Escape") prEscape();
+		return;
+	}
+	if (onCompare()) { // SPEC 15
 		if (e.key === "Escape") goBack();
 		return;
 	}
@@ -655,7 +666,7 @@ function openSettings(part) {
 
 // -- files and diffs (SPEC 15) --------------------------------------------------------
 const onFiles = () => location.hash.startsWith("#files/");
-let files = { key: null, data: null, error: null, open: new Set(), diffs: new Map(), mdMode: new Map() };
+let files = fileSet(null); // the open PR's Files changed
 const STATUS = { added: "A", removed: "D", modified: "M", renamed: "R", copied: "C", changed: "M", unchanged: "·" };
 const NOTE = {
 	whitespace_only: "Only whitespace changed.", comment_only: "Only comments changed.", refactor_moved_only: "Only moved code: nothing else changed.",
@@ -667,26 +678,33 @@ function filesTarget() {
 	return m && { repo: decodeURIComponent(m[1]), number: Number(m[2]) };
 }
 
-async function loadFiles(key, t) {
-	const { status, data: d } = await api(`/api/prs/files?repo=${encodeURIComponent(t.repo)}&number=${t.number}`);
-	if (files.key !== key) return;
-	if (status === 200) files.data = d;
-	else files.error = d.error || `Could not load the files (${status})`;
+// a list of changed files (a PR's or a commit's): `data` from the server, which are open,
+// their diffs and Markdown modes
+function fileSet(key) {
+	return { key, data: null, error: null, open: new Set(), diffs: new Map(), mdMode: new Map() };
+}
+
+async function loadFileSet(st, url) {
+	const { status, data: d } = await api(url);
+	if (status === 200) st.data = d;
+	else st.error = d.error || `Could not load the files (${status})`;
 	render();
 }
 
-async function loadDiff(f) {
-	const { repo } = filesTarget();
-	const d = files.data;
+async function loadDiff(st, repo, f) {
+	const d = st.data;
 	const before = f.status === "added" ? null : { repo, ref: d.base, path: f.previous ?? f.path };
 	const after = f.status === "removed" ? null : { repo, ref: d.head, path: f.path };
 	const { status, data: r } = await api("/api/diff", { before, after });
-	files.diffs.set(f.path, status === 200 ? r : { error: r.error || `Could not diff (${status})` });
+	st.diffs.set(f.path, status === 200 ? r : { error: r.error || `Could not diff (${status})` });
 	render();
 }
 
-// one side of a diff: changed lines with 3 lines of context, the rest folded
-function pane(side, ref, text, hunks, label) {
+const inRanges = (ranges, n) => (ranges ?? []).some(([a, b]) => n >= a && n <= b);
+
+// one side of a diff: changed lines with 3 lines of context, the rest folded. `review`
+// (SPEC 16): + on lines GitHub takes a comment on, threads under their line, the open form
+function pane(side, ref, text, hunks, label, review) {
 	const lines = text.split("\n");
 	if (text.endsWith("\n")) lines.pop();
 	const marks = lines.map(() => []);
@@ -705,6 +723,15 @@ function pane(side, ref, text, hunks, label) {
 	marks.forEach((m, row) => {
 		if (m.length) for (let r = Math.max(0, row - 3); r <= Math.min(lines.length - 1, row + 3); r++) show[r] = true;
 	});
+	const sideKey = side === "before" ? "LEFT" : "RIGHT";
+	const threadsAt = new Map();
+	for (const th of review?.threads ?? []) {
+		if (th.side !== sideKey || !th.line || th.line > lines.length) continue;
+		threadsAt.set(th.line, [...(threadsAt.get(th.line) ?? []), th]);
+		show[th.line - 1] = true;
+	}
+	const form = review?.form?.subject === "line" && review.form.path === review.path && review.form.side === sideKey ? review.form : null;
+	if (form && form.line <= lines.length) show[form.line - 1] = true;
 	const out = [];
 	let hidden = 0;
 	const fold = () => {
@@ -723,7 +750,13 @@ function pane(side, ref, text, hunks, label) {
 			at = m.end;
 		}
 		if (at < line.length) parts.push(line.slice(at));
-		out.push(el("div", { class: `code-line${marks[row].length ? " changed" : ""}` }, el("span", { class: "ln" }, row + 1), el("span", { class: "code" }, parts)));
+		const n = row + 1;
+		const add = review && inRanges(review.commentable?.[sideKey === "LEFT" ? "left" : "right"], n)
+			? el("button", { class: "add-comment", "aria-label": `Comment on line ${n}`, title: "Comment on this line",
+				onclick: (e) => { e.stopPropagation(); review.onAdd(sideKey, n); } }, "+") : null;
+		out.push(el("div", { class: `code-line${marks[row].length ? " changed" : ""}` }, add, el("span", { class: "ln" }, n), el("span", { class: "code" }, parts)));
+		for (const th of threadsAt.get(n) ?? []) out.push(threadView(th, "files"));
+		if (form && form.line === n) out.push(commentForm(form));
 	});
 	fold();
 	return el("section", { class: `pane ${side}` },
@@ -795,7 +828,7 @@ function mdPane(side, ref, text, hunks, lib, label) {
 }
 
 // `github`: where to see it instead; `modes`: rendered/plain per path; `labels`: pane titles
-function diffView(f, r, github, modes = files.mdMode, labels = {}) {
+function diffView(f, r, github, modes = files.mdMode, labels = {}, review = null) {
 	if (!r) return el("div", { class: "diff" }, el("p", { class: "pending" }, "Diffing…"));
 	if (r.error) return el("div", { class: "diff" }, el("p", { class: "note" }, r.error));
 	const link = el("a", { href: github, target: "_blank", rel: "noopener" }, "See it on GitHub");
@@ -808,54 +841,54 @@ function diffView(f, r, github, modes = files.mdMode, labels = {}) {
 	const choose = (mode) => (e) => { e.stopPropagation(); modes.set(f.path, mode); render(); };
 	const side = (name) => r[name] && (rendered
 		? mdPane(name, r[name].ref, r[name].text, r.result[name].hunks, lib, labels[name])
-		: pane(name, r[name].ref, r[name].text, r.result[name].hunks, labels[name]));
+		: pane(name, r[name].ref, r[name].text, r.result[name].hunks, labels[name], review));
 	return el("div", { class: "diff" },
 		md ? el("div", { class: "md-switch seg", role: "group", "aria-label": "Show" },
 			el("button", { "aria-pressed": String(rendered), class: rendered ? "on" : "", onclick: choose("rendered") }, "Rendered"),
 			el("button", { "aria-pressed": String(!rendered), class: rendered ? "" : "on", onclick: choose("plain") }, "Plain diff")) : null,
 		note ? el("p", { class: "note" }, note) : null,
+		rendered && review && (review.threads.length || review.commentable) ? el("p", { class: "note" }, "Line comments are on the Plain diff.") : null,
 		rendered && !lib ? el("p", { class: "pending" }, "Rendering…")
 			: el("div", { class: "panes" }, side("before"), side("after")));
 }
 
-function renderFiles() {
-	document.body.classList.add("files");
-	document.body.classList.remove("settings");
-	$("#tabs").hidden = true;
-	const t = filesTarget();
-	if (!t) return goBack();
-	const key = `${t.repo}#${t.number}`;
-	if (files.key !== key) {
-		files = { key, data: null, error: null, open: new Set(), diffs: new Map(), mdMode: new Map() };
-		loadFiles(key, t);
-	}
-	const pr = data.pr && [...data.pr.sections.flatMap((s) => s.prs), ...data.pr.old, ...data.pr.hidden].find((p) => p.repo === t.repo && p.number === t.number);
-	const prUrl = pr?.url ?? `https://github.com/${t.repo}/pull/${t.number}`;
-	const list = files.data ? el("ul", { class: "files" }, files.data.files.flatMap((f) => {
-		const isOpen = files.open.has(f.path);
-		const row = el("li", { class: `file${isOpen ? " open" : ""}`, role: "button", tabindex: "0", "aria-expanded": String(isOpen) },
+// the rows of a file list, each opening its diff. `opts` (SPEC 16, the PR's Files changed):
+// viewed ticks, line comments and threads; `labels` names the two panes
+function fileList(st, repo, github, opts = {}) {
+	return el("ul", { class: "files" }, st.data.files.flatMap((f) => {
+		const isOpen = st.open.has(f.path);
+		const viewed = opts.viewed?.[f.path] === "VIEWED";
+		const stop = (e) => e.stopPropagation();
+		const tools = el("span", { class: "tools" },
+			opts.pick ? pickButton(opts.pick(f)) : null,
+			opts.onComment ? el("button", { class: "quiet file-comment", "aria-label": "Comment on file", title: "Comment on file", onclick: (e) => { stop(e); opts.onComment(f); } },
+				el("span", { class: "long" }, "Comment on file"), el("span", { class: "short", "aria-hidden": "true" }, "💬")) : null,
+			opts.onViewed ? (() => {
+				const box = el("input", { type: "checkbox", class: "viewed", checked: viewed });
+				box.addEventListener("change", () => opts.onViewed(f, box.checked));
+				const lab = el("label", { class: `viewed-box${viewed ? " on" : ""}` }, box, "Viewed");
+				lab.addEventListener("click", stop);
+				return lab;
+			})() : null);
+		const row = el("li", { class: `file${isOpen ? " open" : ""}${viewed ? " is-viewed" : ""}`, role: "button", tabindex: "0", "aria-expanded": String(isOpen) },
 			el("span", { class: `status s-${f.status}`, title: f.status }, STATUS[f.status] ?? "?"),
 			el("span", { class: "path", title: f.previous ? `renamed from ${f.previous}` : null }, f.path),
 			el("span", { class: "counts" }, el("span", { class: "add" }, `+${f.additions}`), " ", el("span", { class: "del" }, `−${f.deletions}`)),
-			pickButton(pickOf(t, f, files.data)));
+			tools);
 		const toggle = () => {
-			if (isOpen) files.open.delete(f.path);
+			if (isOpen) st.open.delete(f.path);
 			else {
-				files.open.add(f.path);
-				if (!files.diffs.has(f.path)) { files.diffs.set(f.path, null); loadDiff(f); }
+				st.open.add(f.path);
+				if (!st.diffs.has(f.path)) { st.diffs.set(f.path, null); loadDiff(st, repo, f); }
 			}
 			render();
 		};
 		row.addEventListener("click", toggle);
-		row.addEventListener("keydown", (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle()));
-		return [row, isOpen ? el("li", { class: "file-diff" }, diffView(f, files.diffs.get(f.path), `${prUrl}/files`)) : null];
-	})) : el("p", { class: "hint" }, files.error ?? "Loading the files…");
-	main.replaceChildren(el("div", { id: "files-page" },
-		el("div", { class: "set-head" }, el("button", { id: "back", class: "quiet", onclick: goBack }, "← Back"),
-			el("h2", {}, `${t.repo.split("/")[1]}#${t.number}`)),
-		pr ? el("p", { class: "pr-title" }, el("a", { href: prUrl, target: "_blank", rel: "noopener" }, pr.title)) : null,
-		files.data ? el("p", { class: "hint" }, `${files.data.files.length} changed file${files.data.files.length === 1 ? "" : "s"}, compared with where the branch left its base.`) : null,
-		list));
+		row.addEventListener("keydown", (e) => e.target === row && (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle()));
+		const extra = opts.extra?.(f) ?? null; // a file comment form, outdated threads
+		const review = opts.review?.(f) ?? null;
+		return [row, extra, isOpen ? el("li", { class: "file-diff" }, diffView(f, st.diffs.get(f.path), github, st.mdMode, opts.labels, review)) : null];
+	}));
 }
 
 // -- binary files (SPEC 15): pictures, and containers such as archives and PDFs ---------
@@ -1096,10 +1129,595 @@ function renderCompare() {
 		diffView({ path: b.path }, cmp.result, `https://github.com/${b.repo}/blob/${b.ref}/${b.path}`, cmp.modes, { before: pickLabel(a), after: pickLabel(b) })));
 }
 
+// -- the PR page (SPEC 16) -------------------------------------------------------------
+// GitHub's PR page, with omnidiff for every diff: Conversation, Commits, Checks, Files
+// changed, the sidebar, the merge box and resolving conflicts. Everything acts as the
+// person through /api/prs/<action>, then reads the PR again.
+const PR_ROUTE = /^#pr\/([^/]+\/[^/]+)\/(\d+)(?:\/(commits|checks|files|conflicts)(?:\/([\w.-]+))?)?$/;
+const onPr = () => PR_ROUTE.test(location.hash);
+function prTarget() {
+	const m = location.hash.match(PR_ROUTE);
+	return m && { repo: decodeURIComponent(m[1]), number: Number(m[2]), tab: m[3] ?? "conversation", sha: m[4] ?? null };
+}
+const prHash = (t, tab = "") => `#pr/${t.repo}/${t.number}${tab ? `/${tab}` : ""}`;
+
+const freshPr = (key) => ({
+	key, page: null, error: null, login: "", options: null, picker: null, mergeMenu: false, confirming: false, form: null, reviewOpen: false,
+	commits: null, commitsError: null, commit: null, conflicts: null,
+});
+let prv = freshPr(null);
+// text being written (comments, replies, the review), by box; survives re-renders
+const drafts = new Map();
+
+async function loadPr() {
+	const t = prTarget();
+	if (!t) return;
+	const key = `${t.repo}#${t.number}`;
+	const { status, data: d } = await api(`/api/pr?repo=${encodeURIComponent(t.repo)}&number=${t.number}`);
+	if (prv.key !== key) return;
+	if (status === 200) Object.assign(prv, { page: d.page, login: d.login, error: null });
+	else prv.error = d.error || `Could not load the pull request (${status})`;
+	render();
+}
+
+async function loadOptions() {
+	const t = prTarget();
+	const { status, data: d } = await api(`/api/repo/options?repo=${encodeURIComponent(t.repo)}`);
+	if (status === 200) prv.options = d;
+	else toast(d.error || `Could not load the choices (${status})`);
+	render();
+}
+
+/** One button on the page: POST as the person, say how it went, read the PR again. */
+async function prPost(action, body = {}, done) {
+	const t = prTarget();
+	const { status, data: d } = await api(`/api/prs/${action}`, { repo: t.repo, number: t.number, ...body });
+	if (status !== 200) {
+		toast(d.error || `Failed (${status})`);
+		return false;
+	}
+	if (done) toast(done);
+	loadPr();
+	return true;
+}
+
+function prEscape() {
+	const t = prTarget();
+	if (prv.picker || prv.mergeMenu || prv.confirming || prv.form || prv.reviewOpen) {
+		Object.assign(prv, { picker: null, mergeMenu: false, confirming: false, form: null, reviewOpen: false });
+		return render();
+	}
+	if (t.tab === "commits" && t.sha) return void (location.hash = prHash(t, "commits"));
+	if (t.tab === "conflicts") return void (location.hash = prHash(t));
+	goBack();
+}
+
+// -- text: Markdown from GitHub, cleaned; boxes that keep what is typed
+
+function md(body, cls = "comment-body") {
+	const d = el("div", { class: `${cls} md-body` });
+	const lib = loadMd();
+	if (!body?.trim()) d.append(el("p", { class: "hint" }, "No description provided."));
+	else if (lib) d.innerHTML = lib.purify.sanitize(lib.marked.parse(body, { gfm: true, breaks: true })); // cleaned: no scripts or handlers
+	else d.textContent = body;
+	return d;
+}
+
+function draftBox(key, placeholder, attrs = {}) {
+	const t = el("textarea", { "data-draft": key, placeholder, rows: "3", ...attrs });
+	t.value = drafts.get(key) ?? "";
+	t.addEventListener("input", () => drafts.set(key, t.value));
+	return t;
+}
+
+const when = (iso) => el("time", { datetime: iso, title: new Date(iso).toLocaleString() }, `${age(iso)} ago`);
+
+// -- threads and line comments
+
+function hunkView(h) {
+	const lines = h.split("\n").filter((l) => !l.startsWith("@@")).slice(-6);
+	return el("pre", { class: "hunk" }, lines.map((l) => el("div", { class: l[0] === "+" ? "h-add" : l[0] === "-" ? "h-del" : "" }, l)));
+}
+
+function threadView(th, where) {
+	const key = `reply:${th.id}`;
+	const reply = async () => {
+		const b = (drafts.get(key) ?? "").trim();
+		if (!b) return toast("Write a reply first");
+		if (await prPost("reply", { thread: th.id, body: b }, "Reply posted")) drafts.delete(key), render();
+	};
+	const body = [
+		el("div", { class: "thread-head" }, el("span", { class: "thread-path" }, th.path),
+			th.line ? el("span", { class: "thread-line" }, `line ${th.line}`) : null,
+			th.outdated ? el("span", { class: "flag" }, "Outdated") : null,
+			th.resolved ? el("span", { class: "flag" }, "Resolved") : null),
+		where === "conversation" && th.diffHunk ? hunkView(th.diffHunk) : null,
+		...th.comments.map((c) => el("div", { class: "thread-comment" },
+			el("div", { class: "c-head" }, el("b", {}, c.author), " ", when(c.at), c.pending ? el("span", { class: "flag pending" }, "Pending") : null),
+			md(c.body))),
+		el("div", { class: "thread-reply" }, draftBox(key, "Reply…", { class: "reply", rows: "2" }),
+			el("div", { class: "btns" },
+				el("button", { onclick: busy(reply) }, "Reply"),
+				el("button", { class: "quiet", onclick: busy(() => prPost("resolve-thread", { thread: th.id, resolved: !th.resolved }, th.resolved ? "Unresolved" : "Resolved")) },
+					th.resolved ? "Unresolve conversation" : "Resolve conversation"))),
+	];
+	if (th.resolved && where === "conversation") return el("details", { class: "thread resolved" }, el("summary", {}, `${th.path}: resolved conversation`), ...body);
+	return el("div", { class: "thread" }, ...body);
+}
+
+// the box under a line (or a file) for a new comment: posted now, or into the pending review
+function commentForm(form) {
+	const key = "form";
+	const send = (mode) => async () => {
+		const b = (drafts.get(key) ?? "").trim();
+		if (!b) return toast("Write a comment first");
+		const where = form.subject === "file" ? { subject: "file" } : { subject: "line", line: form.line, side: form.side };
+		if (await prPost("review-comment", { mode, path: form.path, body: b, ...where }, mode === "single" ? "Comment posted" : "Added to your review")) {
+			drafts.delete(key);
+			prv.form = null;
+			render();
+		}
+	};
+	const pending = Boolean(prv.page?.pendingReview);
+	return el("div", { class: "comment-form" },
+		el("div", { class: "hint" }, form.subject === "file" ? `Comment on ${form.path}` : `Comment on line ${form.side === "LEFT" ? "−" : "+"}${form.line}`),
+		draftBox(key, "Leave a comment", { autofocus: true }),
+		el("div", { class: "btns" },
+			el("button", { class: "quiet", onclick: () => { prv.form = null; render(); } }, "Cancel"),
+			el("button", { onclick: busy(send("single")) }, "Add single comment"),
+			el("button", { class: "primary", onclick: busy(send("review")) }, pending ? "Add review comment" : "Start a review")));
+}
+
+// -- header, tabs and the page
+
+const REVIEW_WORDS = { APPROVED: "approved these changes", CHANGES_REQUESTED: "requested changes", COMMENTED: "commented", DISMISSED: "reviewed (dismissed)" };
+const REVIEW_MARK = { APPROVED: ["✓", "ok"], CHANGES_REQUESTED: ["✎", "bad"], COMMENTED: ["💬", ""], DISMISSED: ["–", ""], REQUESTED: ["●", "wait"], PENDING: ["…", ""] };
+
+function renderPr() {
+	document.body.classList.add("files");
+	document.body.classList.remove("settings");
+	$("#tabs").hidden = true;
+	const t = prTarget();
+	const key = `${t.repo}#${t.number}`;
+	if (prv.key !== key) {
+		prv = freshPr(key);
+		files = fileSet(key);
+		loadPr();
+	}
+	if (t.tab === "files" && files.key === key && !files.data && !files.error && !files.loading) {
+		files.loading = true;
+		loadFileSet(files, `/api/prs/files?repo=${encodeURIComponent(t.repo)}&number=${t.number}`);
+	}
+	// keep the focus and the caret in a box being typed in
+	const focused = document.activeElement?.dataset?.draft;
+	const caret = focused ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
+
+	const p = prv.page;
+	const back = el("div", { class: "set-head" },
+		el("button", { id: "back", class: "quiet", onclick: () => (t.tab === "conflicts" ? (location.hash = prHash(t)) : goBack()) }, "← Back"),
+		el("span", { class: "grow" }),
+		el("a", { class: "btn quiet gh-link", href: p?.url ?? `https://github.com/${t.repo}/pull/${t.number}`, target: "_blank", rel: "noopener" }, "Open on GitHub"));
+	if (!p) {
+		main.replaceChildren(el("div", { id: "pr-page" }, back, el("p", { class: "hint" }, prv.error ?? "Loading the pull request…")));
+		return;
+	}
+	if (t.tab === "conflicts") {
+		main.replaceChildren(el("div", { id: "pr-page" }, back, conflictsView(t)));
+		return refocus(focused, caret);
+	}
+	const state = p.state === "OPEN" ? (p.draft ? "Draft" : "Open") : p.state === "MERGED" ? "Merged" : "Closed";
+	const head = el("header", { class: "pr-head" },
+		el("h1", {}, p.title, " ", el("span", { class: "num" }, `#${p.number}`)),
+		el("div", { class: "pr-sub" },
+			el("span", { class: `state-badge st-${state.toLowerCase()}` }, state),
+			el("span", { class: "pr-meta" }, el("b", {}, p.author), ` ${p.state === "MERGED" ? "merged" : "wants to merge"} ${plural(p.commits, "commit")} into `,
+				el("code", {}, p.baseRef), " from ", el("code", {}, p.headRepo !== p.repo ? `${p.headRepo.split("/")[0]}:${p.headRef}` : p.headRef)),
+			el("span", { class: "counts" }, el("span", { class: "add" }, `+${p.additions}`), " ", el("span", { class: "del" }, `−${p.deletions}`))));
+	const talk = p.timeline.filter((x) => x.type === "comment" || x.type === "review").length;
+	const tabs = [["", "Conversation", talk], ["commits", "Commits", p.commits], ["checks", "Checks", p.checks.length], ["files", "Files changed", p.changedFiles]];
+	const current = t.tab === "conversation" ? "" : t.tab;
+	const nav = el("nav", { class: "pr-tabs", "aria-label": "Pull request" }, tabs.map(([id, name, n]) =>
+		el("a", { href: prHash(t, id), class: id === current ? "on" : "", "aria-current": id === current ? "page" : null }, name, el("span", { class: "n" }, n))));
+	const content = t.tab === "commits" ? commitsView(t) : t.tab === "checks" ? checksView(p) : t.tab === "files" ? filesChangedView(t, p) : conversationView(t, p);
+	const conv = t.tab === "conversation";
+	main.replaceChildren(el("div", { id: "pr-page" }, back, head,
+		el("div", { class: `pr-layout${conv ? "" : " wide"}` }, nav, el("section", { class: "pr-content" }, content), conv ? sidebar(p) : null)));
+	const on = nav.querySelector(".on"); // on a phone the tabs scroll sideways: keep this one in sight
+	const past = on ? on.getBoundingClientRect().right - nav.getBoundingClientRect().right : 0;
+	if (past > 0) nav.scrollLeft += past + 16;
+	refocus(focused, caret);
+}
+
+function refocus(key, caret) {
+	if (!key) return;
+	const box = main.querySelector(`[data-draft="${CSS.escape(key)}"]`);
+	if (!box) return;
+	box.focus();
+	if (caret) box.setSelectionRange(caret[0], caret[1]);
+}
+
+// -- Conversation
+
+function conversationView(t, p) {
+	const byReview = new Map();
+	for (const th of p.threads) if (th.reviewId) byReview.set(th.reviewId, [...(byReview.get(th.reviewId) ?? []), th]);
+	const box = (type, who, verb, at, body, extra = []) => el("article", { class: "tl tl-box", "data-type": type },
+		el("div", { class: "tl-head" }, el("b", {}, who), ` ${verb} `, when(at)), body, ...extra);
+	const items = [box("description", p.author, "opened this", p.createdAt, md(p.body))];
+	for (const x of p.timeline) {
+		if (x.type === "comment") items.push(box("comment", x.author, "commented", x.at, md(x.body)));
+		else if (x.type === "review") {
+			const [mark, tone] = REVIEW_MARK[x.state] ?? ["", ""];
+			items.push(el("article", { class: `tl tl-box review r-${tone}`, "data-type": "review" },
+				el("div", { class: "tl-head" }, el("span", { class: `rv-mark ${tone}`, "aria-hidden": "true" }, mark), el("b", {}, x.author), ` ${REVIEW_WORDS[x.state] ?? "reviewed"} `, when(x.at)),
+				x.body ? md(x.body) : null,
+				(byReview.get(x.id) ?? []).map((th) => threadView(th, "conversation"))));
+		} else if (x.type === "commit") {
+			items.push(el("div", { class: "tl tl-line", "data-type": "commit" }, el("span", { class: "dot", "aria-hidden": "true" }),
+				el("span", { class: "msg" }, x.message), el("span", { class: "who" }, x.author), el("code", { class: "sha" }, x.sha.slice(0, 7))));
+		} else items.push(el("div", { class: "tl tl-line", "data-type": "event" }, el("span", { class: "dot", "aria-hidden": "true" }), eventText(x), " ", when(x.at)));
+	}
+	return el("div", { class: "conversation" }, el("div", { class: "timeline" }, items), mergeBox(t, p), commentBox(p));
+}
+
+function eventText(x) {
+	const s = x.subject ?? "";
+	const what = {
+		labeled: `added the ${s} label`, unlabeled: `removed the ${s} label`, assigned: `assigned ${s}`, unassigned: `unassigned ${s}`,
+		review_requested: `requested a review from ${s}`, review_request_removed: `removed the request for review from ${s}`,
+		ready_for_review: "marked this pull request as ready for review", convert_to_draft: "marked this pull request as draft",
+		head_ref_force_pushed: "force-pushed the branch", merged: "merged this", closed: "closed this", reopened: "reopened this",
+	}[x.event] ?? x.event;
+	return el("span", {}, el("b", {}, x.actor), ` ${what}`);
+}
+
+const METHOD = { merge: ["Merge pull request", "Create a merge commit"], squash: ["Squash and merge", "Squash and merge"], rebase: ["Rebase and merge", "Rebase and merge"] };
+function mergeMethod(p) {
+	let m = null;
+	try { m = localStorage.getItem(`ghd-merge:${p.repo}`); } catch {}
+	return p.mergeMethods.includes(m) ? m : p.mergeMethods[0] ?? "merge";
+}
+
+function mergeBox(t, p) {
+	if (p.state === "MERGED") return el("div", { class: "merge-box done" }, el("p", { class: "mb-branch" }, "Pull request successfully merged and closed."));
+	if (p.state === "CLOSED") return el("div", { class: "merge-box done" }, el("p", { class: "mb-branch" }, "This pull request is closed."));
+	const review = { APPROVED: ["ok", "Changes approved"], CHANGES_REQUESTED: ["bad", "Changes requested"], REVIEW_REQUIRED: ["wait", "Review required"] }[p.reviewDecision] ?? ["", "No review required"];
+	const states = p.checks.map((c) => c.state);
+	const checks = !states.length ? ["", "No checks"]
+		: states.includes("failed") ? ["bad", "Some checks were not successful"]
+		: states.some((s) => s === "running" || s === "queued") ? ["wait", "Some checks haven't completed yet"]
+		: ["ok", "All checks have passed"];
+	const conflicts = p.mergeable === "CONFLICTING" || p.mergeState === "DIRTY";
+	let branch;
+	if (p.draft) branch = el("div", { class: "mb-branch wait" }, el("p", {}, "This pull request is still a work in progress"),
+		el("button", { onclick: busy(() => prPost("draft", { draft: false }, "Ready for review")) }, "Ready for review"));
+	else if (conflicts) branch = el("div", { class: "mb-branch bad" }, el("p", {}, "This branch has conflicts that must be resolved"),
+		el("button", { onclick: () => (location.hash = prHash(t, "conflicts")) }, "Resolve conflicts"));
+	else if (p.mergeState === "BEHIND") branch = el("div", { class: "mb-branch wait" }, el("p", {}, "This branch is out-of-date with the base branch"),
+		el("button", { onclick: busy(() => prPost("update-branch", {}, "Updating the branch")) }, "Update branch"));
+	else if (p.mergeable === "UNKNOWN") branch = el("div", { class: "mb-branch" }, el("p", {}, "Checking for the ability to merge automatically…"));
+	else branch = el("div", { class: "mb-branch ok" }, el("p", {}, "This branch has no conflicts with the base branch"));
+	const method = mergeMethod(p);
+	const can = !p.draft && !conflicts && p.mergeMethods.length > 0;
+	const split = el("div", { class: "merge-split" },
+		el("button", { class: "merge-btn primary", disabled: !can, onclick: () => { prv.confirming = true; prv.mergeMenu = false; render(); } }, METHOD[method][0]),
+		el("button", { class: "merge-menu-toggle primary", disabled: !can, "aria-label": "Select merge method", "aria-expanded": String(prv.mergeMenu),
+			onclick: () => { prv.mergeMenu = !prv.mergeMenu; render(); } }, "▾"),
+		prv.mergeMenu ? el("div", { class: "merge-menu", role: "menu" }, p.mergeMethods.map((m) => el("button", { role: "menuitemradio", "aria-checked": String(m === method),
+			onclick: () => { try { localStorage.setItem(`ghd-merge:${p.repo}`, m); } catch {} prv.mergeMenu = false; render(); } }, METHOD[m][1]))) : null);
+	let confirmStep = null;
+	if (prv.confirming && can) {
+		const title = method === "merge" ? `Merge pull request #${p.number} from ${p.headRepo.split("/")[0]}/${p.headRef}` : `${p.title} (#${p.number})`;
+		const tIn = el("input", { class: "merge-title", value: title, "aria-label": "Commit title" });
+		const msg = el("textarea", { class: "merge-message", rows: "3", placeholder: "Add an optional extended description…", "aria-label": "Commit message" });
+		const go = async () => {
+			const body = { confirm: true, method, ...(method !== "rebase" ? { title: tIn.value } : {}), ...(method !== "rebase" && msg.value.trim() ? { message: msg.value } : {}) };
+			if (await prPost("merge", body, "Merged")) { prv.confirming = false; setTimeout(load, 1500); }
+		};
+		confirmStep = el("div", { class: "merge-confirm" }, method !== "rebase" ? [tIn, msg] : el("p", { class: "hint" }, "The commits are added onto the base branch one by one."),
+			el("div", { class: "btns" }, el("button", { class: "primary", onclick: busy(go) }, "Confirm merge"), el("button", { class: "quiet", onclick: () => { prv.confirming = false; render(); } }, "Cancel")));
+	}
+	return el("div", { class: "merge-box" },
+		el("p", { class: `mb-review ${review[0]}` }, review[1]),
+		el("p", { class: `mb-checks ${checks[0]}` }, checks[1], " ", p.checks.length ? el("a", { href: prHash(t, "checks") }, "Show all checks") : null),
+		branch, confirmStep ?? split);
+}
+
+function commentBox(p) {
+	const send = async () => {
+		const b = (drafts.get("new") ?? "").trim();
+		if (!b) return toast("Write a comment first");
+		if (await prPost("comment", { body: b }, "Comment posted")) drafts.delete("new"), render();
+	};
+	const close = async () => {
+		const b = (drafts.get("new") ?? "").trim();
+		if (!confirm(`Close pull request #${p.number}?\n\n${p.title}`)) return;
+		if (b && !(await prPost("comment", { body: b }))) return;
+		drafts.delete("new");
+		if (await prPost("close", { confirm: true }, "Closed")) setTimeout(load, 1500);
+	};
+	const hasText = Boolean((drafts.get("new") ?? "").trim());
+	const box = draftBox("new", "Leave a comment", { id: "new-comment", rows: "4" });
+	const closeBtn = p.state === "OPEN" ? el("button", { class: "close-pr", onclick: busy(close) }, hasText ? "Close with comment" : "Close pull request")
+		: p.state === "CLOSED" ? el("button", { onclick: busy(() => prPost("reopen", {}, "Reopened")) }, "Reopen pull request") : null;
+	box.addEventListener("input", () => closeBtn?.classList.contains("close-pr") && (closeBtn.textContent = box.value.trim() ? "Close with comment" : "Close pull request"));
+	return el("div", { class: "comment-box" }, box, el("div", { class: "btns" }, closeBtn, el("button", { class: "primary", onclick: busy(send) }, "Comment")));
+}
+
+// -- sidebar
+
+function sidebar(p) {
+	const gear = (kind, what) => el("button", { class: "quiet gear", "aria-label": `Edit ${what}`, "aria-expanded": String(prv.picker === kind),
+		onclick: () => { prv.picker = prv.picker === kind ? null : kind; if (prv.picker && !prv.options) loadOptions(); render(); } }, "⚙");
+	const part = (kind, title, ...body) => el("section", { class: `side-${kind}` }, el("div", { class: "side-head" }, el("h3", {}, title), gear(kind, title.toLowerCase())),
+		prv.picker === kind ? picker(kind, p) : null, ...body);
+	const me = prv.login;
+	return el("aside", { class: "sidebar" },
+		part("reviewers", "Reviewers",
+			p.reviewers.length ? el("ul", { class: "people" }, p.reviewers.map((r) => {
+				const [mark, tone] = REVIEW_MARK[r.state] ?? ["", ""];
+				return el("li", {}, el("span", { class: "who" }, r.login ?? r.team), el("span", { class: `rv-mark ${tone}`, title: r.state.toLowerCase().replace("_", " ") }, mark),
+					r.login && r.state !== "REQUESTED" && p.state === "OPEN" ? el("button", { class: "quiet rerequest", "aria-label": `Re-request review from ${r.login}`, title: "Re-request review",
+						onclick: busy(() => prPost("reviewers", { add: [r.login], remove: [] }, `Review requested from ${r.login}`)) }, "↻") : null);
+			})) : el("p", { class: "hint" }, "No reviews"),
+			p.state === "OPEN" && !p.draft ? el("p", { class: "hint" }, "Still in progress? ",
+				el("button", { class: "link", onclick: busy(() => prPost("draft", { draft: true }, "Converted to draft")) }, "Convert to draft")) : null),
+		part("assignees", "Assignees",
+			p.assignees.length ? el("ul", { class: "people" }, p.assignees.map((a) => el("li", {}, el("span", { class: "who" }, a))))
+				: el("p", { class: "hint" }, "No one—", el("button", { class: "link", onclick: busy(() => prPost("assignees", { logins: [me] }, "Assigned to you")) }, "assign yourself"))),
+		part("labels", "Labels",
+			p.labels.length ? el("div", { class: "labels" }, p.labels.map((l) => labelChip(l))) : el("p", { class: "hint" }, "None yet")),
+		part("milestone", "Milestone", el("p", { class: p.milestone ? "" : "hint" }, p.milestone?.title ?? "No milestone")));
+}
+
+function labelChip(l) {
+	const c = /^[0-9a-f]{6}$/i.test(l.color) ? `#${l.color}` : "#888888";
+	return el("span", { class: "label-chip", style: `--c:${c}` }, l.name);
+}
+
+function picker(kind, p) {
+	const o = prv.options;
+	if (!o) return el("div", { class: "picker" }, el("p", { class: "hint" }, "Loading…"));
+	let items;
+	if (kind === "reviewers") items = o.assignable.filter((l) => l.toLowerCase() !== p.author.toLowerCase())
+		.map((l) => ({ name: l, on: p.reviewers.some((r) => r.login === l && r.state === "REQUESTED"), set: (on) => prPost("reviewers", on ? { add: [l], remove: [] } : { add: [], remove: [l] }) }));
+	else if (kind === "assignees") items = o.assignable.map((l) => ({ name: l, on: p.assignees.includes(l),
+		set: (on) => prPost("assignees", { logins: on ? [...p.assignees, l] : p.assignees.filter((x) => x !== l) }) }));
+	else if (kind === "labels") items = o.labels.map((l) => ({ name: l.name, chip: l, on: p.labels.some((x) => x.name === l.name),
+		set: (on) => prPost("labels", { names: on ? [...p.labels.map((x) => x.name), l.name] : p.labels.map((x) => x.name).filter((x) => x !== l.name) }) }));
+	else items = [{ name: "No milestone", number: null }, ...o.milestones.map((m) => ({ name: m.title, number: m.number }))]
+		.map((m) => ({ name: m.name, on: (p.milestone?.number ?? null) === m.number, set: () => prPost("milestone", { milestone: m.number }) }));
+	if (!items.length) return el("div", { class: "picker" }, el("p", { class: "hint" }, "Nothing to choose from"));
+	return el("div", { class: "picker", role: "group", "aria-label": kind }, items.map((i) => {
+		const input = el("input", { type: kind === "milestone" ? "radio" : "checkbox", name: `pick-${kind}`, checked: i.on });
+		input.addEventListener("change", () => i.set(input.checked));
+		return el("label", {}, input, i.chip ? labelChip(i.chip) : el("span", {}, i.name));
+	}));
+}
+
+// -- Checks
+
+const CHECK_WORD = { passed: ["✓", "Passed", "ok"], failed: ["✗", "Failed", "bad"], running: ["●", "Running", "wait"], queued: ["○", "Queued", "wait"],
+	skipped: ["–", "Skipped", ""], cancelled: ["⊘", "Cancelled", ""], neutral: ["–", "Neutral", ""] };
+
+function took(c) {
+	if (!c.startedAt || !c.completedAt) return "";
+	const s = Math.max(0, Math.round((Date.parse(c.completedAt) - Date.parse(c.startedAt)) / 1000));
+	return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+}
+
+function checksView(p) {
+	if (!p.checks.length) return el("p", { class: "hint" }, "No checks on the latest commit.");
+	const failed = p.checks.some((c) => c.state === "failed");
+	return el("div", { class: "checks-view" },
+		el("div", { class: "checks-head" }, el("span", {}, `${plural(p.checks.length, "check")} on ${p.headSha.slice(0, 7)}`),
+			failed && p.state === "OPEN" ? el("button", { onclick: busy(() => prPost("rerun", {}, "Re-running failed jobs")) }, "Re-run failed jobs") : null),
+		el("ul", { class: "checks" }, p.checks.map((c) => {
+			const [mark, word, tone] = CHECK_WORD[c.state] ?? CHECK_WORD.neutral;
+			return el("li", { class: `check ${tone}` }, el("span", { class: "check-mark", "aria-hidden": "true" }, mark),
+				el("span", { class: "check-name" }, c.workflow ? `${c.workflow} / ${c.name}` : c.name),
+				el("span", { class: "check-state" }, word), el("span", { class: "check-time" }, took(c)),
+				c.url ? el("a", { class: "details", href: c.url, target: "_blank", rel: "noopener" }, "Details") : el("span", {}));
+		})));
+}
+
+// -- Commits
+
+async function loadCommits(t) {
+	const key = prv.key;
+	const { status, data: d } = await api(`/api/prs/commits?repo=${encodeURIComponent(t.repo)}&number=${t.number}`);
+	if (prv.key !== key) return;
+	if (status === 200) prv.commits = d;
+	else prv.commitsError = d.error || `Could not load the commits (${status})`;
+	render();
+}
+
+function commitsView(t) {
+	if (t.sha) return commitView(t);
+	if (!prv.commits && !prv.commitsError && !prv.commitsLoading) { prv.commitsLoading = true; loadCommits(t); }
+	if (!prv.commits) return el("p", { class: "hint" }, prv.commitsError ?? "Loading the commits…");
+	const days = new Map();
+	for (const c of prv.commits) {
+		const day = new Date(c.at).toLocaleDateString(undefined, { month: "short", day: "numeric", year: new Date(c.at).getFullYear() === new Date().getFullYear() ? undefined : "numeric" });
+		days.set(day, [...(days.get(day) ?? []), c]);
+	}
+	return el("div", { class: "commits-view" }, [...days].flatMap(([day, cs]) => [
+		el("h4", { class: "commit-day" }, `Commits on ${day}`),
+		el("ul", { class: "commits" }, cs.map((c) => {
+			const li = el("li", { class: "commit", role: "button", tabindex: "0" }, el("span", { class: "msg" }, c.message), el("span", { class: "who" }, c.author),
+				el("code", { class: "sha" }, c.sha.slice(0, 7)), when(c.at));
+			const go = () => (location.hash = `${prHash(t, "commits")}/${c.sha}`);
+			li.addEventListener("click", go);
+			li.addEventListener("keydown", (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), go()));
+			return li;
+		}))]));
+}
+
+function commitView(t) {
+	if (prv.commit?.key !== t.sha) {
+		prv.commit = fileSet(t.sha);
+		loadFileSet(prv.commit, `/api/commit/files?repo=${encodeURIComponent(t.repo)}&sha=${encodeURIComponent(t.sha)}`);
+	}
+	const st = prv.commit;
+	const c = prv.commits?.find((x) => x.sha === t.sha);
+	return el("div", { class: "commit-view" },
+		el("p", {}, el("a", { href: prHash(t, "commits") }, "← All commits")),
+		el("h3", { class: "commit-title" }, c?.message ?? t.sha.slice(0, 7), " ", el("code", { class: "sha" }, t.sha.slice(0, 7))),
+		st.data ? fileList(st, t.repo, `https://github.com/${t.repo}/commit/${t.sha}`, { labels: { before: "Parent", after: "This commit" } })
+			: el("p", { class: "hint" }, st.error ?? "Loading the files…"));
+}
+
+// -- Files changed: omnidiff diffs plus GitHub's review tools
+
+function filesChangedView(t, p) {
+	if (!files.data) return el("p", { class: "hint" }, files.error ?? "Loading the files…");
+	const total = files.data.files.length;
+	const seen = files.data.files.filter((f) => p.viewed?.[f.path] === "VIEWED").length;
+	const pending = p.pendingReview?.comments ?? 0;
+	const own = p.author.toLowerCase() === prv.login.toLowerCase();
+	const head = el("div", { class: "files-head" },
+		el("span", { class: "hint" }, `${plural(total, "changed file")}, compared with where the branch left its base · ${seen} / ${total} files viewed`),
+		p.state === "OPEN" ? el("button", { class: "review-changes primary", "aria-expanded": String(prv.reviewOpen), onclick: () => { prv.reviewOpen = !prv.reviewOpen; render(); } },
+			"Review changes", pending ? el("span", { class: "n" }, pending) : null) : null);
+	const form = prv.reviewOpen && p.state === "OPEN" ? reviewForm(p, own) : null;
+	const prUrl = p.url;
+	const list = fileList(files, t.repo, `${prUrl}/files`, {
+		pick: (f) => pickOf(t, f, files.data),
+		viewed: p.viewed,
+		onViewed: async (f, on) => {
+			p.viewed = { ...p.viewed, [f.path]: on ? "VIEWED" : "UNVIEWED" }; // at once; GitHub keeps it
+			if (on) files.open.delete(f.path);
+			render();
+			const { status, data: d } = await api("/api/prs/viewed", { repo: t.repo, number: t.number, path: f.path, viewed: on });
+			if (status !== 200) {
+				p.viewed = { ...p.viewed, [f.path]: on ? "UNVIEWED" : "VIEWED" };
+				toast(d.error || `Failed (${status})`);
+				render();
+			}
+		},
+		onComment: p.state === "OPEN" ? (f) => { prv.form = { subject: "file", path: f.path }; render(); } : null,
+		extra: (f) => {
+			const old = p.threads.filter((th) => th.path === f.path && (th.outdated || !th.line));
+			const fileForm = prv.form?.subject === "file" && prv.form.path === f.path ? commentForm(prv.form) : null;
+			return fileForm || old.length ? el("li", { class: "file-extra" }, fileForm, old.map((th) => threadView(th, "files"))) : null;
+		},
+		review: (f) => ({
+			path: f.path,
+			commentable: p.state === "OPEN" ? f.commentable : null,
+			threads: p.threads.filter((th) => th.path === f.path && th.line && !th.outdated),
+			form: prv.form,
+			onAdd: (side, line) => { prv.form = { subject: "line", path: f.path, side, line }; render(); main.querySelector(".comment-form textarea")?.focus(); },
+		}),
+	});
+	return el("div", { class: "files-changed" }, head, form, list);
+}
+
+function reviewForm(p, own) {
+	const events = own ? [["COMMENT", "Comment", "Submit general feedback without explicit approval."]] : [
+		["COMMENT", "Comment", "Submit general feedback without explicit approval."],
+		["APPROVE", "Approve", "Submit feedback and approve merging these changes."],
+		["REQUEST_CHANGES", "Request changes", "Submit feedback that must be addressed before merging."]];
+	const chosen = drafts.get("review-event") ?? "COMMENT";
+	const submit = async () => {
+		const event = main.querySelector(".review-form input[name=event]:checked")?.value ?? "COMMENT";
+		if (await prPost("submit-review", { event, body: drafts.get("review") ?? "" }, "Review submitted")) {
+			drafts.delete("review");
+			drafts.delete("review-event");
+			prv.reviewOpen = false;
+		}
+	};
+	const cancel = async () => {
+		if (!confirm("Cancel your review? Its pending comments are deleted.")) return;
+		if (await prPost("cancel-review", {}, "Review cancelled")) prv.reviewOpen = false;
+	};
+	return el("div", { class: "review-form" },
+		el("h4", {}, "Finish your review"),
+		draftBox("review", "Leave a comment", { class: "review-body", rows: "4" }),
+		el("div", { class: "events", role: "radiogroup" }, events.map(([v, name, hint]) => {
+			const r = el("input", { type: "radio", name: "event", value: v, checked: v === chosen || (own && v === "COMMENT") });
+			r.addEventListener("change", () => drafts.set("review-event", v));
+			return el("label", {}, r, el("span", {}, el("b", {}, name), el("span", { class: "hint" }, hint)));
+		})),
+		el("div", { class: "btns" },
+			p.pendingReview ? el("button", { class: "quiet", onclick: busy(cancel) }, "Cancel review") : null,
+			el("button", { class: "primary", onclick: busy(submit) }, "Submit review")));
+}
+
+// -- resolving conflicts
+
+const CONFLICT = /^<{7}[^\n]*\n([\s\S]*?)^={7}\n([\s\S]*?)^>{7}[^\n]*(?:\n|$)/gm;
+const hasMarkers = (text) => /^(<{7}|>{7})( |$)|^={7}$/m.test(text);
+const countConflicts = (text) => [...text.matchAll(CONFLICT)].length;
+function acceptBlock(text, k, how) {
+	let i = 0;
+	return text.replace(CONFLICT, (m, ours, theirs) => (i++ !== k ? m : how === "current" ? ours : how === "incoming" ? theirs : ours + theirs));
+}
+
+async function loadConflicts(t) {
+	const key = prv.key;
+	const { status, data: d } = await api(`/api/prs/conflicts?repo=${encodeURIComponent(t.repo)}&number=${t.number}`);
+	if (prv.key !== key) return;
+	prv.conflicts = status === 200
+		? { data: d, text: new Map(d.files.map((f) => [f.path, f.text])), resolved: new Set() }
+		: { error: d.error || `Could not read the conflicts (${status})` };
+	render();
+}
+
+function conflictsView(t) {
+	if (!prv.conflicts) {
+		prv.conflicts = { loading: true };
+		loadConflicts(t);
+	}
+	const c = prv.conflicts;
+	const title = el("h2", { class: "conflicts-title" }, "Resolve conflicts");
+	if (!c.data) return el("div", { id: "conflicts-page" }, title, el("p", { class: "hint" }, c.error ?? "Reading the conflicts…"));
+	const d = c.data;
+	const ready = !d.unsupported.length && d.files.length > 0 && d.files.every((f) => c.resolved.has(f.path));
+	const commit = async () => {
+		const body = { head: d.head, files: d.files.map((f) => ({ path: f.path, text: c.text.get(f.path) })) };
+		if (await prPost("resolve-conflicts", body, "Merge commit made")) {
+			prv.conflicts = null;
+			location.hash = prHash(t);
+		}
+	};
+	return el("div", { id: "conflicts-page" }, title,
+		el("p", { class: "hint" }, `Merging `, el("code", {}, d.baseRef), ` into `, el("code", {}, d.headRef), `: ${plural(d.files.length, "conflicting file")}.`),
+		d.unsupported.length ? el("div", { class: "unsupported" }, el("p", {}, "These conflicts are too complex to resolve here. Resolve this on the command line:"),
+			el("ul", {}, d.unsupported.map((u) => el("li", {}, el("code", {}, u.path), `: ${u.why}`)))) : null,
+		d.files.map((f) => conflictFile(f, c)),
+		el("div", { class: "btns commit-merge" }, el("button", { class: "primary", disabled: !ready, onclick: busy(commit) }, "Commit merge")));
+}
+
+function conflictFile(f, c) {
+	const area = el("textarea", { class: "conflict-text", spellcheck: "false", "aria-label": `${f.path}, with conflict markers`, rows: "16" });
+	area.value = c.text.get(f.path);
+	const tools = el("div", { class: "conflict-tools" });
+	const mark = el("button", {}, "Mark as resolved");
+	const refresh = () => {
+		const n = countConflicts(area.value);
+		tools.replaceChildren(...Array.from({ length: n }, (_, k) => el("div", { class: "conflict-pick" },
+			n > 1 ? el("span", { class: "hint" }, `Conflict ${k + 1}`) : null,
+			...[["current", "Accept current change"], ["incoming", "Accept incoming change"], ["both", "Accept both changes"]].map(([how, name]) =>
+				el("button", { class: "quiet", onclick: () => { area.value = acceptBlock(area.value, k, how); changed(); } }, name)))));
+		mark.disabled = hasMarkers(area.value) || c.resolved.has(f.path);
+		mark.textContent = c.resolved.has(f.path) ? "✓ Resolved" : "Mark as resolved";
+	};
+	const changed = () => {
+		c.text.set(f.path, area.value);
+		if (c.resolved.delete(f.path)) return render(); // edited after marking: not resolved any more
+		refresh();
+	};
+	area.addEventListener("input", changed);
+	mark.addEventListener("click", () => { c.resolved.add(f.path); render(); });
+	refresh();
+	return el("section", { class: `conflict-file${c.resolved.has(f.path) ? " resolved" : ""}` },
+		el("div", { class: "conflict-head" }, el("span", { class: "path" }, f.path), mark), tools, area);
+}
+
 window.addEventListener("hashchange", () => render());
 $("#settings-btn").onclick = () => openSettings();
 $("#bell").onclick = () => openSettings("notifications");
 $("#reload").onclick = load;
 $("#keys-btn").onclick = () => help().showModal();
-document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && load());
+document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && (load(), onPr() && loadPr())); // SPEC 8, 16
 load();

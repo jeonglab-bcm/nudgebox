@@ -8,6 +8,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { start } from "../tests/helpers/harness.ts";
 import { createOmnidiff } from "../src/omnidiff.ts";
+import { commentableLines } from "../src/octokit-github.ts";
 import { sidecar } from "../tests/helpers/browser.ts";
 
 const port = Number(process.argv[2] ?? 8099);
@@ -82,6 +83,62 @@ for (const [p, ext] of [["figures/fig2.png", "png"], ["data/bundle.zip", "zip"],
 	t.github.blobs.set(`${L("AURORA")}@015c1e5:${p}`, fx(`before.${ext}`));
 	t.github.blobs.set(`${L("AURORA")}@fbb18e9:${p}`, fx(`after.${ext}`));
 }
+
+// the PR page of AURORA#311 (SPEC 16): what GitHub would give, with comments only where the patch has hunks
+for (const f of t.github.prFileSets.get(`${L("AURORA")}#311`)!.files) {
+	const patch = execFileSync("git", ["diff", "-U3", "015c1e5", "fbb18e9", "--", f.path]).toString();
+	if (patch.includes("@@")) f.commentable = commentableLines(patch.slice(patch.indexOf("@@")));
+}
+t.github.pages.set(`${L("AURORA")}#311`, {
+	body: "Ranks candidate genes by **HPO similarity** and the inheritance mode.\n\n- adds `hpo_sim.py`\n- test set: `tests/solved_cases.tsv`\n\nTop-10 hit rate on 50 solved cases: 33 → 41.",
+	createdAt: ago(2), baseRef: "main", headRef: "kelly/hpo-rank", commits: 3, additions: 82, deletions: 7, changedFiles: 7,
+	mergeState: "BLOCKED", reviewDecision: "REVIEW_REQUIRED",
+	reviewers: [{ login: "hwan", state: "REQUESTED" }, { login: "jlee", state: "COMMENTED" }],
+	assignees: ["kelly"], labels: [{ name: "enhancement", color: "a2eeef" }, { name: "ranking", color: "5319e7" }], milestone: { number: 3, title: "AURORA 2.1" },
+	timeline: [
+		{ type: "commit", sha: "a1b2c3d4e5", message: "Add HPO similarity score", author: "kelly", at: ago(2) },
+		{ type: "commit", sha: "b2c3d4e5f6", message: "Weight by inheritance mode", author: "kelly", at: ago(1.6) },
+		{ type: "event", event: "review_requested", actor: "kelly", subject: "hwan", at: ago(1.6) },
+		{ type: "review", id: "r1", author: "jlee", state: "COMMENTED", body: "Nice gain. One question on the prompt text.", at: ago(1) },
+		{ type: "comment", id: "c1", author: "kelly", body: "Answered inline; the threshold comes from the 2024 benchmark.", at: ago(0.8) },
+		{ type: "commit", sha: "c3d4e5f6a7", message: "Explain the threshold", author: "kelly", at: ago(0.3) },
+	],
+	threads: [{
+		id: "t1", path: "src/summary.ts", line: 30, startLine: null, side: "RIGHT", resolved: false, outdated: false, reviewId: "r1",
+		diffHunk: "@@ -25,6 +25,12 @@\n context\n+const SUMMARY_FORMAT = 3;",
+		comments: [
+			{ id: "tc1", author: "jlee", body: "Is this format number used anywhere else?", at: ago(1), pending: false },
+			{ id: "tc2", author: "kelly", body: "Only for the summary cache key.", at: ago(0.8), pending: false },
+		],
+	}],
+	checks: [
+		{ name: "test (3.12)", workflow: "CI", state: "passed", startedAt: ago(0.31), completedAt: ago(0.3), url: "https://github.com" },
+		{ name: "lint", workflow: "CI", state: "passed", startedAt: ago(0.31), completedAt: ago(0.305), url: "https://github.com" },
+		{ name: "benchmark", workflow: "Bench", state: "running", startedAt: ago(0.2), url: "https://github.com" },
+	],
+	viewed: { "public/sw.js": "VIEWED" },
+});
+t.github.commits.set(`${L("AURORA")}#311`, [
+	{ sha: "015c1e5", message: "Add HPO similarity score", author: "kelly", at: ago(2) },
+	{ sha: "fbb18e9", message: "Weight by inheritance mode", author: "kelly", at: ago(1.6) },
+]);
+t.github.commitFileSets.set(`${L("AURORA")}@fbb18e9`, { base: "015c1e5", head: "fbb18e9", files: t.github.prFileSets.get(`${L("AURORA")}#311`)!.files.slice(0, 3) });
+for (const r of repos) t.github.options.set(r, {
+	assignable: ["hwan", "kelly", "jlee", "mkim", "sgarcia"],
+	labels: [{ name: "bug", color: "d73a4a", description: "Something is broken" }, { name: "enhancement", color: "a2eeef", description: "" }, { name: "ranking", color: "5319e7", description: "" }],
+	milestones: [{ number: 3, title: "AURORA 2.1" }],
+});
+// variant-db#139 has conflicts (SPEC 16): one file both branches changed in the same place
+t.github.pages.set(`${L("variant-db")}#139`, { mergeable: "CONFLICTING", mergeState: "DIRTY", headRef: "jlee/gnomad-4.1", baseRef: "main", headSha: "vhd" });
+t.github.mergeSets.set(`${L("variant-db")}#139`, {
+	headRepo: L("variant-db"), headRef: "jlee/gnomad-4.1", headSha: "vhd", baseRef: "main", baseSha: "vbt", mergeBase: "vmb",
+	headFiles: [{ path: "config/sources.yaml", status: "modified", additions: 1, deletions: 1 }],
+	baseFiles: [{ path: "config/sources.yaml", status: "modified", additions: 1, deletions: 1 }, { path: "README.md", status: "modified", additions: 2, deletions: 0 }],
+});
+const yaml = (gnomad: string, clinvar: string) => `sources:\n  gnomad: ${gnomad}\n  clinvar: ${clinvar}\n  dbsnp: b156\n`;
+t.github.blobs.set(`${L("variant-db")}@vmb:config/sources.yaml`, yaml("v4.0", "2026-09"));
+t.github.blobs.set(`${L("variant-db")}@vhd:config/sources.yaml`, yaml("v4.1", "2026-09"));
+t.github.blobs.set(`${L("variant-db")}@vbt:config/sources.yaml`, yaml("v4.0.1", "2026-10"));
 
 t.llm.delayMs = 30; // summaries stream in like the real model
 

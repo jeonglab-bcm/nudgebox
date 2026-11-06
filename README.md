@@ -16,6 +16,7 @@ the GitHub App and the bioinfolder-srv setup come next.
 | `src/app.ts` | HTTP routes, linking GitHub, actions, webhooks, push, sync and stale digest |
 | `src/inbox.ts` | which section a PR is in (SPEC 5) |
 | `src/store.ts` | SQLite: linked people (tokens sealed), PRs, devices, notified marks |
+| `src/conflicts.ts` | resolving a PR's conflicts: what to take, merge (`git merge-file`) or show with markers (SPEC 16) |
 | `src/github.ts` | the interface to GitHub; `src/octokit-github.ts` is the real one |
 | `src/server.ts` | production entry: config.yaml + .env, two listeners, timers |
 | `src/public.ts` | the public listener: webhook + static files only |

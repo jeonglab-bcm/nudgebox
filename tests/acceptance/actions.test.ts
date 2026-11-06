@@ -84,7 +84,7 @@ test("6. GitHub's refusal is shown, not hidden", async () => {
 test("6. nothing destructive exists", async () => {
 	const { t, post } = await setup();
 	try {
-		for (const a of ["close", "delete-branch", "force-push", "edit", "reopen"]) {
+		for (const a of ["delete-branch", "force-push", "edit"]) { // Close and Reopen exist since SPEC 16
 			assert.equal((await post("hyunhwanj", a, { repo: LAB, number: 3, confirm: true })).status, 404, a);
 		}
 		assert.equal(t.github.calls.filter((c) => c.token).length, 0);

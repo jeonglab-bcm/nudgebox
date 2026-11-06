@@ -32,6 +32,15 @@ export class Store {
 				hidden_at TEXT NOT NULL, PRIMARY KEY (lab_user, kind, key));
 			CREATE TABLE IF NOT EXISTS unread (lab_user TEXT PRIMARY KEY, n INTEGER NOT NULL);
 			CREATE TABLE IF NOT EXISTS summaries (key TEXT PRIMARY KEY, version TEXT NOT NULL, summary TEXT NOT NULL, at TEXT NOT NULL);
+			-- SPEC 19: guided review. A prepared review per PR head commit (shared); per person,
+			-- the file versions they marked reviewed and what they did with each draft; per
+			-- repo, the drafts people dropped (given to later reviews).
+			CREATE TABLE IF NOT EXISTS review_preps (key TEXT PRIMARY KEY, json TEXT NOT NULL, at TEXT NOT NULL);
+			CREATE TABLE IF NOT EXISTS review_marks (lab_user TEXT NOT NULL, pr TEXT NOT NULL, path TEXT NOT NULL, fp TEXT NOT NULL,
+				PRIMARY KEY (lab_user, pr, fp));
+			CREATE TABLE IF NOT EXISTS review_drafts (lab_user TEXT NOT NULL, pr TEXT NOT NULL, draft TEXT NOT NULL, state TEXT NOT NULL,
+				PRIMARY KEY (lab_user, pr, draft));
+			CREATE TABLE IF NOT EXISTS review_learnings (repo TEXT NOT NULL, body TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (repo, body));
 		`);
 	}
 
@@ -201,5 +210,46 @@ export class Store {
 	/** Records key; returns false if it was already there. */
 	markOnce(key: string, now: string): boolean {
 		return this.db.prepare("INSERT OR IGNORE INTO notified VALUES (?, ?)").run(key, now).changes === 1;
+	}
+
+	// -- guided review (SPEC 19) ------------------------------------------------
+
+	reviewPrep(key: string): unknown | undefined {
+		const r = this.db.prepare("SELECT json FROM review_preps WHERE key = ?").get(key) as { json: string } | undefined;
+		return r && JSON.parse(r.json);
+	}
+
+	saveReviewPrep(key: string, prep: unknown, now: string) {
+		this.db.prepare("INSERT OR REPLACE INTO review_preps VALUES (?, ?, ?)").run(key, JSON.stringify(prep), now);
+	}
+
+	/** The file versions (fingerprints) `labUser` marked reviewed on PR `pr`, and their paths. */
+	reviewMarks(labUser: string, pr: string): { path: string; fp: string }[] {
+		return this.db.prepare("SELECT path, fp FROM review_marks WHERE lab_user = ? AND pr = ?").all(labUser, pr) as { path: string; fp: string }[];
+	}
+
+	setReviewMarks(labUser: string, pr: string, files: { path: string; fp: string }[], reviewed: boolean) {
+		for (const f of files) {
+			if (reviewed) this.db.prepare("INSERT OR IGNORE INTO review_marks VALUES (?, ?, ?, ?)").run(labUser, pr, f.path, f.fp);
+			else this.db.prepare("DELETE FROM review_marks WHERE lab_user = ? AND pr = ? AND path = ?").run(labUser, pr, f.path);
+		}
+	}
+
+	draftStates(labUser: string, pr: string): Map<string, string> {
+		const rows = this.db.prepare("SELECT draft, state FROM review_drafts WHERE lab_user = ? AND pr = ?").all(labUser, pr) as { draft: string; state: string }[];
+		return new Map(rows.map((r) => [r.draft, r.state]));
+	}
+
+	setDraftState(labUser: string, pr: string, draft: string, state: "kept" | "dropped") {
+		this.db.prepare("INSERT OR REPLACE INTO review_drafts VALUES (?, ?, ?, ?)").run(labUser, pr, draft, state);
+	}
+
+	addLearning(repo: string, body: string, now: string) {
+		this.db.prepare("INSERT OR REPLACE INTO review_learnings VALUES (?, ?, ?)").run(repo.toLowerCase(), body, now);
+	}
+
+	/** The newest drafts people dropped in `repo`. */
+	learnings(repo: string, limit = 20): string[] {
+		return (this.db.prepare("SELECT body FROM review_learnings WHERE repo = ? ORDER BY at DESC LIMIT ?").all(repo.toLowerCase(), limit) as { body: string }[]).map((r) => r.body);
 	}
 }

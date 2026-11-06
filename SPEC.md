@@ -465,3 +465,40 @@ same lab sign-in (section 3); the sign-in is kept between launches.
 - **Release.** A tag `app-v<version>` builds the app on GitHub Actions: a `.dmg` for
   Apple silicon and Intel Macs, and an `.AppImage` and `.deb` for Linux, attached to a
   GitHub Release. The Mac app is not signed yet: the first open is right-click → Open.
+
+## 19. Guided review
+
+Big pull requests are tedious to review (Dr. Jeong, 2026-11-06: "human in the loop,
+minimizing tediousness"). Nudgebox prepares the review and the person decides, with one
+key per decision, and never sees again what they already reviewed.
+
+**Prepared** once per head commit of a PR, in the background (when a PR is opened,
+pushed to, reopened or marked ready, and otherwise when someone first asks), and shared
+by everyone who can see the repo (section 4):
+
+1. **Noise is hidden**: lockfiles, generated or minified files, and files omnidiff
+   finds have only whitespace, comment or moved-code changes. Each says why.
+2. **Steps.** The lab LLM groups the other files into steps, one logical change each,
+   in reading order (the core change, then its callers, then tests, then documents),
+   with a title and one sentence on what the step does, and one sentence on the whole
+   PR. A plan that leaves a file out, uses one twice, names one not in the PR or puts
+   noise in a step is not used: then each file is a step, in path order.
+3. **Draft comments.** For each step the model writes draft review comments on real
+   problems only (not style, not guesses about code it cannot see), each on a line
+   GitHub takes a comment on (section 16). Each draft is then checked by a second
+   call that tries to prove it wrong; only drafts that pass are shown. The repo's
+   dropped drafts (below) are given to the model so it does not suggest them again.
+
+Without an LLM there are no drafts and each file is a step; the page says so. If the
+model fails, the error is shown, nothing is kept, and **Try again** prepares it again.
+
+**Per person:**
+
+- **Looks good** marks a step reviewed, by the content of its files.
+- **Keep** puts a draft, as the person edited it, in their **pending review** on GitHub
+  (section 16); submitting it is the review form of section 16. **Drop** hides the
+  draft for them and remembers it for the repo's later reviews.
+- **After a push** a step whose files did not change stays reviewed. A step with a file
+  the person reviewed in an older version is **changed**; the page says how many.
+
+The PR's text, files and comments are data, never instructions to the model.

@@ -28,7 +28,8 @@ export async function start(opts: { staleDays?: number; oldDays?: number; now?: 
 	const pushed: Pushed[] = [];
 	const gone = new Set<string>(); // push endpoints that answer 410 Gone
 	// in-memory stand-in for llm.bioinfolder.com: records prompts, answers "summary N"
-	const llm = { calls: [] as LlmCall[], failNext: false, reply: undefined as string | undefined, delayMs: 0 };
+	// `answer`, when set, answers each prompt by itself (SPEC 19: the model is asked different things)
+	const llm = { calls: [] as LlmCall[], failNext: false, reply: undefined as string | undefined, delayMs: 0, answer: undefined as ((p: LlmCall) => string) | undefined };
 	// stand-in for omnidiff (SPEC 15): records what it was asked, answers `reply`
 	const differ = { calls: [] as (DiffSide | null)[][], reply: { largeResidual: false, before: { hunks: [] }, after: { hunks: [] } } as DiffResult };
 	// streamed when asked (onDelta): the answer in pieces of 6 characters, `delayMs` apart
@@ -38,7 +39,7 @@ export async function start(opts: { staleDays?: number; oldDays?: number; now?: 
 			llm.failNext = false;
 			throw Object.assign(new Error("upstream unavailable"), { status: 503 });
 		}
-		const text = llm.reply ?? `- summary ${llm.calls.length}`;
+		const text = llm.answer?.(prompt) ?? llm.reply ?? `- summary ${llm.calls.length}`;
 		if (onDelta) for (let i = 0; i < text.length; i += 6) {
 			if (llm.delayMs) await new Promise((r) => setTimeout(r, llm.delayMs));
 			onDelta(text.slice(i, i + 6));

@@ -52,3 +52,11 @@ Tests are numbered by SPEC section (e.g. `5. inbox sections and order`).
 To look at the page with example data and no accounts: `node --import tsx scripts/demo.ts 8099`,
 then open http://127.0.0.1:8099/. `node scripts/shots.mjs http://127.0.0.1:8099/ /tmp/nudgebox`
 saves desktop and phone screenshots, light and dark.
+
+## Desktop app (SPEC 18)
+
+`desktop/` is the Tauri app for Mac and Linux. It opens gh.bioinfolder.com and shows
+notifications from the server's live stream (`/api/events`). Build locally with
+`cd desktop && npx @tauri-apps/cli@2.12.4 build`. To release, push a tag `app-v<version>`:
+`.github/workflows/desktop.yml` builds the Mac `.dmg`s and the Linux `.AppImage`/`.deb`
+and attaches them to a GitHub Release.

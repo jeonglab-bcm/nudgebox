@@ -322,7 +322,7 @@ review, your Viewed ticks).
 
 **Header.** The title and number; a state badge (Open, Draft, Merged, Closed); "*author*
 wants to merge *N* commits into *base* from *head*"; tabs **Conversation**, **Commits**,
-**Checks** and **Files changed**, each with its count; lines added and removed.
+**Checks**, **Files changed** and **Guided review** (section 19), each with its count; lines added and removed.
 
 **Sidebar** (beside the tabs on a computer, above them on a phone):
 
@@ -500,5 +500,27 @@ model fails, the error is shown, nothing is kept, and **Try again** prepares it 
   draft for them and remembers it for the repo's later reviews.
 - **After a push** a step whose files did not change stays reviewed. A step with a file
   the person reviewed in an older version is **changed**; the page says how many.
+
+**On the PR page**, a **Guided review** tab (`#pr/<owner>/<repo>/<number>/guide`, with
+the number of steps left) shows the PR's one-sentence summary, the hidden noise (folded,
+with why), "Step *k* of *n*" with a bar, and "*n* steps changed since your review" after a
+push. It opens at the first changed step, else the first not reviewed. One step at a
+time: its title and sentence, its draft comments (the next open one marked), and its
+files' diffs (omnidiff, with + to comment on a line as on Files changed). One key each:
+
+| Key | Does |
+|---|---|
+| `y` | Looks good: mark the step reviewed, go to the next |
+| `k` | Keep the marked draft as it is |
+| `e` | Edit the marked draft, then Keep |
+| `x` | Drop the marked draft |
+| `c` | Comment on the step's file yourself |
+| `s` | Skip to the next step without marking it |
+| `b` | Back one step |
+
+A decided draft leaves the queue at once, so the next key goes to the next one. After
+the last step: "All *n* steps reviewed", the number of pending comments, and **Submit
+review**, which opens the review form of section 16 with the PR's summary as its text.
+Each key is also a button, for a phone.
 
 The PR's text, files and comments are data, never instructions to the model.

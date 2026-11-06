@@ -388,6 +388,7 @@ document.addEventListener("keydown", (e) => {
 	}
 	if (onPr()) { // SPEC 16
 		if (e.key === "Escape") prEscape();
+		else if (prTarget().tab === "guide" && guideKey(e.key)) e.preventDefault(); // SPEC 19
 		return;
 	}
 	if (onCompare()) { // SPEC 15
@@ -1311,7 +1312,7 @@ function renderCompare() {
 // GitHub's PR page, with omnidiff for every diff: Conversation, Commits, Checks, Files
 // changed, the sidebar, the merge box and resolving conflicts. Everything acts as the
 // person through /api/prs/<action>, then reads the PR again.
-const PR_ROUTE = /^#pr\/([^/]+\/[^/]+)\/(\d+)(?:\/(commits|checks|files|conflicts)(?:\/([\w.-]+))?)?$/;
+const PR_ROUTE = /^#pr\/([^/]+\/[^/]+)\/(\d+)(?:\/(commits|checks|files|guide|conflicts)(?:\/([\w.-]+))?)?$/;
 const onPr = () => PR_ROUTE.test(location.hash);
 function prTarget() {
 	const m = location.hash.match(PR_ROUTE);
@@ -1322,6 +1323,7 @@ const prHash = (t, tab = "") => `#pr/${t.repo}/${t.number}${tab ? `/${tab}` : ""
 const freshPr = (key) => ({
 	key, page: null, error: null, login: "", options: null, picker: null, mergeMenu: false, confirming: false, form: null, reviewOpen: false,
 	commits: null, commitsError: null, commit: null, conflicts: null,
+	guide: null, // SPEC 19: { data, failed, idx, editing }
 });
 let prv = freshPr(null);
 // text being written (comments, replies, the review), by box; survives re-renders
@@ -1361,8 +1363,9 @@ async function prPost(action, body = {}, done) {
 
 function prEscape() {
 	const t = prTarget();
-	if (prv.picker || prv.mergeMenu || prv.confirming || prv.form || prv.reviewOpen) {
+	if (prv.picker || prv.mergeMenu || prv.confirming || prv.form || prv.reviewOpen || prv.guide?.editing) {
 		Object.assign(prv, { picker: null, mergeMenu: false, confirming: false, form: null, reviewOpen: false });
+		if (prv.guide) prv.guide.editing = null;
 		return render();
 	}
 	if (t.tab === "commits" && t.sha) return void (location.hash = prHash(t, "commits"));
@@ -1462,7 +1465,7 @@ function renderPr() {
 		files = fileSet(key);
 		loadPr();
 	}
-	if (t.tab === "files" && files.key === key && !files.data && !files.error && !files.loading) {
+	if ((t.tab === "files" || t.tab === "guide") && files.key === key && !files.data && !files.error && !files.loading) {
 		files.loading = true;
 		loadFileSet(files, `/api/prs/files?repo=${encodeURIComponent(t.repo)}&number=${t.number}`);
 	}
@@ -1492,11 +1495,13 @@ function renderPr() {
 				el("code", {}, p.baseRef), " from ", el("code", {}, p.headRepo !== p.repo ? `${p.headRepo.split("/")[0]}:${p.headRef}` : p.headRef)),
 			el("span", { class: "counts" }, el("span", { class: "add" }, `+${p.additions}`), " ", el("span", { class: "del" }, `−${p.deletions}`))));
 	const talk = p.timeline.filter((x) => x.type === "comment" || x.type === "review").length;
-	const tabs = [["", "Conversation", talk], ["commits", "Commits", p.commits], ["checks", "Checks", p.checks.length], ["files", "Files changed", p.changedFiles]];
+	const left = prv.guide?.data ? prv.guide.data.steps.filter((x) => !x.reviewed).length : "";
+	const tabs = [["", "Conversation", talk], ["commits", "Commits", p.commits], ["checks", "Checks", p.checks.length], ["files", "Files changed", p.changedFiles], ["guide", "Guided review", left]];
 	const current = t.tab === "conversation" ? "" : t.tab;
 	const nav = el("nav", { class: "pr-tabs", "aria-label": "Pull request" }, tabs.map(([id, name, n]) =>
 		el("a", { href: prHash(t, id), class: id === current ? "on" : "", "aria-current": id === current ? "page" : null }, name, el("span", { class: "n" }, n))));
-	const content = t.tab === "commits" ? commitsView(t) : t.tab === "checks" ? checksView(p) : t.tab === "files" ? filesChangedView(t, p) : conversationView(t, p);
+	const content = t.tab === "commits" ? commitsView(t) : t.tab === "checks" ? checksView(p) : t.tab === "files" ? filesChangedView(t, p)
+		: t.tab === "guide" ? guideView(t, p) : conversationView(t, p);
 	const conv = t.tab === "conversation";
 	main.replaceChildren(el("div", { id: "pr-page" }, back, head,
 		el("div", { class: `pr-layout${conv ? "" : " wide"}` }, nav, el("section", { class: "pr-content" }, content), conv ? sidebar(p) : null)));
@@ -1820,6 +1825,215 @@ function reviewForm(p, own) {
 		el("div", { class: "btns" },
 			p.pendingReview ? el("button", { class: "quiet", onclick: busy(cancel) }, "Cancel review") : null,
 			el("button", { class: "primary", onclick: busy(submit) }, "Submit review")));
+}
+
+// -- guided review (SPEC 19) ------------------------------------------------------------
+// The server prepares the PR (noise hidden, steps in reading order, checked drafts); here
+// the person walks the steps with one key per decision.
+
+async function loadGuide(t) {
+	const key = prv.key;
+	const { status, data: d } = await api(`/api/review?repo=${encodeURIComponent(t.repo)}&number=${t.number}`);
+	if (prv.key !== key) return;
+	const g = prv.guide;
+	g.loading = false;
+	if (status !== 200) g.failed = d.error || `Could not load the guided review (${status})`;
+	else if (d.state === "failed") g.failed = d.error;
+	else if (d.state === "preparing") {
+		g.failed = null;
+		g.preparing = true;
+		setTimeout(() => prv.key === key && prTarget()?.tab === "guide" && loadGuide(t), 1000);
+	} else {
+		Object.assign(g, { data: d, failed: null, preparing: false });
+		if (g.idx === null) {
+			const changed = d.steps.findIndex((x) => x.changed);
+			const open = d.steps.findIndex((x) => !x.reviewed);
+			g.idx = changed >= 0 ? changed : open >= 0 ? open : d.steps.length;
+		}
+	}
+	render();
+}
+
+async function guidePost(what, body) {
+	const t = prTarget();
+	const { status, data: d } = await api(`/api/review/${what}`, { repo: t.repo, number: t.number, ...body });
+	if (status !== 200) toast(d.error || `Failed (${status})`);
+	return status === 200;
+}
+
+const guideStep = () => prv.guide?.data?.steps[prv.guide.idx] ?? null;
+const openDraft = (step) => step?.drafts.find((d) => d.state === "open") ?? null;
+
+// a decided draft leaves the queue at once (the next key goes to the next draft), and
+// comes back if the server refuses
+async function keepDraft(d, body) {
+	const g = prv.guide;
+	d.state = "saving";
+	if (!(await guidePost("draft", { draft: d.id, action: "keep", ...(body === undefined ? {} : { body }) }))) return void ((d.state = "open"), render());
+	d.state = "kept";
+	if (g.editing === d.id) g.editing = null;
+	drafts.delete(`gdraft:${d.id}`);
+	toast("Added to your review");
+	render();
+	loadPr(); // the pending count
+}
+
+async function dropDraft(d) {
+	d.state = "saving";
+	render();
+	if (!(await guidePost("draft", { draft: d.id, action: "drop" }))) return void ((d.state = "open"), render());
+	d.state = "dropped";
+	render();
+}
+
+async function lookGood() {
+	const g = prv.guide;
+	const step = guideStep();
+	if (!step) return;
+	if (!(await guidePost("step", { step: step.id, reviewed: true }))) return;
+	step.reviewed = true;
+	step.changed = false;
+	g.idx = Math.min(g.idx + 1, g.data.steps.length);
+	window.scrollTo(0, 0);
+	render();
+}
+
+function guideGo(by) {
+	const g = prv.guide;
+	g.idx = Math.max(0, Math.min(g.idx + by, g.data.steps.length));
+	g.editing = null;
+	prv.form = null;
+	window.scrollTo(0, 0);
+	render();
+}
+
+function editDraft(d) {
+	const g = prv.guide;
+	g.editing = d.id;
+	if (!drafts.has(`gdraft:${d.id}`)) drafts.set(`gdraft:${d.id}`, d.body);
+	render();
+	main.querySelector(".draft.editing textarea")?.focus();
+}
+
+/** One key, one decision. True when the key was used. */
+function guideKey(k) {
+	const g = prv.guide;
+	if (!g?.data) return false;
+	const step = guideStep();
+	const d = openDraft(step);
+	if (k === "b") return guideGo(-1), true;
+	if (!step) return false;
+	if (k === "y") return lookGood(), true;
+	if (k === "s") return guideGo(1), true;
+	if (k === "k" && d) return keepDraft(d), true;
+	if (k === "e" && d) return editDraft(d), true;
+	if (k === "x" && d) return dropDraft(d), true;
+	if (k === "c") {
+		prv.form = { subject: "file", path: step.files[0] };
+		render();
+		main.querySelector(".guide-step .comment-form textarea")?.focus();
+		return true;
+	}
+	return false;
+}
+
+function draftView(d, current) {
+	const g = prv.guide;
+	const where = `${d.path}:${d.side === "LEFT" ? "−" : "+"}${d.line}`;
+	const editing = g.editing === d.id;
+	const cls = `draft ${d.state}${editing ? " editing" : ""}${current ? " current" : ""}`;
+	if (editing) {
+		return el("div", { class: cls },
+			el("div", { class: "draft-where" }, where),
+			draftBox(`gdraft:${d.id}`, "Edit the comment", { rows: "3" }),
+			el("div", { class: "btns" },
+				el("button", { class: "quiet", onclick: () => { g.editing = null; render(); } }, "Cancel"),
+				el("button", { class: "primary", onclick: busy(() => keepDraft(d, (drafts.get(`gdraft:${d.id}`) ?? "").trim())) }, "Keep")));
+	}
+	return el("div", { class: cls },
+		el("div", { class: "draft-where" }, el("span", { class: "flag ai" }, "AI draft"), " ", where,
+			d.state !== "open" ? el("span", { class: "flag" }, { kept: "Kept", dropped: "Dropped", saving: "Saving…" }[d.state]) : null),
+		el("p", { class: "draft-body" }, d.body),
+		d.state === "open" ? el("div", { class: "btns" },
+			el("button", { onclick: busy(() => keepDraft(d)) }, "Keep", el("kbd", {}, "k")),
+			el("button", { onclick: () => editDraft(d) }, "Edit", el("kbd", {}, "e")),
+			el("button", { class: "quiet", onclick: busy(() => dropDraft(d)) }, "Drop", el("kbd", {}, "x"))) : null);
+}
+
+function guideView(t, p) {
+	if (!prv.guide) prv.guide = { data: null, failed: null, idx: null, editing: null, loading: false };
+	const g = prv.guide;
+	if (!g.data && !g.failed && !g.loading && !g.preparing) {
+		g.loading = true;
+		loadGuide(t);
+	}
+	if (g.failed) {
+		const retry = async () => {
+			if (!(await guidePost("prepare", {}))) return;
+			Object.assign(g, { failed: null, preparing: true });
+			render();
+			loadGuide(t);
+		};
+		return el("div", { class: "guide" }, el("p", { class: "hint" }, `Could not prepare the guided review: ${g.failed}`),
+			el("button", { onclick: busy(retry) }, "Try again"));
+	}
+	if (!g.data) return el("div", { class: "guide" }, el("p", { class: "hint" }, "Preparing the guided review: the AI reads the changes, one step at a time…"));
+	const d = g.data;
+	const n = d.steps.length;
+	const done = d.steps.filter((x) => x.reviewed).length;
+	const head = el("div", { class: "guide-head" },
+		d.summary ? el("p", { class: "guide-summary" }, d.summary) : null,
+		d.note ? el("p", { class: "hint" }, d.note) : null,
+		d.changedSinceReview ? el("p", { class: "guide-changed" }, `${plural(d.changedSinceReview, "step")} changed since your review`) : null,
+		el("p", { class: "guide-progress" }, g.idx < n ? `Step ${g.idx + 1} of ${n}` : `${n} of ${n}`, el("span", { class: "hint" }, ` · ${done} reviewed`),
+			el("span", { class: "meter", "aria-hidden": "true" }, el("span", { style: `width:${n ? (100 * done) / n : 100}%` }))),
+		d.noise.length ? el("details", { class: "guide-noise" },
+			el("summary", {}, `${plural(d.noise.length, "file")} hidden: no real change to review`),
+			el("ul", {}, d.noise.map((x) => el("li", {}, el("code", {}, x.path), ` · ${x.why}`)))) : null);
+	if (!n) return el("div", { class: "guide" }, head, el("p", { class: "hint" }, "Nothing to review: every changed file is noise."));
+	if (g.idx >= n) {
+		const pending = p.pendingReview?.comments ?? 0;
+		const own = p.author.toLowerCase() === prv.login.toLowerCase();
+		if (prv.reviewOpen && !drafts.has("review") && d.summary) drafts.set("review", d.summary);
+		return el("div", { class: "guide" }, head, el("div", { class: "guide-done" },
+			el("h3", {}, done === n ? `All ${n} steps reviewed` : `${done} of ${n} steps reviewed`),
+			el("p", {}, `${plural(pending, "pending comment")} in your review.`),
+			el("div", { class: "btns" },
+				el("button", { class: "quiet", onclick: () => guideGo(-1) }, "Back", el("kbd", {}, "b")),
+				p.state === "OPEN" && !prv.reviewOpen ? el("button", { class: "primary", onclick: () => { prv.reviewOpen = true; render(); } }, "Submit review") : null),
+			prv.reviewOpen && p.state === "OPEN" ? reviewForm(p, own) : null));
+	}
+	const step = d.steps[g.idx];
+	const current = openDraft(step);
+	const filesOf = step.files.map((path) => {
+		const f = files.data?.files.find((x) => x.path === path);
+		if (!f) return el("p", { class: "hint" }, files.error ?? `Loading ${path}…`);
+		if (!files.diffs.has(path)) {
+			files.diffs.set(path, null);
+			loadDiff(files, t.repo, f);
+		}
+		const fileForm = prv.form?.subject === "file" && prv.form.path === path ? commentForm(prv.form) : null;
+		return el("div", { class: "file-diff" },
+			el("div", { class: "guide-file" }, el("code", {}, path), el("span", { class: "counts" }, el("span", { class: "add" }, `+${f.additions}`), " ", el("span", { class: "del" }, `−${f.deletions}`))),
+			fileForm,
+			diffView(f, files.diffs.get(path), `${p.url}/files`, files.mdMode, undefined, {
+				path, commentable: p.state === "OPEN" ? f.commentable : null,
+				threads: p.threads.filter((th) => th.path === path && th.line && !th.outdated),
+				form: prv.form,
+				onAdd: (side, line) => { prv.form = { subject: "line", path, side, line }; render(); main.querySelector(".comment-form textarea")?.focus(); },
+			}, { repo: t.repo, number: t.number }));
+	});
+	return el("div", { class: "guide" }, head,
+		el("article", { class: "guide-step" },
+			el("h3", {}, step.title, step.reviewed ? el("span", { class: "flag" }, "Reviewed") : null, step.changed ? el("span", { class: "flag" }, "Changed") : null),
+			step.summary ? el("p", { class: "guide-step-summary" }, step.summary) : null,
+			step.drafts.length ? el("div", { class: "drafts" }, step.drafts.map((x) => draftView(x, x === current))) : null,
+			filesOf),
+		el("div", { class: "guide-keys btns" },
+			el("button", { class: "quiet", onclick: () => guideGo(-1), disabled: g.idx === 0 }, "Back", el("kbd", {}, "b")),
+			el("button", { class: "quiet", onclick: () => guideKey("c") }, "Comment", el("kbd", {}, "c")),
+			el("button", { class: "quiet", onclick: () => guideGo(1) }, "Skip", el("kbd", {}, "s")),
+			el("button", { class: "primary", onclick: busy(lookGood) }, "Looks good", el("kbd", {}, "y"))));
 }
 
 // -- resolving conflicts

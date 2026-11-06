@@ -531,6 +531,36 @@ textarea:focus, .merge-confirm input:focus { outline: 2px solid var(--accent); o
 .review-changes { background: var(--fg) !important; color: var(--bg) !important; border-color: var(--fg) !important; display: inline-flex; gap: 6px; align-items: center; }
 .review-changes .n { font: 600 11px var(--mono); background: var(--accent); color: var(--accent-ink); border-radius: 999px; padding: 1px 7px; }
 .review-form { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: var(--bg); }
+/* SPEC 19: guided review */
+.guide { display: grid; gap: 14px; }
+.guide-head { display: grid; gap: 6px; }
+.guide-summary { margin: 0; font-size: 15px; }
+.guide-changed { margin: 0; color: var(--wait); font-weight: 600; }
+.guide-progress { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font: 600 14px var(--display); }
+.guide-progress .meter { flex: 1 1 120px; min-width: 120px; height: 6px; border-radius: 3px; background: var(--faint); overflow: hidden; }
+.guide-progress .meter span { display: block; height: 100%; background: var(--ok); transition: width var(--fast) var(--ease); }
+.guide-noise summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.guide-noise ul { margin: 6px 0 0; padding-left: 18px; font-size: 13px; color: var(--muted); }
+.guide-step { border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: grid; gap: 10px; min-width: 0; }
+.guide-step h3 { margin: 0; font: 600 17px var(--display); display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.guide-step-summary { margin: 0; color: var(--muted); }
+.guide-file { display: flex; gap: 10px; align-items: baseline; font-size: 13px; padding: 4px 0; overflow-wrap: anywhere; }
+.drafts { display: grid; gap: 8px; }
+.draft { border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 8px; padding: 8px 10px; display: grid; gap: 6px; background: var(--bg); }
+.draft.current { background: var(--sel); }
+.draft.kept { border-left-color: var(--ok); opacity: .75; }
+.draft.dropped, .draft.saving { border-left-color: var(--line); opacity: .5; }
+.draft.dropped .draft-body { text-decoration: line-through; }
+.draft-where { font: 500 12px var(--mono); color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; overflow-wrap: anywhere; }
+.draft-body { margin: 0; }
+.flag.ai { color: var(--accent); }
+.guide-keys { position: sticky; bottom: 0; background: var(--bg); padding: 10px 0; border-top: 1px solid var(--line); justify-content: flex-end; flex-wrap: wrap; }
+.guide-keys kbd, .draft kbd, .guide-done kbd { margin-left: 6px; }
+.guide-keys .primary kbd { background: transparent; color: inherit; border-color: color-mix(in oklch, var(--bg) 40%, transparent); }
+@media not ((hover: hover) and (pointer: fine)) { .guide kbd { display: none; } }
+.guide-done { border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: grid; gap: 10px; }
+.guide-done h3 { margin: 0; font: 600 17px var(--display); }
+.guide-done p { margin: 0; }
 .review-form h4 { margin: 0; font: 600 14px var(--sans); } .review-form .hint { font-size: 12.5px; color: var(--muted); }
 .viewed-box { font-size: 12.5px; color: var(--muted); } .viewed-box.on { color: var(--fg); }
 .file.is-viewed .path { color: var(--muted); }

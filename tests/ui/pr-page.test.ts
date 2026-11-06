@@ -92,7 +92,7 @@ test("16. Enter opens the PR page: header, tabs with counts, sidebar; Escape ret
 		assert.match((await s.page.locator(".pr-head h1").textContent())!, /Raise the limit.*#4/);
 		assert.equal(await s.page.locator(".state-badge").textContent(), "Open");
 		assert.match((await s.page.locator(".pr-meta").textContent())!, /kelly wants to merge 1 commit into main from feature/);
-		assert.deepEqual(await s.page.locator(".pr-tabs a").allTextContents(), ["Conversation2", "Commits1", "Checks2", "Files changed3"]);
+		assert.deepEqual(await s.page.locator(".pr-tabs a").allTextContents(), ["Conversation2", "Commits1", "Checks2", "Files changed3", "Guided review"]);
 		assert.deepEqual(await s.page.locator(".sidebar h3").allTextContents(), ["Reviewers", "Assignees", "Labels", "Milestone"]);
 		assert.match((await s.page.locator(".side-reviewers").textContent())!, /hwan/);
 		await s.page.keyboard.press("Escape");

@@ -15,6 +15,6 @@ COPY src ./src
 COPY public ./public
 COPY config.yaml ./
 USER node
-ENV NODE_ENV=production DB_PATH=/data/gh-dashboard.sqlite
+ENV NODE_ENV=production DB_PATH=/data/nudgebox.sqlite
 EXPOSE 8080 8081
 CMD ["node", "--disable-warning=ExperimentalWarning", "src/server.ts"]

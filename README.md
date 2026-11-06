@@ -1,4 +1,4 @@
-# gh-dashboard (Nudgebox)
+# Nudgebox
 
 **Nudgebox** at **gh.bioinfolder.com**: the Jeong Lab's GitHub inbox for pull requests
 and issues, on a Mac browser and an iPhone home screen, with push notifications.
@@ -26,7 +26,7 @@ the GitHub App and the bioinfolder-srv setup come next.
 
 ```sh
 cp .env.example .env    # fill in (GitHub App, TOKEN_KEY, VAPID keys); chmod 600
-docker build -t gh-dashboard .
+docker build -t nudgebox .
 ```
 
 Two ports, on purpose (see `src/server.ts`):

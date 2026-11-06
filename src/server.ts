@@ -63,7 +63,7 @@ const app = createApp({
 	githubClientId: need("GITHUB_CLIENT_ID"),
 	webhookSecret: need("GITHUB_WEBHOOK_SECRET"),
 	encryptionKey: tokenKey,
-	dbPath: process.env.DB_PATH ?? "/data/gh-dashboard.sqlite",
+	dbPath: process.env.DB_PATH ?? "/data/nudgebox.sqlite",
 	vapidPublicKey: vapid.publicKey,
 	push: async (sub, payload, opts) => {
 		await webpush.sendNotification(sub, JSON.stringify(payload), { vapidDetails: vapid, TTL: 24 * 3600, urgency: opts?.urgency ?? "normal" });

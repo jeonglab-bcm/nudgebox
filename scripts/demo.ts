@@ -17,7 +17,7 @@ const t = await start(existsSync("bin/omnidiff") ? { diff: createOmnidiff("bin/o
 const DAY = 86400_000;
 const ago = (d: number) => new Date(Date.now() - d * DAY).toISOString();
 const L = (r: string) => `jeonglab-bcm/${r}`;
-const repos = [L("labbot"), L("AURORA"), L("variant-db"), L("gh-dashboard"), L("outloud"), "hyunhwan-bcm/tailjobs", "hyunhwan-bcm/dotfiles"];
+const repos = [L("labbot"), L("AURORA"), L("variant-db"), L("nudgebox"), L("outloud"), "hyunhwan-bcm/tailjobs", "hyunhwan-bcm/dotfiles"];
 t.github.grant("hwan", ...repos);
 
 const pr = (repo: string, number: number, author: string, title: string, days: number, extra: object = {}) =>
@@ -29,7 +29,7 @@ pr(L("AURORA"), 311, "kelly", "Rank candidate genes with HPO similarity and inhe
 pr("hyunhwan-bcm/tailjobs", 31, "hwan", "Slurm array job support", 0.05, { checks: "success", reviewDecision: null });
 pr(L("outloud"), 57, "hwan", "Clear cookies after a bad sign-in", 3.5, { checks: "success", reviewDecision: "CHANGES_REQUESTED" });
 // WIP
-pr(L("gh-dashboard"), 9, "hwan", "Triage list: one line per PR, keyboard actions", 0.02, { draft: true, checks: "pending" });
+pr(L("nudgebox"), 9, "hwan", "Triage list: one line per PR, keyboard actions", 0.02, { draft: true, checks: "pending" });
 pr("hyunhwan-bcm/dotfiles", 214, "hwan", "zsh: lazy-load nvm and pyenv", 1, { checks: "pending", reviewDecision: "REVIEW_REQUIRED" });
 // CI failing / everything else
 pr(L("AURORA"), 305, "sgarcia", "Bump torch to 2.9 and pin CUDA 12.8 wheels", 4, { checks: "failure" });

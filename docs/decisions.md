@@ -1,4 +1,4 @@
-# gh-dashboard decisions
+# Nudgebox decisions
 
 Change this file by PR. The spec is [`SPEC.md`](../SPEC.md); this file records why.
 

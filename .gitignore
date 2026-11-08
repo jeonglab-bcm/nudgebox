@@ -3,3 +3,7 @@ node_modules/
 data/
 *.sqlite*
 bin/
+deploy/config.yaml
+deploy/.env
+deploy/github-app.pem
+deploy/data/

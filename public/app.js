@@ -539,7 +539,7 @@ async function refreshPush() {
 			if (sub) push = { state: "on", sub, reg: swReg, reason: "" };
 			else if (window.Notification?.permission === "denied") push = { state: "blocked", sub: null, reg: swReg, reason: isIOS
 				? "Notifications are blocked for Nudgebox. Allow them in the iPhone's Settings → Notifications → Nudgebox."
-				: "Notifications are blocked for this site. Allow gh.bioinfolder.com in your browser's site settings, and the browser in System Settings → Notifications." };
+				: `Notifications are blocked for this site. Allow ${location.host} in your browser's site settings, and the browser in System Settings → Notifications.` };
 			else push = { state: "off", sub: null, reg: swReg, reason: "" };
 		} catch (e) {
 			push = { state: "unavailable", sub: null, reg: null, reason: `Notifications could not start here (${e.message}).` };

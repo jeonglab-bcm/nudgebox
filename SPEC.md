@@ -18,8 +18,10 @@ Jeong Lab members with a lab (Keycloak) login. Each person sees their own view.
 
 1. **Lab login gets you in.** gh.bioinfolder.com sits behind the same Keycloak
    sign-in (oauth2-proxy sidecar) as every other bioinfolder app. The app trusts the
-   sidecar's `X-Forwarded-Email` / `X-Forwarded-Preferred-Username` headers and
-   nothing else; a request without them gets 401.
+   sidecar's identity headers and nothing else: `X-Forwarded-Preferred-Username`,
+   else `X-Forwarded-User` (what oauth2-proxy's GitHub sign-in sends: the GitHub
+   login), else `X-Forwarded-Email`. A request without them gets 401. A lab running
+   its own copy signs in with GitHub through the same sidecar (section 9).
 2. **Link GitHub once.** The first visit asks the person to connect GitHub through
    the lab's own GitHub App ("Sign in with GitHub" for that App). The app stores
    their user token (encrypted) and refreshes it. Actions on PRs run **as that
@@ -119,6 +121,12 @@ requests must carry a valid GitHub signature or are rejected.
 Docker on anjanda, like the other bioinfolder apps: nginx + Keycloak sidecar in front,
 `/webhook` reachable without the sidecar (GitHub cannot sign in) but signature-checked.
 The vhost and sidecar live in `bioinfolder-srv`; this repo holds the app.
+
+**Anywhere else** (issue #33): `deploy/docker-compose.yml` runs the app with
+oauth2-proxy signing in with GitHub, limited to one organization's members, and
+`deploy/config.example.yaml` shows every setting (`src/config.ts` reads them; unknown
+keys are logged). Nothing about the Jeong Lab is built into the code: no site address,
+LLM address or timezone (default UTC). The README's "Run your own" walks through it.
 
 ## 10. Out of scope (for now)
 

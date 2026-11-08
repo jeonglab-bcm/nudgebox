@@ -2,7 +2,8 @@
  * The app: HTTP handler (pages, API, webhook) plus the sync and stale-digest jobs.
  * The acceptance tests in tests/acceptance define the behaviour; SPEC.md the why.
  *
- * Identity comes only from the Keycloak sidecar's headers (SPEC 3.1): this process
+ * Identity comes only from the sign-in sidecar's headers (SPEC 3.1; oauth2-proxy with
+ * Keycloak at the lab, or with GitHub login, deploy/): this process
  * must be reachable only through that sidecar, except /webhook (signature-checked)
  * and the static web-app files (no data in them).
  */
@@ -128,10 +129,10 @@ export function createApp(opts: AppOptions): App {
 	// -- identity and GitHub tokens ---------------------------------------------
 
 	function labUser(req: IncomingMessage): string {
-		const name = String(req.headers["x-forwarded-preferred-username"] ?? "").trim().toLowerCase();
-		const email = String(req.headers["x-forwarded-email"] ?? "").trim().toLowerCase();
-		const who = name || email;
-		if (!who) throw new HttpError(401, "sign in through the lab login");
+		// Keycloak sends a preferred username; oauth2-proxy's GitHub login only the user (#33)
+		const header = (h: string) => String(req.headers[h] ?? "").trim().toLowerCase();
+		const who = header("x-forwarded-preferred-username") || header("x-forwarded-user") || header("x-forwarded-email");
+		if (!who) throw new HttpError(401, "sign in first");
 		return who;
 	}
 

@@ -1,0 +1,57 @@
+# Run your own Nudgebox (see README, "Run your own"). From this folder:
+#   cp config.example.yaml config.yaml   # then edit it
+#   cp ../.env.example .env              # then fill it in
+#   docker compose up -d --build
+#
+# Two containers:
+# - app: listens twice. :8080 is the whole app and trusts the sign-in sidecar's
+#   X-Forwarded-* headers, so it is NEVER published: only oauth2-proxy reaches it.
+#   :8081 serves only GitHub's signed webhook and the static web-app files, and
+#   strips identity headers.
+# - oauth2-proxy: sign-in with GitHub, limited to members of your organization. It
+#   sends /webhook and the static files to :8081 without sign-in, all else to :8080.
+#
+# Put HTTPS in front of port 4180 (Caddy, nginx, Cloudflare Tunnel, ...): browsers
+# need HTTPS for notifications, and the sign-in cookie is HTTPS-only.
+services:
+  app:
+    build: ..
+    image: nudgebox:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      GITHUB_APP_PRIVATE_KEY_FILE: /run/secrets/github-app.pem
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./github-app.pem:/run/secrets/github-app.pem:ro
+      - ./data:/data                 # SQLite: linked accounts (tokens sealed), devices, cache
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # for an LLM (e.g. Ollama) on this machine
+
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.5
+    restart: unless-stopped
+    environment:
+      OAUTH2_PROXY_PROVIDER: github
+      OAUTH2_PROXY_GITHUB_ORG: "${SIGNIN_GITHUB_ORG}"        # only members of this org get in
+      OAUTH2_PROXY_CLIENT_ID: "${SIGNIN_CLIENT_ID}"          # a GitHub OAuth App for sign-in
+      OAUTH2_PROXY_CLIENT_SECRET: "${SIGNIN_CLIENT_SECRET}"
+      OAUTH2_PROXY_COOKIE_SECRET: "${SIGNIN_COOKIE_SECRET}"  # openssl rand -base64 32 | tr -- '+/' '-_'
+      OAUTH2_PROXY_REDIRECT_URL: "${SIGNIN_REDIRECT_URL}"    # https://<your site>/oauth2/callback
+      OAUTH2_PROXY_SCOPE: "user:email read:org"
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      OAUTH2_PROXY_PASS_USER_HEADERS: "true"   # load-bearing: the app identifies people from these
+      OAUTH2_PROXY_UPSTREAMS: "http://app:8080/,http://app:8081/webhook,http://app:8081/manifest.webmanifest,http://app:8081/sw.js,http://app:8081/icon.svg,http://app:8081/icon-180.png,http://app:8081/icon-512.png"
+      OAUTH2_PROXY_SKIP_AUTH_ROUTES: 'POST=^/webhook$,GET=^/(manifest\.webmanifest|sw\.js|icon\.svg|icon-180\.png|icon-512\.png)$'
+      OAUTH2_PROXY_UPSTREAM_TIMEOUT: "330s"   # above the app's 5 min for a slow model
+      OAUTH2_PROXY_COOKIE_EXPIRE: "720h"
+      OAUTH2_PROXY_COOKIE_REFRESH: "1h"
+      OAUTH2_PROXY_COOKIE_SECURE: "true"
+      OAUTH2_PROXY_REVERSE_PROXY: "true"
+      OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+      OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
+      OAUTH2_PROXY_SILENCE_PING_LOGGING: "true"
+    ports:
+      - "127.0.0.1:4180:4180"   # your HTTPS proxy forwards to this
+    depends_on:
+      - app

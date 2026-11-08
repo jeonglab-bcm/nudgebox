@@ -453,8 +453,17 @@ and Compare.
 ## 18. Desktop app (Mac and Linux)
 
 A small **Nudgebox** app for macOS and Linux (Tauri), for notifications that do not
-depend on the browser's push. It opens gh.bioinfolder.com in its own window, behind the
-same lab sign-in (section 3); the sign-in is kept between launches.
+depend on the browser's push. It opens a Nudgebox site in its own window, behind that
+site's sign-in (section 3); the sign-in is kept between launches.
+
+- **Which site.** On first launch a small window asks for the server's address,
+  filled in with gh.bioinfolder.com. `review.example.org` becomes
+  `https://review.example.org/`; anything but https is refused with the reason. The
+  choice is kept, and **Change server…** in the menu bar or tray asks again (the app
+  restarts on the new site). Only the chosen site may call the app (notifications,
+  badge, opening links); its sign-in pages on sibling addresses (e.g.
+  auth.bioinfolder.com next to gh.bioinfolder.com) and GitHub's sign-in stay in the
+  window, and every other link opens in the browser.
 
 - **Live stream.** The page in the app holds one `GET /api/events` stream
   (Server-Sent Events). Every notification of sections 7 and 11 goes to all of that

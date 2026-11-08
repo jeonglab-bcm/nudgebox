@@ -226,3 +226,28 @@ without a failure) and the check told to answer false when in doubt, the specula
 ones are dropped. The lab model will rarely find subtle bugs; that is what Deep review
 is for. Planning the steps worked well on the first try (5 steps, sensible order,
 valid JSON, about 7 s).
+
+## 2026-11-07: AI settings with OpenAI, Anthropic or OpenAI-compatible
+
+Dr. Jeong wants other labs to be able to run their own Nudgebox outside bioinfolder
+(issue #33), and asked how they would choose an LLM. Not every lab has its own model
+server, so the LLM is chosen on the settings page by an admin rather than only in
+`config.yaml`. Three providers, as Dr. Jeong asked: **OpenAI**, **Anthropic**, and
+**OpenAI-compatible** for everything with that API (the lab LLM, Ollama, vLLM,
+OpenRouter). Ollama is not its own choice: it is an OpenAI-compatible address.
+
+Anthropic goes through its own Messages API with the official SDK, not its
+OpenAI-compatible endpoint, so Claude's own features (adaptive thinking, refusal
+fallback, later the tools Deep review needs) work. Models that take it get Anthropic's
+server-side fallback on a refusal. Note: SDK 1.x sends the API key as
+`Authorization: Bearer`, not `x-api-key`.
+
+Until now every request carried Qwen's `chat_template_kwargs`, which OpenAI refuses.
+It is now sent only when the "Qwen: turn thinking off" box (`noThinking`) is on; the
+lab's `config.yaml` sets it. For OpenAI itself, requests use `max_completion_tokens`
+and no `temperature`, which its reasoning models require.
+
+The key is stored with the same AES-GCM sealing as GitHub tokens. Admins are listed in
+`config.yaml`, because there was no admin role before and the settings page is the
+first thing that needs one.
+

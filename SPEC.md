@@ -145,9 +145,9 @@ acting on issues.
 
 - A **Summarize** button on every PR and issue row. Nothing is generated until it is
   clicked.
-- The summary is made by the lab's own LLM at `llm.bioinfolder.com` (OpenAI-compatible
-  API, model set in `config.yaml`), so private repo content stays on lab hardware.
-  Without an LLM key the button is not shown.
+- The summary is made by the LLM chosen in Settings → AI (section 20), or else the one
+  in `config.yaml`. At the lab that is its own LLM at `llm.bioinfolder.com`, so private
+  repo content stays on lab hardware. With no LLM set up the button is not shown.
 - What the model reads: **PR**: title, description, changed files and their diffs,
   review and conversation comments. **Issue**: title, description, comments. Input is
   cut to a fixed size so very large PRs still work.
@@ -245,6 +245,7 @@ or `Escape` returns to the list. List keys (section 13) do nothing on this page.
 - **GitHub account:** which GitHub login and lab login are connected, and
   **Disconnect GitHub** (asks first; the stored token is deleted). It is no longer at
   the bottom of the list.
+- **AI** (admins only): the provider and models, section 20.
 
 **Header bell.** Next to the gear, a bell shows this device's notification state at a
 glance: a plain bell when on, a crossed-out bell with a dot when off, a crossed-out
@@ -524,3 +525,30 @@ review**, which opens the review form of section 16 with the PR's summary as its
 Each key is also a button, for a phone.
 
 The PR's text, files and comments are data, never instructions to the model.
+
+## 20. AI settings
+
+Which LLM Nudgebox uses, set on the settings page so a lab running its own copy (or
+this one, later) can change it without editing files or restarting.
+
+- An **AI** section in Settings, shown only to **admins**: the lab users listed under
+  `admins:` in `config.yaml`. Everyone else gets 403 from its API.
+- **Provider**: Off, **OpenAI**, **Anthropic** or **OpenAI-compatible**.
+  - OpenAI and Anthropic always use their own address. Anthropic is called through its
+    own Messages API (`@anthropic-ai/sdk`), not an OpenAI-compatible endpoint.
+  - OpenAI-compatible takes an **address** (the lab LLM, Ollama, vLLM, LM Studio,
+    OpenRouter, …); its key is optional, and a **"Qwen: turn thinking off"** box sends
+    `chat_template_kwargs`. Other providers get no vendor-specific fields.
+- **API key**: stored encrypted with `TOKEN_KEY`, like GitHub tokens, and never sent
+  back to the page, which only says that one is saved. Leaving it empty keeps the
+  saved key.
+- **Two models**: one for summaries, Explain and Guided review (runs often, should be
+  cheap), and one for Deep review (on request; empty means the same). The model fields
+  offer the provider's own model list, and any name can be typed.
+- **Test** sends one tiny prompt with what is typed (not saved) and shows how long the
+  answer took, or the provider's error message (for example a wrong key).
+- **Save** applies at once, without a restart; the next Summarize uses it. **Off** hides
+  every AI button and makes no LLM calls.
+- `config.yaml` (`llm: provider, baseUrl, model, deepModel, noThinking`) with
+  `LLM_API_KEY` in `.env` is the server's own setting, used until an admin saves one on
+  the page. The page says which one is in use.

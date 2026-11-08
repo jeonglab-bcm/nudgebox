@@ -13,8 +13,8 @@ import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
 import webpush from "web-push";
 import { parse } from "yaml";
-import { createApp } from "./app.ts";
-import { createSummarizer } from "./llm.ts";
+import { createApp, type ServerAi } from "./app.ts";
+import { createLlm, listModels, type Provider } from "./llm.ts";
 import { createOmnidiff } from "./omnidiff.ts";
 import { OctokitGitHub } from "./octokit-github.ts";
 import { publicOnly } from "./public.ts";
@@ -49,12 +49,20 @@ const github = new OctokitGitHub({
 	log,
 });
 
-// SPEC 12: AI summary through the lab LLM, only when Nudgebox has its own bif_ token
-const llmKey = process.env.LLM_API_KEY;
-const summarize = llmKey
-	? createSummarizer({ baseUrl: String(cfg.llm?.baseUrl ?? "https://llm.bioinfolder.com/v1"), model: String(cfg.llm?.model ?? "qwen3.8-flash-next"), apiKey: llmKey })
-	: undefined;
-log(summarize ? `AI summary on (${cfg.llm?.model ?? "qwen3.8-flash-next"})` : "AI summary off: no LLM_API_KEY");
+// SPEC 12, 20: the server's own LLM from config.yaml (`llm:`) and LLM_API_KEY. The admin
+// can choose another on the settings page, which then wins.
+function serverAi(): ServerAi | undefined {
+	const l = cfg.llm;
+	if (!l?.model) return undefined;
+	const provider = String(l.provider ?? (l.baseUrl ? "compatible" : "")) as Provider;
+	if (!["openai", "anthropic", "compatible"].includes(provider)) throw new Error(`config.yaml llm.provider must be openai, anthropic or compatible`);
+	const apiKey = process.env.LLM_API_KEY || undefined;
+	if (provider !== "compatible" && !apiKey) return undefined; // OpenAI and Anthropic need a key
+	return { provider, baseUrl: provider === "compatible" ? String(l.baseUrl ?? "") : undefined, apiKey, model: String(l.model), deepModel: l.deepModel ? String(l.deepModel) : undefined, noThinking: Boolean(l.noThinking) };
+}
+const ai = serverAi();
+const summarize = ai ? createLlm(ai) : undefined;
+log(ai ? `AI on (${ai.provider}, ${ai.model})` : "AI off in config.yaml (an admin can turn it on in Settings)");
 
 const app = createApp({
 	config,
@@ -71,6 +79,9 @@ const app = createApp({
 	now: () => new Date(),
 	log,
 	summarize,
+	serverAi: ai,
+	admins: (cfg.admins ?? []).map(String),
+	providers: { make: createLlm, models: listModels },
 	diff: createOmnidiff(process.env.OMNIDIFF_BIN ?? "omnidiff"), // SPEC 15; the image has it on PATH
 });
 

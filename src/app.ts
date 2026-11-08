@@ -15,7 +15,7 @@ import { Store, type LinkedUser } from "./store.ts";
 import { seal, unseal } from "./crypto.ts";
 import { buildInbox, isMine, reviewRequested, type Viewer } from "./inbox.ts";
 import { verifySignature } from "./webhook.ts";
-import type { Prompt, Summarize } from "./llm.ts";
+import type { LlmConfig, Prompt, Provider, Summarize } from "./llm.ts";
 import { issuePrompt, prPrompt, SUMMARY_FORMAT } from "./summary.ts";
 import type { Differ, DiffSide } from "./omnidiff.ts";
 import { hasMarkers, planMerge, type ReadFile } from "./conflicts.ts";
@@ -57,9 +57,21 @@ export interface AppOptions {
 	push: (sub: PushSubscription, payload: PushPayload, opts?: PushOptions) => Promise<void>; // throws {statusCode: 404|410} when gone
 	now: () => Date;
 	log?: (msg: string) => void;
-	summarize?: Summarize; // SPEC 12: the lab LLM; absent -> no Summarize button
+	summarize?: Summarize; // SPEC 12: the server's own LLM (config.yaml); absent -> no AI unless the admin sets one
+	serverAi?: ServerAi; // SPEC 20: what that LLM is, shown on the settings page
+	admins?: string[]; // SPEC 20: lab users who may change the AI settings
+	providers?: Providers; // SPEC 20: sets up the provider the admin picks on the page
 	diff?: Differ; // SPEC 15: omnidiff; absent -> no diffs
 }
+
+/** SPEC 20: makes a provider's LLM, and lists its models. */
+export interface Providers {
+	make: (c: LlmConfig) => Summarize;
+	models: (c: Omit<LlmConfig, "model">) => Promise<string[]>;
+}
+
+/** SPEC 20: the LLM the server was started with (config.yaml + LLM_API_KEY). */
+export type ServerAi = Omit<LlmConfig, "timeoutMs"> & { deepModel?: string };
 
 export interface App {
 	handler: (req: IncomingMessage, res: ServerResponse) => void;
@@ -363,7 +375,7 @@ export function createApp(opts: AppOptions): App {
 			const pr = payload.action === "closed" ? (store.deletePr(repo, n), null) : await refreshPr(repo, n);
 			if (pr && payload.action === "review_requested") await onReviewRequested(pr, payload);
 			// SPEC 19: ready before anyone opens it
-			if (pr && opts.summarize && ["opened", "synchronize", "reopened", "ready_for_review"].includes(payload.action)) startPrep(pr);
+			if (pr && ai() && ["opened", "synchronize", "reopened", "ready_for_review"].includes(payload.action)) startPrep(pr);
 		} else if (event === "pull_request_review" || event === "pull_request_review_comment") {
 			await refreshPr(repo, payload.pull_request.number);
 		} else if (event === "issue_comment" && payload.issue?.pull_request) {
@@ -630,7 +642,7 @@ export function createApp(opts: AppOptions): App {
 
 	/** The kept summary, or the run making it (started if need be). Throws HttpError for refusals. */
 	async function summaryFor(req: IncomingMessage, lab: string): Promise<{ kept: string } | { run: SummaryRun }> {
-		const llm = opts.summarize;
+		const llm = ai();
 		if (!llm) throw new HttpError(503, "AI summary is not set up");
 		const b = await json(req);
 		if (b.kind !== "pr" && b.kind !== "issue") throw new HttpError(400, "kind must be pr or issue");
@@ -661,7 +673,7 @@ export function createApp(opts: AppOptions): App {
 	 * everyone asking meanwhile watches the same run (SPEC 12, 17).
 	 */
 	function modelRun(key: string, version: string, prompt: () => Promise<Prompt>): SummaryRun {
-		const llm = opts.summarize!;
+		const llm = ai()!;
 		const id = `${key}@${version}`;
 		let run = summarizing.get(id);
 		if (run) return run;
@@ -690,7 +702,7 @@ export function createApp(opts: AppOptions): App {
 
 	/** SPEC 17: Explain a file's diff. The kept explanation, or the run making it. */
 	async function explainFor(req: IncomingMessage, lab: string): Promise<{ kept: string } | { run: SummaryRun }> {
-		if (!opts.summarize) throw new HttpError(503, "AI explanations are not set up");
+		if (!ai()) throw new HttpError(503, "AI explanations are not set up");
 		const b = await json(req);
 		const sides = await sidesOf(b, lab);
 		const d = await diffOf(sides);
@@ -773,7 +785,7 @@ export function createApp(opts: AppOptions): App {
 		const noise = files.filter((f) => f.why).map((f) => ({ path: f.path, why: f.why! }));
 		const rest = files.filter((f) => !f.why);
 		const byPath = new Map(rest.map((f) => [f.path, f]));
-		const llm = opts.summarize;
+		const llm = ai();
 		const step = (title: string, summary: string, paths: string[], drafts: PrepDraft[] = []): PrepStep => {
 			const fps = paths.map((p) => ({ path: p, fp: byPath.get(p)!.fp }));
 			return { id: short16(fps.map((x) => x.fp).sort().join("\n")), title, summary, files: paths, fps, drafts };
@@ -951,6 +963,119 @@ export function createApp(opts: AppOptions): App {
 	}
 
 
+	// -- AI settings (SPEC 20) -------------------------------------------------------------
+
+	/** Saved on the settings page; the key sealed like GitHub tokens. */
+	type AiSaved = { provider: "off" | Provider; baseUrl?: string; model?: string; deepModel?: string; noThinking?: boolean; keySealed?: string };
+	type AiForm = AiSaved & { apiKey?: string };
+	const PROVIDERS = ["off", "openai", "anthropic", "compatible"];
+	const made = new Map<string, Summarize>();
+	const isAdmin = (lab: string) => (opts.admins ?? []).some((a) => a.toLowerCase() === lab);
+	const savedAi = () => store.setting("ai") as AiSaved | undefined;
+
+	/**
+	 * The LLM to use now: the admin's choice on the page, else the server's own. The
+	 * everyday model runs summaries, explanations and guided review; "deep" is for Deep review.
+	 */
+	function ai(kind: "everyday" | "deep" = "everyday"): Summarize | undefined {
+		const s = savedAi();
+		if (!s) return opts.summarize;
+		if (s.provider === "off" || !opts.providers) return undefined;
+		const model = kind === "deep" ? s.deepModel || s.model! : s.model!;
+		const c = configOf(s, model, s.keySealed ? unseal(opts.encryptionKey, s.keySealed) : undefined);
+		const id = JSON.stringify(c);
+		let llm = made.get(id);
+		if (!llm) {
+			if (made.size > 4) made.clear(); // only the current settings matter
+			llm = opts.providers.make(c);
+			made.set(id, llm);
+		}
+		return llm;
+	}
+
+	/** OpenAI and Anthropic always use their own address; only OpenAI-compatible takes one. */
+	function configOf(s: Pick<AiSaved, "provider" | "baseUrl" | "noThinking">, model: string, apiKey: string | undefined): LlmConfig {
+		const compatible = s.provider === "compatible";
+		return { provider: s.provider as Provider, baseUrl: compatible ? s.baseUrl : undefined, apiKey, model, noThinking: compatible && Boolean(s.noThinking) };
+	}
+
+	function requireAdmin(lab: string) {
+		if (!isAdmin(lab)) throw new HttpError(403, "only an admin can change the AI settings");
+		if (!opts.providers) throw new HttpError(503, "AI providers are not available on this server");
+	}
+
+	/** What the page shows: never the key, only whether one is set. */
+	function aiView() {
+		const s = savedAi();
+		if (s) return { from: "page", provider: s.provider, baseUrl: s.baseUrl, model: s.model, deepModel: s.deepModel, noThinking: Boolean(s.noThinking), keySet: Boolean(s.keySealed) };
+		const v = opts.serverAi;
+		if (v) return { from: "server", provider: v.provider, baseUrl: v.baseUrl, model: v.model, deepModel: v.deepModel, noThinking: Boolean(v.noThinking), keySet: Boolean(v.apiKey) };
+		return { from: opts.summarize ? "server" : "none", provider: opts.summarize ? undefined : "off", keySet: false };
+	}
+
+	const str = (v: unknown, max: number) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : undefined);
+
+	/** A form from the page, checked. `needModel` for saving and testing, not for listing models. */
+	function readAiForm(b: any, needModel: boolean): AiForm {
+		if (!PROVIDERS.includes(b?.provider)) throw new HttpError(400, "provider must be off, openai, anthropic or compatible");
+		const f: AiForm = { provider: b.provider };
+		if (f.provider === "off") return f;
+		f.model = str(b.model, 200);
+		f.deepModel = str(b.deepModel, 200);
+		f.apiKey = str(b.apiKey, 4000);
+		if (f.provider === "compatible") {
+			f.baseUrl = str(b.baseUrl, 500);
+			if (!f.baseUrl || !/^https?:\/\/[^\s/]+/.test(f.baseUrl)) throw new HttpError(400, "an OpenAI-compatible provider needs an http(s) address");
+			f.noThinking = Boolean(b.noThinking);
+		}
+		if (needModel && !f.model) throw new HttpError(400, "choose a model");
+		return f;
+	}
+
+	/** The key to use with a form: the one typed, else the one kept for that provider. */
+	function keyFor(f: AiForm): string | undefined {
+		if (f.apiKey) return f.apiKey;
+		const s = savedAi();
+		if (s?.keySealed && s.provider === f.provider) return unseal(opts.encryptionKey, s.keySealed);
+		if (opts.serverAi?.apiKey && opts.serverAi.provider === f.provider) return opts.serverAi.apiKey;
+		return undefined;
+	}
+
+	async function saveAi(req: IncomingMessage) {
+		const b = await json(req);
+		const f = readAiForm(b, true);
+		const key = b?.clearKey || f.provider === "off" ? undefined : keyFor(f);
+		const { apiKey: _typed, ...rest } = f;
+		const saved: AiSaved = { ...rest, ...(key ? { keySealed: seal(opts.encryptionKey, key) } : {}) };
+		store.saveSetting("ai", saved);
+		made.clear();
+		log(`AI settings changed by ${b?.provider === "off" ? "turning AI off" : `choosing ${f.provider} ${f.model}`}`);
+		return aiView();
+	}
+
+	async function testAi(req: IncomingMessage) {
+		const f = readAiForm(await json(req), true);
+		if (f.provider === "off") return { ok: true, ms: 0 };
+		const started = Date.now();
+		try {
+			await opts.providers!.make(configOf(f, f.model!, keyFor(f)))({ system: "Reply with the single word OK.", user: "Are you there?" });
+			return { ok: true, ms: Date.now() - started };
+		} catch (e) {
+			return { ok: false, error: (e as Error).message };
+		}
+	}
+
+	async function aiModels(req: IncomingMessage) {
+		const f = readAiForm(await json(req), false);
+		if (f.provider === "off") return { models: [] };
+		try {
+			const { model: _m, ...c } = configOf(f, "", keyFor(f));
+			return { models: await opts.providers!.models(c) };
+		} catch (e) {
+			return { error: (e as Error).message };
+		}
+	}
+
 	async function route(req: IncomingMessage, res: ServerResponse) {
 		const url = new URL(req.url ?? "/", "http://x");
 		const path = url.pathname;
@@ -1007,12 +1132,12 @@ export function createApp(opts: AppOptions): App {
 			const f = fold(lab, "pr", store.prs().filter(visible(repos)));
 			// `version` lets an open page (e.g. the Home Screen app, which never reloads by
 			// itself) notice a newer deploy and reload.
-			return send(res, 200, { user: lab, login: u.login, version: scriptVersion, staleDays: config.staleDays, ...buildInbox(f.live, viewer), old: f.old, hidden: f.hidden, summarize: Boolean(opts.summarize) });
+			return send(res, 200, { user: lab, login: u.login, version: scriptVersion, staleDays: config.staleDays, ...buildInbox(f.live, viewer), old: f.old, hidden: f.hidden, summarize: Boolean(ai()), admin: isAdmin(lab) });
 		}
 		if (method === "GET" && path === "/api/issues") {
 			const { repos } = await viewOf(linked(lab));
 			const f = fold(lab, "issue", store.issues().filter(visible(repos)));
-			return send(res, 200, { items: f.live.sort(newest), old: f.old, hidden: f.hidden, summarize: Boolean(opts.summarize) });
+			return send(res, 200, { items: f.live.sort(newest), old: f.old, hidden: f.hidden, summarize: Boolean(ai()) });
 		}
 		if (method === "POST" && (path === "/api/hide" || path === "/api/unhide")) {
 			const b = await json(req);
@@ -1086,6 +1211,13 @@ export function createApp(opts: AppOptions): App {
 		}
 		if (method === "POST" && path === "/api/summarize" && String(req.headers.accept ?? "").includes("text/event-stream")) {
 			return summarizeStream(req, res, lab);
+		}
+		if (path === "/api/ai" || path.startsWith("/api/ai/")) {
+			requireAdmin(lab);
+			if (method === "GET" && path === "/api/ai") return send(res, 200, aiView());
+			if (method === "POST" && path === "/api/ai") return send(res, 200, await saveAi(req));
+			if (method === "POST" && path === "/api/ai/test") return send(res, 200, await testAi(req));
+			if (method === "POST" && path === "/api/ai/models") return send(res, 200, await aiModels(req));
 		}
 		if (method === "POST" && path === "/api/summarize") {
 			return send(res, 200, await summarizeItem(req, lab));

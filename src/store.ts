@@ -41,6 +41,8 @@ export class Store {
 			CREATE TABLE IF NOT EXISTS review_drafts (lab_user TEXT NOT NULL, pr TEXT NOT NULL, draft TEXT NOT NULL, state TEXT NOT NULL,
 				PRIMARY KEY (lab_user, pr, draft));
 			CREATE TABLE IF NOT EXISTS review_learnings (repo TEXT NOT NULL, body TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (repo, body));
+			-- SPEC 20: settings the admin saves on the page (the AI provider; its key sealed)
+			CREATE TABLE IF NOT EXISTS settings (name TEXT PRIMARY KEY, json TEXT NOT NULL);
 		`);
 	}
 
@@ -251,5 +253,16 @@ export class Store {
 	/** The newest drafts people dropped in `repo`. */
 	learnings(repo: string, limit = 20): string[] {
 		return (this.db.prepare("SELECT body FROM review_learnings WHERE repo = ? ORDER BY at DESC LIMIT ?").all(repo.toLowerCase(), limit) as { body: string }[]).map((r) => r.body);
+	}
+
+	// -- settings (SPEC 20) -------------------------------------------------------
+
+	setting(name: string): unknown | undefined {
+		const row = this.db.prepare("SELECT json FROM settings WHERE name = ?").get(name) as { json: string } | undefined;
+		return row && JSON.parse(row.json);
+	}
+
+	saveSetting(name: string, value: unknown) {
+		this.db.prepare("INSERT OR REPLACE INTO settings VALUES (?, ?)").run(name, JSON.stringify(value));
 	}
 }

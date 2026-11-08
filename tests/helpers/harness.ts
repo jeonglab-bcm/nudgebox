@@ -12,6 +12,7 @@ import { createHmac, randomBytes } from "node:crypto";
 import { createApp, type App } from "../../src/app.ts";
 import { FakeGitHub } from "./fake-github.ts";
 import type { DiffResult, DiffSide, Differ } from "../../src/omnidiff.ts";
+import type { LlmConfig } from "../../src/llm.ts";
 
 export const ORIGIN = "https://gh.bioinfolder.com";
 export const WEBHOOK_SECRET = "test-webhook-secret";
@@ -22,19 +23,25 @@ export type LlmCall = { system: string; user: string };
 export type Pushed = { endpoint: string; payload: { title: string; body: string; url?: string; badge?: number }; urgency?: string };
 
 /** `llm: false` starts the app with no LLM configured (SPEC 12: no Summarize). */
-export async function start(opts: { staleDays?: number; oldDays?: number; now?: () => Date; llm?: false; diff?: Differ } = {}) {
+export async function start(opts: { staleDays?: number; oldDays?: number; now?: () => Date; llm?: false; diff?: Differ; admins?: string[] } = {}) {
 	const dir = mkdtempSync(join(tmpdir(), "ghd-"));
 	const github = new FakeGitHub();
 	const pushed: Pushed[] = [];
 	const gone = new Set<string>(); // push endpoints that answer 410 Gone
 	// in-memory stand-in for llm.bioinfolder.com: records prompts, answers "summary N"
 	// `answer`, when set, answers each prompt by itself (SPEC 19: the model is asked different things)
-	const llm = { calls: [] as LlmCall[], failNext: false, reply: undefined as string | undefined, delayMs: 0, answer: undefined as ((p: LlmCall) => string) | undefined };
+	// SPEC 20: `made` records each provider the settings set up, `models` the model each call
+	// went to ("server-model" is the server's own LLM), `listed` each model-list request
+	const llm = {
+		calls: [] as LlmCall[], failNext: false, reply: undefined as string | undefined, delayMs: 0, answer: undefined as ((p: LlmCall) => string) | undefined,
+		made: [] as LlmConfig[], models: [] as string[], listed: [] as Omit<LlmConfig, "model">[],
+	};
 	// stand-in for omnidiff (SPEC 15): records what it was asked, answers `reply`
 	const differ = { calls: [] as (DiffSide | null)[][], reply: { largeResidual: false, before: { hunks: [] }, after: { hunks: [] } } as DiffResult };
 	// streamed when asked (onDelta): the answer in pieces of 6 characters, `delayMs` apart
-	const summarize = async (prompt: LlmCall, onDelta?: (text: string) => void) => {
+	const summarize = async (prompt: LlmCall, onDelta?: (text: string) => void, model = "server-model") => {
 		llm.calls.push(prompt);
+		llm.models.push(model);
 		if (llm.failNext) {
 			llm.failNext = false;
 			throw Object.assign(new Error("upstream unavailable"), { status: 503 });
@@ -63,6 +70,22 @@ export async function start(opts: { staleDays?: number; oldDays?: number; now?: 
 		},
 		now: opts.now ?? (() => new Date()),
 		summarize: opts.llm === false ? undefined : summarize,
+		admins: opts.admins ?? ["hyunhwanj"],
+		// SPEC 20: providers chosen on the settings page; "wrong" is a key the provider refuses
+		providers: {
+			make: (c) => {
+				llm.made.push(c);
+				return async (p, onDelta) => {
+					if (c.apiKey === "wrong") throw new Error("LLM error 401: invalid x-api-key");
+					return summarize(p, onDelta, c.model);
+				};
+			},
+			models: async (c) => {
+				llm.listed.push(c);
+				if (c.apiKey === "wrong") throw new Error("401 invalid x-api-key");
+				return ["fake-a", "fake-b"];
+			},
+		},
 		diff: async (a, b) => {
 			differ.calls.push([a, b]);
 			return opts.diff ? opts.diff(a, b) : differ.reply;

@@ -221,6 +221,13 @@ export class Store {
 		return r && JSON.parse(r.json);
 	}
 
+	/** The newest prepared review whose key starts with `prefix` and ends with `suffix`: the one of the PR's push before. */
+	lastReviewPrep(prefix: string, suffix: string): unknown | undefined {
+		const rows = this.db.prepare("SELECT key, json FROM review_preps WHERE substr(key, 1, ?) = ? ORDER BY at DESC, rowid DESC").all(prefix.length, prefix) as { key: string; json: string }[];
+		const r = rows.find((x) => x.key.endsWith(suffix));
+		return r && JSON.parse(r.json);
+	}
+
 	saveReviewPrep(key: string, prep: unknown, now: string) {
 		this.db.prepare("INSERT OR REPLACE INTO review_preps VALUES (?, ?, ?)").run(key, JSON.stringify(prep), now);
 	}

@@ -21,7 +21,7 @@ import { issuePrompt, prPrompt, SUMMARY_FORMAT } from "./summary.ts";
 import type { Differ, DiffSide } from "./omnidiff.ts";
 import { hasMarkers, planMerge, type ReadFile } from "./conflicts.ts";
 import { EXPLAIN_FORMAT, explainPrompt } from "./explain.ts";
-import { checkPrompt, commentable, noiseReason, numberedChanges, planPrompt, readCheck, readPlan, readReview, REVIEW_FORMAT, reviewPrompt, type Draft, type FileChanges } from "./review.ts";
+import { carryPlan, checkPrompt, codeAt, commentable, dataSteps, isData, MAX_DRAFTS_PER_STEP, noiseReason, numberedChanges, parseJson, planPrompt, readCheck, readPlan, readReview, REVIEW_FORMAT, reviewPrompts, type CodeLine, type Draft, type FileChanges, type PlanStep } from "./review.ts";
 
 export interface Config {
 	orgs: string[]; // accounts the GitHub App is installed on
@@ -725,17 +725,19 @@ export function createApp(opts: AppOptions): App {
 	// -- guided review (SPEC 19) -------------------------------------------------------
 
 	type PrepFile = FileChanges & { fp: string };
-	type PrepDraft = Draft & { id: string };
-	type PrepStep = { id: string; title: string; summary: string; files: string[]; fps: { path: string; fp: string }[]; drafts: PrepDraft[] };
-	type Prep = { head: string; ai: boolean; summary: string; noise: { path: string; why: string }[]; steps: PrepStep[] };
-	/** What the preparation is doing now, for the page to show while it waits. */
-	type Progress = { phase: "reading" | "planning" | "reviewing" | "checking"; done: number; total: number; what?: string; since: string };
+	type PrepDraft = Draft & { id: string; code?: CodeLine[] };
+	// `skim`: data or results nobody reads line by line, so the model did not either; `notes`: what changes in each file
+	type PrepStep = { id: string; title: string; summary: string; files: string[]; fps: { path: string; fp: string }[]; drafts: PrepDraft[]; skim?: boolean; notes?: Record<string, string> };
+	// `planned`: the steps are the model's plan (not one per file), so the next push can keep them
+	type Prep = { head: string; ai: boolean; planned?: boolean; summary: string; noise: { path: string; why: string }[]; steps: PrepStep[] };
+	/** What the preparation is doing now, for the page to show while it waits. `push`: it builds on the review before a push. */
+	type Progress = { phase: "queued" | "reading" | "planning" | "reviewing" | "checking"; done: number; total: number; what?: string; push?: boolean; since: string };
 	// one preparation per PR head commit at a time; a failure is kept (in memory) until retried
 	const preparing = new Map<string, { state: "preparing" | "failed"; error?: string; done: Promise<void>; progress: Progress }>();
 	const prepWork = new Set<Promise<void>>(); // waited for by idle()
 	const short16 = (s: string) => createHash("sha256").update(s).digest("hex").slice(0, 16);
-	const prepKey = (pr: PullRequest) => `${pr.repo.toLowerCase()}#${pr.number}@${pr.headSha}|${REVIEW_FORMAT}`;
 	const prKey = (pr: { repo: string; number: number }) => `${pr.repo.toLowerCase()}#${pr.number}`;
+	const prepKey = (pr: PullRequest) => `${prKey(pr)}@${pr.headSha}|${REVIEW_FORMAT}`;
 
 	/** The PR `lab` asks about, if they can see it. */
 	async function reviewTarget(lab: string, repo: unknown, number: unknown): Promise<PullRequest> {
@@ -745,13 +747,20 @@ export function createApp(opts: AppOptions): App {
 		return pr;
 	}
 
-	/** Starts preparing `pr`'s guided review unless it is kept or under way. */
+	/**
+	 * Starts preparing `pr`'s guided review unless it is kept or under way. It waits for a
+	 * preparation of the same PR's earlier push, to build on it; if the PR was pushed to
+	 * again meanwhile, this one is dropped (the newer one is waiting behind it).
+	 */
 	function startPrep(pr: PullRequest) {
 		const key = prepKey(pr);
 		if (store.reviewPrep(key) !== undefined || preparing.get(key)?.state === "preparing") return;
-		const progress: Progress = { phase: "reading", done: 0, total: 0, since: opts.now().toISOString() };
+		const earlier = [...preparing].filter(([k, e]) => k.startsWith(`${prKey(pr)}@`) && e.state === "preparing").map(([, e]) => e.done);
+		const progress: Progress = { phase: earlier.length ? "queued" : "reading", done: 0, total: 0, since: opts.now().toISOString() };
 		const entry: { state: "preparing" | "failed"; error?: string; done: Promise<void>; progress: Progress } = { state: "preparing", done: Promise.resolve(), progress };
 		entry.done = (async () => {
+			await Promise.all(earlier);
+			if (earlier.length && store.pr(pr.repo, pr.number)?.headSha !== pr.headSha) return void preparing.delete(key);
 			try {
 				store.saveReviewPrep(key, await prepare(pr, (p) => Object.assign(progress, p)), opts.now().toISOString());
 				preparing.delete(key);
@@ -766,14 +775,19 @@ export function createApp(opts: AppOptions): App {
 		entry.done.finally(() => prepWork.delete(entry.done));
 	}
 
-	/** SPEC 19: noise, steps in reading order, and checked drafts for one head commit. */
+	/**
+	 * SPEC 19: noise, steps in reading order, and checked drafts for one head commit. After
+	 * a push it builds on the review of the push before: the plan is kept, and a step
+	 * whose files did not change keeps its drafts, so only what changed is read again.
+	 */
 	async function prepare(pr: PullRequest, report: (p: Partial<Progress>) => void = () => {}): Promise<Prep> {
 		const set = await github.prFiles(pr.repo, pr.number);
 		if (!set) throw new Error("the pull request is gone");
-		const files: (PrepFile & { why: string | null; file: ChangedFile })[] = [];
+		type Read = PrepFile & { why: string | null; file: ChangedFile };
+		const files: Read[] = new Array(set.files.length);
+		let read = 0;
 		report({ phase: "reading", done: 0, total: set.files.length });
-		for (const f of set.files) {
-			report({ done: files.length });
+		const readOne = async (f: ChangedFile): Promise<Read> => {
 			const before = f.status === "added" ? null : { repo: pr.repo, ref: set.base, path: f.previous ?? f.path };
 			const after = f.status === "removed" ? null : { repo: pr.repo, ref: set.head, path: f.path };
 			let d: any = null;
@@ -781,23 +795,39 @@ export function createApp(opts: AppOptions): App {
 			const text = (x: { text?: unknown } | null | undefined) => (x === null ? null : typeof x?.text === "string" ? x.text : undefined);
 			const [bt, at] = [text(d?.before), text(d?.after)];
 			const readable = d && !d.skipped && bt !== undefined && at !== undefined;
-			files.push({
+			return {
 				path: f.path, status: f.status, additions: f.additions, deletions: f.deletions, file: f,
 				text: readable ? numberedChanges(bt, at, d.result) : null,
 				fp: `${f.path}|${short16(String(bt ?? d?.before?.size ?? ""))}|${short16(String(at ?? d?.after?.size ?? ""))}|${f.status}`,
 				why: noiseReason(f.path, d?.result?.summary),
-			});
-		}
-		const noise = files.filter((f) => f.why).map((f) => ({ path: f.path, why: f.why! }));
-		const rest = files.filter((f) => !f.why);
-		const byPath = new Map(rest.map((f) => [f.path, f]));
-		const llm = ai();
-		const step = (title: string, summary: string, paths: string[], drafts: PrepDraft[] = []): PrepStep => {
-			const fps = paths.map((p) => ({ path: p, fp: byPath.get(p)!.fp }));
-			return { id: short16(fps.map((x) => x.fp).sort().join("\n")), title, summary, files: paths, fps, drafts };
+			};
 		};
-		const onePerFile = () => [...byPath.keys()].sort().map((p) => ({ title: p, summary: "", files: [p] }));
-		if (!llm) return { head: pr.headSha, ai: false, summary: "", noise, steps: onePerFile().map((s) => step(s.title, s.summary, s.files)) };
+		let next = 0; // a few files at a time: a big PR is a hundred round trips to GitHub
+		await Promise.all(Array.from({ length: Math.min(6, set.files.length) }, async () => {
+			while (next < set.files.length) {
+				const k = next++;
+				files[k] = await readOne(set.files[k]);
+				report({ done: ++read });
+			}
+		}));
+		const noise = files.filter((f) => f.why).map((f) => ({ path: f.path, why: f.why! }));
+		const seen = files.filter((f) => !f.why);
+		// steps to skim, without asking the model (with no omnidiff nothing is read, and that makes no file data)
+		const skimmed = (f: Read) => isData(f.path, opts.diff ? f.text : "");
+		const data = seen.filter(skimmed);
+		const rest = seen.filter((f) => !skimmed(f));
+		const byPath = new Map(seen.map((f) => [f.path, f]));
+		const llm = ai();
+		const step = (s: PlanStep, more: { drafts?: PrepDraft[]; notes?: Record<string, string>; summary?: string } = {}): PrepStep => {
+			const fps = s.files.map((p) => ({ path: p, fp: byPath.get(p)!.fp }));
+			return {
+				id: short16(fps.map((x) => x.fp).sort().join("\n")), title: s.title, summary: s.summary || more.summary || "", files: s.files, fps, drafts: more.drafts ?? [],
+				...(s.skim ? { skim: true } : {}), ...(more.notes && Object.keys(more.notes).length ? { notes: more.notes } : {}),
+			};
+		};
+		const onePerFile = (): PlanStep[] => rest.map((f) => f.path).sort().map((p) => ({ title: p, summary: "", files: [p] }));
+		const skims = dataSteps(data.map((f) => f.path));
+		if (!llm) return { head: pr.headSha, ai: false, summary: "", noise, steps: [...onePerFile(), ...skims].map((s) => step(s)) };
 
 		const ask = async (p: Prompt) => {
 			try {
@@ -806,32 +836,61 @@ export function createApp(opts: AppOptions): App {
 				throw new Error(`LLM failed: ${(e as Error).message}`);
 			}
 		};
-		report({ phase: "planning", done: 0, total: rest.length, what: undefined });
-		const answer = rest.length ? await ask(planPrompt(pr, rest)) : "";
-		const plan = rest.length ? readPlan(answer, [...byPath.keys()]) : { summary: "", steps: [] };
-		if (!plan) {
-			const a = answer.replace(/\s+/g, " ");
-			log(`guided review of ${pr.repo}#${pr.number}: the model's answer was no plan, so one step per file. It said: ${a.length > 300 ? `${a.slice(0, 180)} […] ${a.slice(-100)}` : a}`);
+		const paths = rest.map((f) => f.path);
+		const prev = store.lastReviewPrep(`${prKey(pr)}@`, `|${REVIEW_FORMAT}`) as Prep | undefined;
+		const before = prev?.ai ? prev : undefined; // the review of the push before this one
+		let plan = before?.planned ? carryPlan({ summary: before.summary, steps: before.steps.filter((s) => s.files.some((p) => paths.includes(p))) }, paths) : null;
+		const carried = plan !== null;
+		if (carried) report({ push: true });
+		if (!carried && rest.length) {
+			report({ phase: "planning", done: 0, total: rest.length, what: undefined });
+			const answer = await ask(planPrompt(pr, rest));
+			plan = readPlan(answer, paths);
+			if (!plan) {
+				const a = answer.replace(/\s+/g, " ");
+				log(`guided review of ${pr.repo}#${pr.number}: the model's answer was no plan, so one step per file. It said: ${a.length > 300 ? `${a.slice(0, 180)} […] ${a.slice(-100)}` : a}`);
+			}
 		}
 		const dropped = store.learnings(pr.repo);
-		const planned = plan?.steps ?? onePerFile();
+		const today = opts.now().toISOString().slice(0, 10);
+		const planned = [...(plan?.steps ?? onePerFile()), ...skims];
+		// a step with the same files in the same versions as before keeps what the model said about it
+		const kept = new Map((before?.steps ?? []).map((s) => [s.id, s]));
+		const same = (s: PlanStep) => kept.get(step(s).id);
+		const toReview = planned.filter((s) => !s.skim && !same(s));
 		const steps: PrepStep[] = [];
+		let done = 0;
 		for (const s of planned) {
-			report({ phase: "reviewing", done: steps.length, total: planned.length, what: s.title });
-			const mine = s.files.map((p) => byPath.get(p)!);
-			const r = readReview(await ask(reviewPrompt(pr, s, mine, dropped)));
-			const drafts: PrepDraft[] = [];
-			if (r.drafts.length) report({ phase: "checking" });
-			for (const d of r.drafts) {
-				const f = byPath.get(d.path);
-				if (!f || !s.files.includes(d.path) || !commentable(d, f.file)) continue;
-				const id = short16(`${d.path}|${d.side}|${d.line}|${d.body}`);
-				if (drafts.some((x) => x.id === id)) continue;
-				if (readCheck(await ask(checkPrompt(pr, d, f)))) drafts.push({ ...d, id });
+			const old = same(s);
+			if (s.skim || old) {
+				steps.push(step(s, old ? { drafts: old.drafts, notes: old.notes, summary: old.summary } : {}));
+				continue;
 			}
-			steps.push(step(s.title, s.summary || r.summary, s.files, drafts));
+			const mine = s.files.map((p) => byPath.get(p)!);
+			const parts = reviewPrompts(pr, s, mine, dropped, today);
+			const drafts: PrepDraft[] = [];
+			const notes: Record<string, string> = {};
+			let summary = "";
+			for (const [k, part] of parts.entries()) {
+				report({ phase: "reviewing", done, total: toReview.length, what: parts.length > 1 ? `${s.title} (part ${k + 1} of ${parts.length})` : s.title });
+				let answer = await ask(part);
+				if (parseJson(answer) === null) answer = await ask(part); // the lab model now and then answers nothing: once more
+				const r = readReview(answer);
+				summary ||= r.summary;
+				for (const [path, note] of Object.entries(r.notes)) if (s.files.includes(path)) notes[path] ??= note;
+				if (r.drafts.length) report({ phase: "checking" });
+				for (const d of r.drafts) {
+					const f = byPath.get(d.path);
+					if (!f || !s.files.includes(d.path) || !commentable(d, f.file) || drafts.length >= MAX_DRAFTS_PER_STEP) continue;
+					const id = short16(`${d.path}|${d.side}|${d.line}|${d.body}`);
+					if (drafts.some((x) => x.id === id)) continue;
+					if (readCheck(await ask(checkPrompt(pr, d, f, today)))) drafts.push({ ...d, id, code: codeAt(f.text, d) });
+				}
+			}
+			done++;
+			steps.push(step(s, { drafts, notes, summary }));
 		}
-		return { head: pr.headSha, ai: true, summary: plan?.summary ?? "", noise, steps };
+		return { head: pr.headSha, ai: true, planned: plan !== null, summary: plan?.summary ?? "", noise, steps };
 	}
 
 	/** One person's view of a prepared review: what they marked reviewed and did with each draft. */
@@ -844,7 +903,9 @@ export function createApp(opts: AppOptions): App {
 			const reviewed = s.fps.every((f) => fps.has(f.fp));
 			return {
 				id: s.id, title: s.title, summary: s.summary, files: s.files, reviewed,
-				changed: !reviewed && s.files.some((p) => paths.has(p)), // you reviewed an older version
+				seen: s.fps.filter((f) => fps.has(f.fp)).map((f) => f.path), // the files you marked viewed, in this version
+				changed: !reviewed && s.fps.some((f) => paths.has(f.path) && !fps.has(f.fp)), // you reviewed an older version of a file
+				skim: s.skim === true, notes: s.notes ?? {},
 				drafts: s.drafts.map((d) => ({ ...d, state: states.get(d.id) ?? "open" })),
 			};
 		});
@@ -881,6 +942,13 @@ export function createApp(opts: AppOptions): App {
 			if (!s) throw new HttpError(404, "no such step");
 			if (typeof b.reviewed !== "boolean") throw new HttpError(400, "reviewed must be true or false");
 			store.setReviewMarks(lab, prKey(pr), s.fps, b.reviewed);
+			return { ok: true };
+		}
+		if (what === "file") { // one file of a step, viewed or not
+			const f = prep.steps.flatMap((s) => s.fps).find((x) => x.path === b.path);
+			if (!f) throw new HttpError(404, "no such file");
+			if (typeof b.reviewed !== "boolean") throw new HttpError(400, "reviewed must be true or false");
+			store.setReviewMarks(lab, prKey(pr), [f], b.reviewed);
 			return { ok: true };
 		}
 		if (what === "draft") {

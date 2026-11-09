@@ -1,7 +1,8 @@
 /**
- * SPEC 19. Guided review, server side: a PR prepared as noise (hidden) and steps in
- * reading order, each with a summary and verified draft comments; per person, reviewed
- * steps and kept or dropped drafts. The lab LLM is faked and answers by its instructions:
+ * SPEC 19. Guided review, server side: a PR prepared as noise (hidden), steps in reading
+ * order, each with a summary, a note per file and verified draft comments, and data to
+ * skim; per person, viewed files, reviewed steps and kept or dropped drafts; after a
+ * push, only what changed is read again. The lab LLM is faked and answers by its instructions:
  * "You plan" (steps), "You review" (one step's drafts), "You check" (one draft).
  * Lab users: hyunhwanj (GitHub "hwan"), kellyl ("kelly").
  */
@@ -26,14 +27,15 @@ const differ = async (a: DiffSide | null, b: DiffSide | null): Promise<DiffResul
 	return s ? { largeResidual: false, before: { hunks: [] }, after: { hunks: [] }, summary: s } : hunks14;
 };
 
-type Plan = { summary?: string; steps: { title: string; summary: string; files: string[] }[] } | string;
+type Plan = { summary?: string; steps: { title: string; summary: string; files: string[]; skim?: boolean }[] } | string;
 type Draft = { path: string; side: "LEFT" | "RIGHT"; line: number; body: string };
+type Note = { path: string; note: string };
 
-/** The fake model: `plan` answers the planning call; `drafts` answers each step by its files; "WRONG" drafts fail the check. */
-function model(plan: Plan, drafts: (user: string) => Draft[] = () => []) {
+/** The fake model: `plan` answers the planning call; `drafts` and `notes` answer each step by its files; "WRONG" drafts fail the check. */
+function model(plan: Plan, drafts: (user: string) => Draft[] = () => [], notes: (user: string) => Note[] = () => []) {
 	return (p: Prompt) => {
 		if (p.system.startsWith("You plan")) return typeof plan === "string" ? plan : JSON.stringify(plan);
-		if (p.system.startsWith("You review")) return JSON.stringify({ summary: "This step changes the limit.", drafts: drafts(p.user) });
+		if (p.system.startsWith("You review")) return JSON.stringify({ summary: "This step changes the limit.", notes: notes(p.user), drafts: drafts(p.user) });
 		if (p.system.startsWith("You check")) return JSON.stringify({ real: !p.user.includes("WRONG"), reason: "checked" });
 		throw new Error(`unexpected prompt: ${p.system.slice(0, 40)}`);
 	};
@@ -47,19 +49,22 @@ const GOOD_PLAN = {
 	],
 };
 
-async function setup(opts: { llm?: false; plan?: Plan; drafts?: (user: string) => Draft[] } = {}) {
+/** `more`: files the PR adds besides the usual seven, with their content (a Buffer with a NUL byte is binary). */
+async function setup(opts: { llm?: false; plan?: Plan; drafts?: (user: string) => Draft[]; notes?: (user: string) => Note[]; more?: Record<string, string | Buffer> } = {}) {
 	const t = await start({ llm: opts.llm, diff: differ });
 	t.github.grant("hwan", LAB, MINE);
 	t.github.grant("kelly", LAB);
 	t.github.addPr({ repo: LAB, number: 4, author: "kelly", title: "Raise the limit", headSha: "h1" });
 	t.github.addPr({ repo: MINE, number: 2, author: "hwan", title: "Mine", headSha: "m1" });
 	const files = ["src/limit.ts", "src/limit.test.ts", "docs/notes.md", "package-lock.json", "src/format.ts", "src/moved.ts", "src/old.ts"];
-	t.github.prFileSets.set(`${LAB}#4`, { base: "b1", head: "h1", files: files.map(modified) });
+	const more = Object.keys(opts.more ?? {});
+	t.github.prFileSets.set(`${LAB}#4`, { base: "b1", head: "h1", files: [...files.map(modified), ...more.map((f) => ({ ...modified(f), status: "added" as const }))] });
+	for (const f of more) t.github.blobs.set(`${LAB}@h1:${f}`, opts.more![f]);
 	for (const f of files) {
 		t.github.blobs.set(`${LAB}@b1:${f}`, lines((i) => (i === 14 ? `const limit = 10; // ${f}` : `line ${i + 1}`)));
 		t.github.blobs.set(`${LAB}@h1:${f}`, lines((i) => (i === 14 ? `const limit = 20; // ${f}` : `line ${i + 1}`)));
 	}
-	if (opts.llm !== false) t.llm.answer = model(opts.plan ?? GOOD_PLAN, opts.drafts);
+	if (opts.llm !== false) t.llm.answer = model(opts.plan ?? GOOD_PLAN, opts.drafts, opts.notes);
 	await t.link("hyunhwanj", "hwan");
 	await t.link("kellyl", "kelly");
 	await t.app.sync();
@@ -75,8 +80,23 @@ async function setup(opts: { llm?: false; plan?: Plan; drafts?: (user: string) =
 	};
 	const post = (as: string, what: string, body: object) => t.req(`/api/review/${what}`, { as, method: "POST", body: JSON.stringify({ repo: LAB, number: 4, ...body }) });
 	const calls = (kind: string) => t.llm.calls.filter((c) => c.system.startsWith(kind));
-	return { t, review, post, calls };
+	/** The author pushes: the PR's head is `head`, with `changed` files given new content and `added` ones new. */
+	const push = (head: string, changed: Record<string, string>, added: Record<string, string> = {}) => {
+		const was = t.github.prFileSets.get(`${LAB}#4`)!;
+		t.github.prs.get(`${LAB}#4`)!.headSha = head;
+		t.github.prFileSets.set(`${LAB}#4`, { base: "b1", head, files: [...was.files, ...Object.keys(added).filter((f) => !was.files.some((x) => x.path === f)).map((f) => ({ ...modified(f), status: "added" as const }))] });
+		for (const f of was.files) if (f.status !== "added" || t.github.blobs.has(`${LAB}@${was.head}:${f.path}`)) t.github.blobs.set(`${LAB}@${head}:${f.path}`, t.github.blobs.get(`${LAB}@${was.head}:${f.path}`)!);
+		for (const [f, text] of Object.entries({ ...changed, ...added })) t.github.blobs.set(`${LAB}@${head}:${f}`, text);
+	};
+	/** GitHub's webhook for a push to the PR, whose head is `head` now. */
+	const pushed = (head: string) => t.webhook("pull_request", {
+		action: "synchronize", number: 4, repository: { full_name: LAB },
+		pull_request: { number: 4, title: "Raise the limit", html_url: `https://github.com/${LAB}/pull/4`, user: { login: "kelly" }, head: { sha: head } },
+	});
+	return { t, review, post, calls, push, pushed };
 }
+
+const BINARY = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 3]);
 
 const stepFiles = (r: any) => r.steps.map((s: any) => s.files);
 
@@ -184,6 +204,98 @@ test("19.2 an answer that is no plan falls back to one step per file, in path or
 	}
 });
 
+test("19.2 data and figures are steps to skim, after the others, and the model is not asked about them", async () => {
+	const { t, review, calls } = await setup({ more: { "results/fig1.png": BINARY, "results/run.npz": BINARY, "data/table.csv": "a,b\n1,2\n" } });
+	try {
+		const { body: r } = await review("hyunhwanj");
+		assert.deepEqual(r.steps.map((s: any) => [s.title, s.skim]), [["Raise the limit", false], ["Notes", false], ["Data and figures in data/", true], ["Data and figures in results/", true]]);
+		assert.deepEqual(stepFiles(r).slice(2), [["data/table.csv"], ["results/fig1.png", "results/run.npz"]]);
+		assert.equal(r.steps[3].summary, "2 files the AI did not read: 1 .png, 1 .npz.");
+		assert.deepEqual(r.steps[3].drafts, []);
+		assert.ok(!calls("You plan")[0].user.includes("results/"), "the plan is not asked about data");
+		assert.ok(!calls("You plan")[0].user.includes("table.csv"));
+		assert.equal(calls("You review").length, 2, "only the steps to read are reviewed");
+	} finally {
+		await t.close();
+	}
+});
+
+test("19.2 a step the plan marks to skim goes after the others and is not reviewed", async () => {
+	const { t, review, calls } = await setup({ plan: { summary: "S.", steps: [
+		{ title: "Run outputs", summary: "What the run wrote.", files: ["docs/notes.md"], skim: true },
+		{ title: "Raise the limit", summary: "The limit goes from 10 to 20.", files: ["src/limit.ts", "src/limit.test.ts"] },
+	] } });
+	try {
+		const { body: r } = await review("hyunhwanj");
+		assert.deepEqual(r.steps.map((s: any) => [s.title, s.skim]), [["Raise the limit", false], ["Run outputs", true]]);
+		assert.match(calls("You plan")[0].system, /"skim": true/);
+		assert.equal(calls("You review").length, 1);
+		assert.ok(!calls("You review")[0].user.includes("docs/notes.md"));
+	} finally {
+		await t.close();
+	}
+});
+
+test("19.3 a step too big for one prompt is read whole, in parts", async () => {
+	const big = (mark: string) => `${"x".repeat(30_000)} ${mark}\n`;
+	const { t, review, calls } = await setup({
+		more: { "src/big1.ts": big("END-ONE"), "src/big2.ts": big("END-TWO") },
+		plan: { summary: "S.", steps: [{ title: "Two big files", summary: "s.", files: ["src/big1.ts", "src/big2.ts"] }, { title: "Rest", summary: "s.", files: ["src/limit.ts", "src/limit.test.ts", "docs/notes.md"] }] },
+		drafts: (user) => (user.includes("END-TWO") ? [{ path: "src/big2.ts", side: "RIGHT", line: 15, body: "A problem in the second part." }] : []),
+		notes: (user) => [{ path: user.includes("END-ONE") ? "src/big1.ts" : "src/big2.ts", note: "A big file." }],
+	});
+	try {
+		const { body: r } = await review("hyunhwanj");
+		const parts = calls("You review").filter((c) => c.user.includes("Step: Two big files"));
+		assert.equal(parts.length, 2);
+		assert.ok(parts[0].user.includes("Part 1 of 2") && parts[0].user.includes("END-ONE") && !parts[0].user.includes("=== src/big2.ts"));
+		assert.ok(parts[1].user.includes("Part 2 of 2") && parts[1].user.includes("END-TWO"));
+		assert.ok(parts.every((c) => c.user.length <= 48_000));
+		assert.deepEqual(r.steps[0].drafts.map((d: any) => d.body), ["A problem in the second part."]);
+		assert.deepEqual(r.steps[0].notes, { "src/big1.ts": "A big file.", "src/big2.ts": "A big file." });
+		// a step that fits is one call, and is not called a part
+		const rest = calls("You review").filter((c) => c.user.includes("Step: Rest"));
+		assert.equal(rest.length, 1);
+		assert.ok(!rest[0].user.includes("Part 1"));
+	} finally {
+		await t.close();
+	}
+});
+
+test("19.3 each file has a note on what changes in it, and each draft the lines it points at", async () => {
+	const { t, review } = await setup({
+		drafts: (user) => (user.includes("src/limit.ts") ? [{ path: "src/limit.ts", side: "RIGHT", line: 15, body: "Is 20 safe for the small queue?" }] : []),
+		notes: (user) => (user.includes("src/limit.ts") ? [{ path: "src/limit.ts", note: "Raises the limit\nto 20." }, { path: "src/nope.ts", note: "Not a file of this step." }] : []),
+	});
+	try {
+		const { body: r } = await review("hyunhwanj");
+		assert.deepEqual(r.steps[0].notes, { "src/limit.ts": "Raises the limit to 20." });
+		assert.deepEqual(r.steps[1].notes, {});
+		assert.deepEqual(r.steps[0].drafts[0].code, [
+			{ n: 14, mark: " ", text: "line 14" },
+			{ n: 15, mark: "-", text: "const limit = 10; // src/limit.ts" },
+			{ n: 15, mark: "+", text: "const limit = 20; // src/limit.ts", hit: true },
+			{ n: 16, mark: " ", text: "line 16" },
+		]);
+	} finally {
+		await t.close();
+	}
+});
+
+test("19.3 a review answer that is no JSON is asked for once more", async () => {
+	const { t, review, calls } = await setup({ drafts: (user) => (user.includes("src/limit.ts") ? [{ path: "src/limit.ts", side: "RIGHT", line: 15, body: "Is 20 safe?" }] : []) });
+	const good = t.llm.answer!;
+	let empty = 1;
+	t.llm.answer = (p) => (p.system.startsWith("You review") && empty-- > 0 ? "```json" : good(p));
+	try {
+		const { body: r } = await review("hyunhwanj");
+		assert.equal(calls("You review").length, 3, "the first step was asked twice");
+		assert.deepEqual(r.steps[0].drafts.map((d: any) => d.body), ["Is 20 safe?"]);
+	} finally {
+		await t.close();
+	}
+});
+
 test("19.3 each step has a one-sentence summary; drafts only on lines GitHub takes comments on", async () => {
 	const { t, review, calls } = await setup({
 		drafts: (user) => (user.includes("src/limit.ts") ? [
@@ -225,6 +337,26 @@ test("19.4 a draft the check rejects is never shown", async () => {
 		const checks = calls("You check");
 		assert.equal(checks.length, 2);
 		assert.ok(checks.some((c) => c.user.includes("WRONG: a made-up problem.") && c.user.includes("const limit = 20;")));
+	} finally {
+		await t.close();
+	}
+});
+
+test("19.4 a draft that argues with itself or runs on is never shown; the model is told what day it is", async () => {
+	const { t, review, calls } = await setup({
+		drafts: (user) => (user.includes("src/limit.ts") ? [
+			{ path: "src/limit.ts", side: "RIGHT", line: 15, body: "Real problem." },
+			{ path: "src/limit.ts", side: "RIGHT", line: 16, body: "The total is 80. Wait, 21+18+22+17=78. Let me re-sum the rows." },
+			{ path: "src/limit.ts", side: "RIGHT", line: 17, body: `This goes on. ${"And on. ".repeat(100)}` },
+		] : []),
+	});
+	try {
+		const { body: r } = await review("hyunhwanj");
+		assert.deepEqual(r.steps[0].drafts.map((x: any) => x.body), ["Real problem."]);
+		assert.equal(calls("You check").length, 1, "they are dropped before the check");
+		assert.match(calls("You review")[0].user, /Today is \d{4}-\d\d-\d\d\./);
+		assert.match(calls("You check")[0].user, /Today is \d{4}-\d\d-\d\d\./);
+		assert.match(calls("You review")[0].system, /looks like the future/);
 	} finally {
 		await t.close();
 	}
@@ -296,36 +428,116 @@ test("19.7 Looks good marks a step reviewed for you only", async () => {
 	}
 });
 
-test("19.8 after a push, unchanged steps stay reviewed, changed ones come back, new files are new steps", async () => {
+test("19.7 Viewed marks one file for you only; a step with every file viewed is reviewed", async () => {
 	const { t, review, post } = await setup();
+	try {
+		const step = async (as: string) => (await review(as)).body.steps[0];
+		assert.deepEqual((await step("hyunhwanj")).seen, []);
+		assert.equal((await post("hyunhwanj", "file", { path: "src/limit.ts", reviewed: true })).status, 200);
+		let s = await step("hyunhwanj");
+		assert.deepEqual([s.seen, s.reviewed, s.changed], [["src/limit.ts"], false, false]);
+		assert.deepEqual((await step("kellyl")).seen, []);
+		await post("hyunhwanj", "file", { path: "src/limit.test.ts", reviewed: true });
+		s = await step("hyunhwanj");
+		assert.deepEqual([s.seen, s.reviewed], [["src/limit.ts", "src/limit.test.ts"], true]);
+		await post("hyunhwanj", "file", { path: "src/limit.ts", reviewed: false });
+		s = await step("hyunhwanj");
+		assert.deepEqual([s.seen, s.reviewed], [["src/limit.test.ts"], false]);
+		assert.equal((await post("hyunhwanj", "file", { path: "src/nope.ts", reviewed: true })).status, 404);
+		assert.equal((await post("hyunhwanj", "file", { path: "package-lock.json", reviewed: true })).status, 404); // noise is in no step
+		assert.equal((await post("hyunhwanj", "file", { path: "src/limit.ts", reviewed: "yes" })).status, 400);
+	} finally {
+		await t.close();
+	}
+});
+
+test("19.8 after a push the plan is kept: only a changed step is read again, and what you reviewed stays reviewed", async () => {
+	const { t, review, post, calls, push } = await setup({
+		drafts: (user) => (user.includes("=== docs/notes.md") ? [{ path: "docs/notes.md", side: "RIGHT", line: 15, body: "The notes still say 10." }] : []),
+		notes: (user) => (user.includes("=== docs/notes.md") ? [{ path: "docs/notes.md", note: "Describes the limit." }] : []),
+	});
 	try {
 		const { body: r } = await review("hyunhwanj");
 		for (const s of r.steps) await post("hyunhwanj", "step", { step: s.id, reviewed: true });
+		const reviews = calls("You review").length;
 
-		// push: the test changes, src/limit.ts and the notes do not, src/new.ts is added
-		const pr = t.github.prs.get(`${LAB}#4`)!;
-		pr.headSha = "h2";
-		const files = ["src/limit.ts", "src/limit.test.ts", "docs/notes.md", "src/new.ts"];
-		t.github.prFileSets.set(`${LAB}#4`, { base: "b1", head: "h2", files: [...files.slice(0, 3).map(modified), { ...modified("src/new.ts"), status: "added" }] });
-		for (const f of files.slice(0, 3)) t.github.blobs.set(`${LAB}@h2:${f}`, t.github.blobs.get(`${LAB}@h1:${f}`)!);
-		t.github.blobs.set(`${LAB}@h2:src/limit.test.ts`, lines((i) => (i === 14 ? "const limit = 25;" : `line ${i + 1}`)));
-		t.github.blobs.set(`${LAB}@h2:src/new.ts`, lines((i) => `new ${i}`));
-		t.llm.answer = model({ steps: [
-			{ title: "Limit", summary: "s.", files: ["src/limit.ts"] },
-			{ title: "Test", summary: "s.", files: ["src/limit.test.ts"] },
-			{ title: "Notes", summary: "s.", files: ["docs/notes.md"] },
-			{ title: "New", summary: "s.", files: ["src/new.ts"] },
-		] });
+		// push: the test changes; src/new.ts is added beside it, tools/run.sh in a folder of its own
+		push("h2", { "src/limit.test.ts": lines((i) => (i === 14 ? "const limit = 25;" : `line ${i + 1}`)) }, { "src/new.ts": lines((i) => `new ${i}`), "tools/run.sh": "echo run\n" });
 		await t.app.sync();
-
 		const { body: after } = await review("hyunhwanj");
 		assert.equal(after.head, "h2");
-		const by = Object.fromEntries(after.steps.map((s: any) => [s.title, s]));
-		assert.equal(by.Limit.reviewed, true);
-		assert.equal(by.Notes.reviewed, true);
-		assert.deepEqual([by.Test.reviewed, by.Test.changed], [false, true]);
-		assert.deepEqual([by.New.reviewed, by.New.changed], [false, false]);
+		assert.equal(calls("You plan").length, 1, "the plan is not asked for again");
+		assert.equal(after.summary, "Raises the limit and documents it.");
+		assert.deepEqual(after.steps.map((s: any) => s.title), ["Raise the limit", "Notes", "Added since the last push"]);
+		// a new file joins the step with files of its folder; one in a new folder is a step at the end
+		assert.deepEqual(stepFiles(after), [["src/limit.ts", "src/limit.test.ts", "src/new.ts"], ["docs/notes.md"], ["tools/run.sh"]]);
+
+		// only the steps with a changed or new file went to the model again
+		const again = calls("You review").slice(reviews);
+		assert.equal(again.length, 2);
+		assert.ok(again[0].user.includes("=== src/limit.test.ts") && again[0].user.includes("=== src/new.ts"));
+		assert.ok(again[1].user.includes("=== tools/run.sh"));
+		assert.ok(!again.some((c) => c.user.includes("=== docs/notes.md")));
+
+		const [limit, notes, added] = after.steps;
+		// the untouched step is as it was: reviewed, with its draft and its note
+		assert.equal(notes.reviewed, true);
+		assert.equal(notes.id, r.steps[1].id);
+		assert.deepEqual(notes.drafts.map((d: any) => [d.id, d.body]), [[r.steps[1].drafts[0].id, "The notes still say 10."]]);
+		assert.deepEqual(notes.notes, { "docs/notes.md": "Describes the limit." });
+		// the changed one comes back, and says which of its files you have seen in this version
+		assert.deepEqual([limit.reviewed, limit.changed, limit.seen], [false, true, ["src/limit.ts"]]);
+		assert.deepEqual([added.reviewed, added.changed], [false, false]);
 		assert.equal(after.changedSinceReview, 1);
+	} finally {
+		await t.close();
+	}
+});
+
+test("19.8 a push that adds much is planned again", async () => {
+	const { t, review, calls, push } = await setup();
+	try {
+		await review("hyunhwanj");
+		push("h2", {}, Object.fromEntries(["a", "b", "c", "d"].map((n) => [`lib/${n}.ts`, lines((i) => `${n} ${i}`)])));
+		t.llm.answer = model({ summary: "Now a library too.", steps: [
+			{ title: "The library", summary: "s.", files: ["lib/a.ts", "lib/b.ts", "lib/c.ts", "lib/d.ts"] },
+			{ title: "Raise the limit", summary: "s.", files: ["src/limit.ts", "src/limit.test.ts", "docs/notes.md"] },
+		] });
+		await t.app.sync();
+		const { body: after } = await review("hyunhwanj");
+		assert.equal(calls("You plan").length, 2);
+		assert.deepEqual(after.steps.map((s: any) => s.title), ["The library", "Raise the limit"]);
+		assert.equal(after.summary, "Now a library too.");
+	} finally {
+		await t.close();
+	}
+});
+
+test("19.8 pushes in a row wait their turn: the newest builds on the one before, and one in between is not prepared", async () => {
+	const { t, review, calls, push, pushed } = await setup();
+	const fast = t.llm.answer!;
+	t.llm.answer = async (p) => { await new Promise((r) => setTimeout(r, 200)); return fast(p); };
+	try {
+		const get = async () => (await t.req(`/api/review?repo=${encodeURIComponent(LAB)}&number=4`, { as: "hyunhwanj" })).json();
+		assert.equal((await get()).state, "preparing"); // h1 is being prepared
+		for (const head of ["h2", "h3"]) {
+			push(head, { "src/limit.test.ts": lines((i) => (i === 14 ? `const limit = 25; // ${head}` : `line ${i + 1}`)) });
+			assert.equal((await pushed(head)).status, 200);
+		}
+		let queued: any;
+		for (let i = 0; i < 100 && !queued; i++) {
+			const r = await get();
+			if (r.state === "preparing" && r.progress?.phase === "queued") queued = r.progress;
+			else await new Promise((r) => setTimeout(r, 5));
+		}
+		assert.ok(queued, "the review of the new push waits for the one under way");
+		await t.app.idle();
+		const { body: r } = await review("hyunhwanj");
+		assert.deepEqual([r.state, r.head], ["ready", "h3"]);
+		assert.equal(calls("You plan").length, 1, "planned once, for the first push");
+		// h1: both steps; h2: nothing (h3 came before its turn); h3: the one changed step
+		assert.equal(calls("You review").length, 3);
+		assert.match(calls("You review")[2].user, /const limit = 25; \/\/ h3/);
 	} finally {
 		await t.close();
 	}

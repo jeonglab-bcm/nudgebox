@@ -504,26 +504,48 @@ by everyone who can see the repo (section 4):
    is dropped, and the files it left out follow as one step each, in path order. Only
    an answer that is no plan at all (not JSON, cut off) gives one step per file, in
    path order, with a line in the server log.
-3. **Draft comments.** For each step the model writes draft review comments on real
-   problems only (not style, not guesses about code it cannot see), each on a line
-   GitHub takes a comment on (section 16). Each draft is then checked by a second
-   call that tries to prove it wrong; only drafts that pass are shown. The repo's
-   dropped drafts (below) are given to the model so it does not suggest them again.
+3. **Data to skim.** Files nobody reads line by line are steps of their own, after the
+   others, marked **skim**; the model does not review them. Figures, tables of numbers,
+   archives and files that are binary or too large to show are grouped by folder (at
+   most 3 such steps) without asking the model, each saying how many files of which
+   kind it has. The plan can also mark a step skim (results a program wrote, logs).
+4. **Draft comments.** For each step to read, the model gets every file whole, in as
+   many calls as it takes to fit (a big step is not cut to the first lines of each
+   file), and writes one note on what changes in each file and draft review comments on
+   real problems only (not style, not guesses about code it cannot see, not a version
+   or date that is new to it: it is told what day it is), each on a line GitHub takes a
+   comment on (section 16). An answer that is not JSON is asked for once more. A draft
+   that argues with itself or runs on is dropped. Each other draft is then checked by a
+   second call that tries to prove it wrong; only drafts that pass are shown, each with
+   the lines of code it points at. The repo's dropped drafts (below) are given to the
+   model so it does not suggest them again.
+
+**After a push** the review builds on the one of the push before, so only what changed
+is read again. The plan is kept: a file that is gone leaves its step, a new file joins
+the step that has the most files of its folder (else a last step, "Added since the
+last push"), and the model plans again only when little of the old plan is left or more
+than a fifth of the files (and more than 3) are new. A step whose files are all as they
+were keeps its summary, notes and drafts; the model reviews only the other steps. Pushes
+in a row wait their turn: the review of a push waits for the one under way and builds
+on it, and is not made at all if a newer push came meanwhile.
 
 Without an LLM there are no drafts and each file is a step; the page says so. If the
 model fails, the error is shown, nothing is kept, and **Try again** prepares it again.
 While it is prepared (minutes, on a big PR) the page says what is going on and since
-when: reading the changed files, grouping *n* files into steps, reviewing step *k* of
-*n* (its title), checking that step's draft comments, with a bar for the steps.
+when: waiting for the review of the push before, reading the changed files, grouping
+*n* files into steps, reviewing step *k* of *n* (its title), checking that step's draft
+comments, with a bar for the steps; and whether it is updating after a push.
 
 **Per person:**
 
-- **Looks good** marks a step reviewed, by the content of its files.
+- **Looks good** marks a step reviewed, by the content of its files. **Viewed** marks
+  one file; a step with every file viewed is reviewed.
 - **Keep** puts a draft, as the person edited it, in their **pending review** on GitHub
   (section 16); submitting it is the review form of section 16. **Drop** hides the
   draft for them and remembers it for the repo's later reviews.
 - **After a push** a step whose files did not change stays reviewed. A step with a file
-  the person reviewed in an older version is **changed**; the page says how many.
+  the person reviewed in an older version is **changed**; the page says how many, and
+  the files of it they viewed in this version stay viewed.
 
 **On the PR page**, a **Guided review** tab (`#pr/<owner>/<repo>/<number>/guide`, with
 the number of steps left) shows the PR's one-sentence summary, the hidden noise (folded,

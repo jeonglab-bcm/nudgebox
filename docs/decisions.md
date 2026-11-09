@@ -251,3 +251,26 @@ The key is stored with the same AES-GCM sealing as GitHub tokens. Admins are lis
 `config.yaml`, because there was no admin role before and the settings page is the
 first thing that needs one.
 
+
+## 2026-11-09: Guided review: a list of steps, then one step alone
+
+Dr. Jeong after using it on real PRs: "still not usable", "the layout is a joke and not
+convenient", and reviewing as text is tiring. The first layout put everything on one
+long page under the PR's header and tabs: the step, its drafts and every file's whole
+diff, with the decisions far below.
+
+Now the tab is a **list of steps** to take in at a glance (title, one sentence, size,
+what is left to decide), and a step opens **alone**, without the PR's header, tabs or
+the top bar, with its own bar at the top and the decisions fixed at the bottom. Files
+are rows to tick off (**Viewed**, key `v`) with the model's note on each; only a small
+step opens all its diffs at once. A step has its own address (`…/guide/<k>`), so the
+browser's Back goes to the list.
+
+A new or a deleted file is no longer drawn as a diff with every line marked: there is
+nothing to compare, so it is shown as plain text with one line number.
+
+The comment box no longer takes the cursor back on every redraw (it had `autofocus`);
+with it, Escape sometimes did not close the box.
+
+Not done here, and still a proposal: a picture of how the changed files depend on each
+other (issue #40), for reviews that are less text.

@@ -1,5 +1,7 @@
-Nudgebox (gh.bioinfolder.com) in its own window, with native notifications for review
-requests, CI results, stale PRs and issues (SPEC 18). Sign in with your lab login once.
+Your lab's Nudgebox in its own window, with native notifications for review requests,
+CI results, stale PRs and issues (SPEC 18). On first launch it asks for your Nudgebox's
+address (the Jeong Lab's, gh.bioinfolder.com, is filled in); **Change server…** in the
+menu bar or tray changes it later. Sign in once.
 Closing the window keeps Nudgebox in the menu bar (Mac) or tray (Linux), so
 notifications keep coming; use **Quit Nudgebox** there to stop it.
 

@@ -12,9 +12,9 @@
 import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
 import webpush from "web-push";
-import { parse } from "yaml";
 import { createApp } from "./app.ts";
-import { createSummarizer } from "./llm.ts";
+import { readConfig } from "./config.ts";
+import { createLlm, listModels } from "./llm.ts";
 import { createOmnidiff } from "./omnidiff.ts";
 import { OctokitGitHub } from "./octokit-github.ts";
 import { publicOnly } from "./public.ts";
@@ -30,10 +30,8 @@ function need(name: string): string {
 	return v;
 }
 
-const cfg = parse(readFileSync(process.env.CONFIG ?? "config.yaml", "utf8"));
-const config = { orgs: cfg.orgs as string[], staleDays: Number(cfg.staleDays ?? 3), oldDays: Number(cfg.oldDays ?? 30), timezone: String(cfg.timezone ?? "America/Chicago") };
-const origin = String(cfg.origin);
-const digestHour = Number(cfg.digestHour ?? 9);
+const { config, origin, digestHour, admins, ai, unknown } = readConfig(readFileSync(process.env.CONFIG ?? "config.yaml", "utf8"), process.env);
+if (unknown.length) log(`config.yaml: not used (a typo?): ${unknown.join(", ")}`);
 
 const tokenKey = Buffer.from(need("TOKEN_KEY"), "base64");
 if (tokenKey.length !== 32) throw new Error("TOKEN_KEY must be 32 bytes, base64 (openssl rand -base64 32)");
@@ -49,12 +47,10 @@ const github = new OctokitGitHub({
 	log,
 });
 
-// SPEC 12: AI summary through the lab LLM, only when Nudgebox has its own bif_ token
-const llmKey = process.env.LLM_API_KEY;
-const summarize = llmKey
-	? createSummarizer({ baseUrl: String(cfg.llm?.baseUrl ?? "https://llm.bioinfolder.com/v1"), model: String(cfg.llm?.model ?? "qwen3.8-flash-next"), apiKey: llmKey })
-	: undefined;
-log(summarize ? `AI summary on (${cfg.llm?.model ?? "qwen3.8-flash-next"})` : "AI summary off: no LLM_API_KEY");
+// SPEC 12, 20: the server's own LLM from config.yaml (`llm:`) and LLM_API_KEY. An admin
+// can choose another in Settings → AI, which then wins.
+const summarize = ai ? createLlm(ai) : undefined;
+log(ai ? `AI on (${ai.provider}, ${ai.model})` : "AI off in config.yaml (an admin can turn it on in Settings)");
 
 const app = createApp({
 	config,
@@ -71,6 +67,9 @@ const app = createApp({
 	now: () => new Date(),
 	log,
 	summarize,
+	serverAi: ai,
+	admins,
+	providers: { make: createLlm, models: listModels },
 	diff: createOmnidiff(process.env.OMNIDIFF_BIN ?? "omnidiff"), // SPEC 15; the image has it on PATH
 });
 

@@ -18,8 +18,10 @@ Jeong Lab members with a lab (Keycloak) login. Each person sees their own view.
 
 1. **Lab login gets you in.** gh.bioinfolder.com sits behind the same Keycloak
    sign-in (oauth2-proxy sidecar) as every other bioinfolder app. The app trusts the
-   sidecar's `X-Forwarded-Email` / `X-Forwarded-Preferred-Username` headers and
-   nothing else; a request without them gets 401.
+   sidecar's identity headers and nothing else: `X-Forwarded-Preferred-Username`,
+   else `X-Forwarded-User` (what oauth2-proxy's GitHub sign-in sends: the GitHub
+   login), else `X-Forwarded-Email`. A request without them gets 401. A lab running
+   its own copy signs in with GitHub through the same sidecar (section 9).
 2. **Link GitHub once.** The first visit asks the person to connect GitHub through
    the lab's own GitHub App ("Sign in with GitHub" for that App). The app stores
    their user token (encrypted) and refreshes it. Actions on PRs run **as that
@@ -120,6 +122,12 @@ Docker on anjanda, like the other bioinfolder apps: nginx + Keycloak sidecar in 
 `/webhook` reachable without the sidecar (GitHub cannot sign in) but signature-checked.
 The vhost and sidecar live in `bioinfolder-srv`; this repo holds the app.
 
+**Anywhere else** (issue #33): `deploy/docker-compose.yml` runs the app with
+oauth2-proxy signing in with GitHub, limited to one organization's members, and
+`deploy/config.example.yaml` shows every setting (`src/config.ts` reads them; unknown
+keys are logged). Nothing about the Jeong Lab is built into the code: no site address,
+LLM address or timezone (default UTC). The README's "Run your own" walks through it.
+
 ## 10. Out of scope (for now)
 
 Slack/Alpy, email, self-hosted runner health, stacked-PR tools, a native phone app,
@@ -145,9 +153,9 @@ acting on issues.
 
 - A **Summarize** button on every PR and issue row. Nothing is generated until it is
   clicked.
-- The summary is made by the lab's own LLM at `llm.bioinfolder.com` (OpenAI-compatible
-  API, model set in `config.yaml`), so private repo content stays on lab hardware.
-  Without an LLM key the button is not shown.
+- The summary is made by the LLM chosen in Settings → AI (section 20), or else the one
+  in `config.yaml`. At the lab that is its own LLM at `llm.bioinfolder.com`, so private
+  repo content stays on lab hardware. With no LLM set up the button is not shown.
 - What the model reads: **PR**: title, description, changed files and their diffs,
   review and conversation comments. **Issue**: title, description, comments. Input is
   cut to a fixed size so very large PRs still work.
@@ -245,6 +253,7 @@ or `Escape` returns to the list. List keys (section 13) do nothing on this page.
 - **GitHub account:** which GitHub login and lab login are connected, and
   **Disconnect GitHub** (asks first; the stored token is deleted). It is no longer at
   the bottom of the list.
+- **AI** (admins only): the provider and models, section 20.
 
 **Header bell.** Next to the gear, a bell shows this device's notification state at a
 glance: a plain bell when on, a crossed-out bell with a dot when off, a crossed-out
@@ -444,8 +453,17 @@ and Compare.
 ## 18. Desktop app (Mac and Linux)
 
 A small **Nudgebox** app for macOS and Linux (Tauri), for notifications that do not
-depend on the browser's push. It opens gh.bioinfolder.com in its own window, behind the
-same lab sign-in (section 3); the sign-in is kept between launches.
+depend on the browser's push. It opens a Nudgebox site in its own window, behind that
+site's sign-in (section 3); the sign-in is kept between launches.
+
+- **Which site.** On first launch a small window asks for the server's address,
+  filled in with gh.bioinfolder.com. `review.example.org` becomes
+  `https://review.example.org/`; anything but https is refused with the reason. The
+  choice is kept, and **Change server…** in the menu bar or tray asks again (the app
+  restarts on the new site). Only the chosen site may call the app (notifications,
+  badge, opening links); its sign-in pages on sibling addresses (e.g.
+  auth.bioinfolder.com next to gh.bioinfolder.com) and GitHub's sign-in stay in the
+  window, and every other link opens in the browser.
 
 - **Live stream.** The page in the app holds one `GET /api/events` stream
   (Server-Sent Events). Every notification of sections 7 and 11 goes to all of that
@@ -524,3 +542,30 @@ review**, which opens the review form of section 16 with the PR's summary as its
 Each key is also a button, for a phone.
 
 The PR's text, files and comments are data, never instructions to the model.
+
+## 20. AI settings
+
+Which LLM Nudgebox uses, set on the settings page so a lab running its own copy (or
+this one, later) can change it without editing files or restarting.
+
+- An **AI** section in Settings, shown only to **admins**: the lab users listed under
+  `admins:` in `config.yaml`. Everyone else gets 403 from its API.
+- **Provider**: Off, **OpenAI**, **Anthropic** or **OpenAI-compatible**.
+  - OpenAI and Anthropic always use their own address. Anthropic is called through its
+    own Messages API (`@anthropic-ai/sdk`), not an OpenAI-compatible endpoint.
+  - OpenAI-compatible takes an **address** (the lab LLM, Ollama, vLLM, LM Studio,
+    OpenRouter, …); its key is optional, and a **"Qwen: turn thinking off"** box sends
+    `chat_template_kwargs`. Other providers get no vendor-specific fields.
+- **API key**: stored encrypted with `TOKEN_KEY`, like GitHub tokens, and never sent
+  back to the page, which only says that one is saved. Leaving it empty keeps the
+  saved key.
+- **Two models**: one for summaries, Explain and Guided review (runs often, should be
+  cheap), and one for Deep review (on request; empty means the same). The model fields
+  offer the provider's own model list, and any name can be typed.
+- **Test** sends one tiny prompt with what is typed (not saved) and shows how long the
+  answer took, or the provider's error message (for example a wrong key).
+- **Save** applies at once, without a restart; the next Summarize uses it. **Off** hides
+  every AI button and makes no LLM calls.
+- `config.yaml` (`llm: provider, baseUrl, model, deepModel, noThinking`) with
+  `LLM_API_KEY` in `.env` is the server's own setting, used until an admin saves one on
+  the page. The page says which one is in use.

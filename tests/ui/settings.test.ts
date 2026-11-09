@@ -212,6 +212,10 @@ test("14. blocked notifications say where to allow them", async () => {
 		await s.page.click("#bell");
 		assert.match(await text(s.page, "#push-state"), /blocked/i);
 		assert.equal(await s.page.locator("#notifications >> text=Turn on notifications").count(), 0);
+		// #33.4: it names this site's own address, wherever Nudgebox runs
+		const host = new URL(s.url).host;
+		assert.ok((await text(s.page, "#push-state")).includes(host), `names ${host}`);
+		assert.doesNotMatch(await text(s.page, "#push-state"), /bioinfolder/);
 	} finally {
 		await s.close();
 	}

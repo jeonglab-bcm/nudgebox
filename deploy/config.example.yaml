@@ -1,0 +1,32 @@
+# Your Nudgebox's settings: copy to config.yaml next to docker-compose.yml.
+# Secrets are NOT here: they go in .env (copy ../.env.example).
+
+# This site's address, as people open it (no trailing slash).
+origin: https://review.example.org
+
+# GitHub accounts (organizations or users) your GitHub App is installed on.
+# Who sees which repo is decided by each person's own GitHub access.
+orgs:
+  - example-lab
+
+# People who may change Settings → AI: their sign-in name, which with GitHub
+# sign-in is their GitHub login.
+admins:
+  - your-github-login
+
+staleDays: 3          # a PR with no activity for this many days is stale
+oldDays: 30           # no activity this long folds a PR or issue into "Old"
+timezone: America/New_York
+digestHour: 9         # the daily stale digest, at this hour in that timezone
+
+# The LLM behind Summarize, Explain and Guided review. Optional: leave it out and
+# choose one later in Settings → AI. The key is LLM_API_KEY in .env.
+#   provider: openai     model e.g. one from platform.openai.com
+#   provider: anthropic  model e.g. claude-haiku-5-5 (everyday), deepModel claude-opus-5-5
+#   provider: compatible baseUrl of any OpenAI-compatible server (Ollama, vLLM, ...)
+llm:
+  provider: compatible
+  baseUrl: http://host.docker.internal:11434/v1   # Ollama on the same machine
+  model: qwen3:30b
+  deepModel: qwen3:30b
+  noThinking: false   # true only for Qwen served by vLLM or SGLang

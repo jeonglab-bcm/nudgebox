@@ -9,8 +9,14 @@ staleDays: 3          # SPEC 7.3: a PR with no activity for this many days is st
 oldDays: 30           # SPEC 5: no activity this long folds a PR/issue into "Old" (quiet)
 timezone: America/Chicago
 digestHour: 9         # daily stale digest at/after 09:00 in that timezone
-# SPEC 12: AI summary. The key is LLM_API_KEY in .env (a bif_ token from
-# portal.bioinfolder.com/tokens); without it there is no Summarize button.
+# SPEC 20: lab users (their login name) who may change the AI settings in Settings → AI.
+admins:
+  - hyunhwanj
+# SPEC 12, 20: the server's own LLM. provider: openai, anthropic or compatible (any
+# OpenAI-compatible address). The key is LLM_API_KEY in .env (here a bif_ token from
+# portal.bioinfolder.com/tokens). An admin's choice in Settings → AI replaces this.
 llm:
+  provider: compatible
   baseUrl: https://llm.bioinfolder.com/v1
   model: qwen3.8-flash-next
+  noThinking: true      # Qwen on vLLM: answer at once, without thinking

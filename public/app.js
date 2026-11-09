@@ -539,7 +539,7 @@ async function refreshPush() {
 			if (sub) push = { state: "on", sub, reg: swReg, reason: "" };
 			else if (window.Notification?.permission === "denied") push = { state: "blocked", sub: null, reg: swReg, reason: isIOS
 				? "Notifications are blocked for Nudgebox. Allow them in the iPhone's Settings → Notifications → Nudgebox."
-				: "Notifications are blocked for this site. Allow gh.bioinfolder.com in your browser's site settings, and the browser in System Settings → Notifications." };
+				: `Notifications are blocked for this site. Allow ${location.host} in your browser's site settings, and the browser in System Settings → Notifications.` };
 			else push = { state: "off", sub: null, reg: swReg, reason: "" };
 		} catch (e) {
 			push = { state: "unavailable", sub: null, reg: null, reason: `Notifications could not start here (${e.message}).` };
@@ -660,6 +660,107 @@ function section(id, title, ...kids) {
 	return el("section", { id, class: "set" }, el("h3", {}, title), ...kids);
 }
 
+// -- AI settings (SPEC 20): admin only ----------------------------------------------------
+let aiForm = null; // the form as typed; the key only ever comes from typing
+let aiModelList = [];
+let aiResult = "";
+const AI_PROVIDERS = [["off", "Off"], ["openai", "OpenAI"], ["anthropic", "Anthropic"], ["compatible", "OpenAI-compatible"]];
+
+async function loadAi() {
+	const { status, data: d } = await api("/api/ai");
+	if (status !== 200) return;
+	aiForm = { provider: d.provider ?? "off", baseUrl: d.baseUrl ?? "", model: d.model ?? "", deepModel: d.deepModel ?? "", noThinking: Boolean(d.noThinking), keySet: d.keySet, from: d.from, apiKey: "" };
+	if (onSettings()) renderSettings();
+	if (aiForm.provider !== "off") loadAiModels();
+}
+
+const aiBody = () => ({ provider: aiForm.provider, baseUrl: aiForm.baseUrl, apiKey: aiForm.apiKey, model: aiForm.model, deepModel: aiForm.deepModel, noThinking: aiForm.noThinking });
+
+async function loadAiModels() {
+	if (!aiForm || aiForm.provider === "off" || (aiForm.provider === "compatible" && !aiForm.baseUrl)) return;
+	const n = (loadAiModels.n = (loadAiModels.n ?? 0) + 1);
+	const { data: d } = await api("/api/ai/models", aiBody());
+	if (n !== loadAiModels.n) return; // a newer request was sent meanwhile
+	aiModelList = d.models ?? [];
+	$("#ai-models")?.replaceChildren(...aiModelList.map((m) => el("option", { value: m })));
+	const note = $("#ai-models-note");
+	if (note) note.textContent = d.error ? `Could not list the models: ${d.error}` : aiModelList.length ? `${aiModelList.length} models from the provider; you can also type a name.` : "";
+}
+
+function setAiResult(text, cls = "") {
+	aiResult = text;
+	const r = $("#ai-result");
+	if (r) { r.textContent = text; r.className = `hint ${cls}`; }
+}
+
+async function testAi() {
+	setAiResult("Asking…");
+	const { status, data: d } = await api("/api/ai/test", aiBody());
+	if (status !== 200) return setAiResult(`✗ ${d.error || status}`, "bad");
+	setAiResult(d.ok ? `✓ Answered in ${(d.ms / 1000).toFixed(1)} s` : `✗ ${d.error}`, d.ok ? "good" : "bad");
+}
+
+async function saveAi() {
+	const { status, data: d } = await api("/api/ai", aiBody());
+	if (status !== 200) return setAiResult(`✗ ${d.error || status}`, "bad");
+	toast(d.provider === "off" ? "AI is off" : "AI settings saved");
+	aiForm = { ...aiForm, ...d, baseUrl: d.baseUrl ?? "", deepModel: d.deepModel ?? "", apiKey: "" };
+	setAiResult("");
+	load(); // the AI buttons follow the new setting
+}
+
+function aiShow() {
+	const p = aiForm.provider;
+	const show = (sel, on) => { const n = $(sel); if (n) n.hidden = !on; };
+	show("#ai-address-row", p === "compatible");
+	show("#ai-qwen-row", p === "compatible");
+	show("#ai-key-row", p !== "off");
+	show("#ai-model-rows", p !== "off");
+	const key = $("#ai-key");
+	if (key) key.placeholder = aiForm.keySet ? "Saved. Leave empty to keep it." : p === "compatible" ? "Optional (Ollama needs none)" : "Paste your API key";
+}
+
+function aiSection() {
+	if (!aiForm) return section("ai", "AI", el("p", { class: "hint" }, "Loading…"));
+	const f = aiForm;
+	const field = (id, label, attrs, key) => el("label", { class: "ai-field", for: id }, el("span", {}, label),
+		el("input", { id, value: f[key] ?? "", autocomplete: "off", spellcheck: "false", ...attrs }));
+	const s = section("ai", "AI",
+		el("p", { class: "hint" }, "The model behind Summarize, Explain and Guided review, for everyone. Only admins see this. ",
+			f.from === "server" ? "Now using the server's own setting (config.yaml); saving here replaces it." : ""),
+		el("div", { class: "seg ai-provider", role: "radiogroup", "aria-label": "Provider" },
+			AI_PROVIDERS.map(([v, label]) => el("label", { class: f.provider === v ? "on" : "" },
+				el("input", { type: "radio", name: "ai-provider", value: v, checked: f.provider === v }), label))),
+		el("div", { id: "ai-address-row" }, field("ai-address", "Address", { placeholder: "http://localhost:11434/v1", inputmode: "url" }, "baseUrl")),
+		el("div", { id: "ai-key-row" }, field("ai-key", "API key", { type: "password" }, "apiKey")),
+		el("label", { id: "ai-qwen-row", class: "ai-check" }, el("input", { type: "checkbox", id: "ai-qwen", checked: f.noThinking }), "Qwen: turn thinking off (vLLM, SGLang)"),
+		el("div", { id: "ai-model-rows" },
+			field("ai-model", "Model for summaries and guided review", { list: "ai-models" }, "model"),
+			field("ai-deep-model", "Model for Deep review (on request)", { list: "ai-models", placeholder: "Same as above" }, "deepModel"),
+			el("datalist", { id: "ai-models" }, aiModelList.map((m) => el("option", { value: m }))),
+			el("p", { id: "ai-models-note", class: "hint" })),
+		el("div", { class: "actions" },
+			el("button", { onclick: busy(testAi), id: "ai-test" }, "Test"),
+			el("button", { class: "primary", onclick: busy(saveAi) }, "Save")),
+		el("p", { id: "ai-result", class: "hint", role: "status" }, aiResult));
+	s.addEventListener("change", (e) => {
+		const t = e.target;
+		if (t.name === "ai-provider") {
+			aiForm.provider = t.value;
+			s.querySelectorAll(".ai-provider label").forEach((l) => l.classList.toggle("on", l.querySelector("input").checked));
+			aiShow();
+			loadAiModels();
+		} else if (t.id === "ai-qwen") aiForm.noThinking = t.checked;
+		else if (t.id === "ai-key" || t.id === "ai-address") loadAiModels();
+	});
+	s.addEventListener("input", (e) => {
+		const k = { "ai-address": "baseUrl", "ai-key": "apiKey", "ai-model": "model", "ai-deep-model": "deepModel" }[e.target.id];
+		if (k) aiForm[k] = e.target.value;
+	});
+	queueMicrotask(aiShow);
+	return s;
+}
+
 function renderSettings() {
 	document.body.classList.add("settings");
 	$("#tabs").hidden = true;
@@ -700,7 +801,12 @@ function renderSettings() {
 			el("p", { class: "hint" }, "Hidden and old items never notify. The number on the app icon counts notifications since you last opened Nudgebox.")),
 		section("github", "GitHub account",
 			el("p", {}, "Connected as ", el("b", {}, data.login || "…"), " on GitHub, for lab login ", el("b", {}, data.pr?.user || "…"), ". Actions run as this GitHub account."),
-			el("div", { class: "actions" }, el("button", { class: "danger", onclick: unlink }, "Disconnect GitHub")))));
+			el("div", { class: "actions" }, el("button", { class: "danger", onclick: unlink }, "Disconnect GitHub"))),
+		data.pr?.admin ? aiSection() : null));
+	if (data.pr?.admin && !aiForm && !loadAi.started) {
+		loadAi.started = true;
+		loadAi();
+	}
 	if (location.hash === "#settings" && renderSettings.scrollTo) {
 		$(`#${renderSettings.scrollTo}`)?.scrollIntoView({ block: "start" });
 		renderSettings.scrollTo = null;

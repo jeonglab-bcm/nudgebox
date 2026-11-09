@@ -18,7 +18,7 @@ export const ORIGIN = "https://gh.bioinfolder.com";
 export const WEBHOOK_SECRET = "test-webhook-secret";
 
 /** One request the app made to the LLM (SPEC 12). */
-export type LlmCall = { system: string; user: string };
+export type LlmCall = { system: string; user: string; maxTokens?: number };
 
 export type Pushed = { endpoint: string; payload: { title: string; body: string; url?: string; badge?: number }; urgency?: string };
 

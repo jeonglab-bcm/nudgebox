@@ -79,7 +79,9 @@ const PLAN = `You plan the review of a GitHub pull request for a busy lab member
 Group the changed files into steps. A step is one logical change: for example a new
 function, the code that calls it, and its test. Put the steps in the order a reviewer
 should read them: the core change first, then the code that uses it, then tests, then
-documentation. Use every file exactly once. Use only the file paths given.
+documentation. Use every file exactly once, written exactly as given, and no other.
+Aim for 3 to 10 steps and never more than 12, however many files there are: a big pull
+request gets big steps (a whole new module with its tests is one step).
 
 For each step write a short title (at most 6 words) and one sentence (at most 25 words)
 that says what the step does. Also write one sentence that says what the whole pull
@@ -93,27 +95,30 @@ ${DATA_ONLY}`;
 export function planPrompt(pr: Pick<PullRequest, "title">, files: FileChanges[]): Prompt {
 	const per = Math.max(400, Math.floor((MAX_PROMPT - 500) / Math.max(1, files.length)));
 	const blocks = files.map((f) => fileBlock(f, Math.min(per, 2400)));
-	return { system: PLAN, user: clip(`Pull request: ${pr.title}\n\nChanged files:\n\n${blocks.join("\n")}`) };
+	// the answer names every file: about 30 tokens each on the lab model, so a cap of 1200 would cut a big plan off mid-JSON
+	return { system: PLAN, user: clip(`Pull request: ${pr.title}\n\nChanged files:\n\n${blocks.join("\n")}`), maxTokens: Math.min(16_000, 800 + 40 * files.length) };
 }
 
 export type PlanStep = { title: string; summary: string; files: string[] };
 
-/** The model's plan, if it uses each of `paths` exactly once and nothing else. */
+/**
+ * The model's plan over `paths`, repaired rather than thrown away: a name not in `paths`
+ * (noise, or invented) is dropped, so is a second use of one, a step left with no files
+ * goes, and the files the plan left out follow as one step each in path order. Nothing
+ * when the answer is no plan at all (not JSON, cut off, or no step with a real file).
+ */
 export function readPlan(answer: string, paths: string[]): { summary: string; steps: PlanStep[] } | null {
 	const j = parseJson(answer);
 	if (!j || !Array.isArray(j.steps)) return null;
-	const want = new Set(paths);
-	const seen = new Set<string>();
+	const left = new Set(paths);
 	const steps: PlanStep[] = [];
 	for (const s of j.steps) {
-		if (!s || !Array.isArray(s.files) || !s.files.length) return null;
-		for (const f of s.files) {
-			if (typeof f !== "string" || !want.has(f) || seen.has(f)) return null;
-			seen.add(f);
-		}
-		steps.push({ title: oneLine(s.title) || s.files[0], summary: oneLine(s.summary), files: s.files });
+		if (!s || !Array.isArray(s.files)) continue;
+		const files = s.files.filter((f: unknown): f is string => typeof f === "string" && left.delete(f)); // first use wins
+		if (files.length) steps.push({ title: oneLine(s.title) || files[0], summary: oneLine(s.summary), files });
 	}
-	if (seen.size !== want.size) return null;
+	if (!steps.length) return null;
+	for (const p of [...left].sort()) steps.push({ title: p, summary: "", files: [p] });
 	return { summary: oneLine(j.summary), steps };
 }
 

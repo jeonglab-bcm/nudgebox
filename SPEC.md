@@ -499,8 +499,11 @@ by everyone who can see the repo (section 4):
 2. **Steps.** The lab LLM groups the other files into steps, one logical change each,
    in reading order (the core change, then its callers, then tests, then documents),
    with a title and one sentence on what the step does, and one sentence on the whole
-   PR. A plan that leaves a file out, uses one twice, names one not in the PR or puts
-   noise in a step is not used: then each file is a step, in path order.
+   PR. At most 12 steps, however big the PR. A plan is repaired, not thrown away: a
+   file it names twice stays in its first step, a name not in the PR or a noise file
+   is dropped, and the files it left out follow as one step each, in path order. Only
+   an answer that is no plan at all (not JSON, cut off) gives one step per file, in
+   path order, with a line in the server log.
 3. **Draft comments.** For each step the model writes draft review comments on real
    problems only (not style, not guesses about code it cannot see), each on a line
    GitHub takes a comment on (section 16). Each draft is then checked by a second

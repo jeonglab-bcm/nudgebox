@@ -108,6 +108,19 @@ test("20.18 OpenAI-compatible without a key sends no Authorization header, and w
 	}
 });
 
+test("20.19 OpenAI-compatible: the answer gets 1200 tokens, or the room the prompt asks for", async () => {
+	const f = await openaiServer();
+	try {
+		const llm = createLlm({ provider: "compatible", baseUrl: `${f.url}/v1`, model: "llama" });
+		await llm(P);
+		await llm({ ...P, maxTokens: 4400 });
+		assert.equal(f.seen[0].body.max_tokens, 1200);
+		assert.equal(f.seen[1].body.max_tokens, 4400);
+	} finally {
+		f.close();
+	}
+});
+
 test("20.11 Anthropic: the Messages API with the key, system apart from the messages, streamed text", async () => {
 	const f = await anthropicServer();
 	try {

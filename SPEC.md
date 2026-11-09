@@ -18,8 +18,10 @@ Jeong Lab members with a lab (Keycloak) login. Each person sees their own view.
 
 1. **Lab login gets you in.** gh.bioinfolder.com sits behind the same Keycloak
    sign-in (oauth2-proxy sidecar) as every other bioinfolder app. The app trusts the
-   sidecar's `X-Forwarded-Email` / `X-Forwarded-Preferred-Username` headers and
-   nothing else; a request without them gets 401.
+   sidecar's identity headers and nothing else: `X-Forwarded-Preferred-Username`,
+   else `X-Forwarded-User` (what oauth2-proxy's GitHub sign-in sends: the GitHub
+   login), else `X-Forwarded-Email`. A request without them gets 401. A lab running
+   its own copy signs in with GitHub through the same sidecar (section 9).
 2. **Link GitHub once.** The first visit asks the person to connect GitHub through
    the lab's own GitHub App ("Sign in with GitHub" for that App). The app stores
    their user token (encrypted) and refreshes it. Actions on PRs run **as that
@@ -119,6 +121,12 @@ requests must carry a valid GitHub signature or are rejected.
 Docker on anjanda, like the other bioinfolder apps: nginx + Keycloak sidecar in front,
 `/webhook` reachable without the sidecar (GitHub cannot sign in) but signature-checked.
 The vhost and sidecar live in `bioinfolder-srv`; this repo holds the app.
+
+**Anywhere else** (issue #33): `deploy/docker-compose.yml` runs the app with
+oauth2-proxy signing in with GitHub, limited to one organization's members, and
+`deploy/config.example.yaml` shows every setting (`src/config.ts` reads them; unknown
+keys are logged). Nothing about the Jeong Lab is built into the code: no site address,
+LLM address or timezone (default UTC). The README's "Run your own" walks through it.
 
 ## 10. Out of scope (for now)
 
@@ -445,8 +453,17 @@ and Compare.
 ## 18. Desktop app (Mac and Linux)
 
 A small **Nudgebox** app for macOS and Linux (Tauri), for notifications that do not
-depend on the browser's push. It opens gh.bioinfolder.com in its own window, behind the
-same lab sign-in (section 3); the sign-in is kept between launches.
+depend on the browser's push. It opens a Nudgebox site in its own window, behind that
+site's sign-in (section 3); the sign-in is kept between launches.
+
+- **Which site.** On first launch a small window asks for the server's address,
+  filled in with gh.bioinfolder.com. `review.example.org` becomes
+  `https://review.example.org/`; anything but https is refused with the reason. The
+  choice is kept, and **Change server…** in the menu bar or tray asks again (the app
+  restarts on the new site). Only the chosen site may call the app (notifications,
+  badge, opening links); its sign-in pages on sibling addresses (e.g.
+  auth.bioinfolder.com next to gh.bioinfolder.com) and GitHub's sign-in stay in the
+  window, and every other link opens in the browser.
 
 - **Live stream.** The page in the app holds one `GET /api/events` stream
   (Server-Sent Events). Every notification of sections 7 and 11 goes to all of that

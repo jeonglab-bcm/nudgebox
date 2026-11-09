@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Only Nudgebox itself may call the app: show a notification, set the Dock badge, open a link in the browser.",
-  "windows": ["main"],
-  "remote": { "urls": ["https://gh.bioinfolder.com/*"] },
-  "permissions": ["allow-notify", "allow-set-badge", "allow-open-external"]
+  "description": "The app's own setup page may read and choose the server. The chosen server's own capability (notify, badge, open links) is added at start-up in main.rs, for that site only.",
+  "windows": ["setup"],
+  "local": true,
+  "permissions": ["allow-get-server", "allow-set-server"]
 }

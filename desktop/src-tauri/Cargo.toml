@@ -1,6 +1,6 @@
 [package]
 name = "nudgebox"
-version = "0.1.0"
+version = "0.2.0"
 description = "Nudgebox desktop app: the lab's GitHub inbox with native notifications (SPEC 18)"
 edition = "2021"
 publish = false

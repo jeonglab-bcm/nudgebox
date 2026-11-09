@@ -106,14 +106,42 @@ test("19.2 steps cover every other file once, in the model's reading order", asy
 	}
 });
 
-test("19.2 a bad plan falls back to one step per file, in path order", async () => {
-	const bad: Plan[] = [
-		"Sure! Here are the steps.",
-		{ steps: [{ title: "a", summary: "s", files: ["src/limit.ts"] }] }, // files missing
-		{ steps: [{ title: "a", summary: "s", files: ["src/limit.ts", "src/limit.test.ts", "docs/notes.md"] }, { title: "b", summary: "s", files: ["src/limit.ts"] }] }, // twice
-		{ steps: [{ title: "a", summary: "s", files: ["src/limit.ts", "src/limit.test.ts", "docs/notes.md", "src/nope.ts"] }] }, // unknown
-		{ steps: [{ title: "a", summary: "s", files: ["src/limit.ts", "src/limit.test.ts", "package-lock.json", "docs/notes.md"] }] }, // noise in a step
+test("19.2 the plan is asked for at most 12 steps, with room in the answer to list every file", async () => {
+	const { t, review, calls } = await setup();
+	try {
+		await review("hyunhwanj");
+		const [p] = calls("You plan");
+		assert.match(p.system, /never more than 12/);
+		assert.ok((p.maxTokens ?? 0) >= 800 + 40 * 3, `the plan's answer gets ${p.maxTokens} tokens for 3 files`);
+	} finally {
+		await t.close();
+	}
+});
+
+test("19.2 a plan with slips is repaired, not thrown away", async () => {
+	const all = ["src/limit.ts", "src/limit.test.ts", "docs/notes.md"];
+	const cases: [Plan, string[][]][] = [
+		[{ summary: "S.", steps: [{ title: "a", summary: "s", files: ["src/limit.ts"] }] }, [["src/limit.ts"], ["docs/notes.md"], ["src/limit.test.ts"]]], // left out: one step each, after
+		[{ summary: "S.", steps: [{ title: "a", summary: "s", files: all }, { title: "b", summary: "s", files: ["src/limit.ts"] }] }, [all]], // twice: stays in the first
+		[{ summary: "S.", steps: [{ title: "a", summary: "s", files: [...all, "src/nope.ts"] }] }, [all]], // not in the PR
+		[{ summary: "S.", steps: [{ title: "a", summary: "s", files: ["src/limit.ts", "src/limit.test.ts", "package-lock.json", "docs/notes.md"] }] }, [all]], // noise in a step
 	];
+	for (const [plan, want] of cases) {
+		const { t, review } = await setup({ plan });
+		try {
+			const { body: r } = await review("hyunhwanj");
+			assert.equal(r.state, "ready", JSON.stringify(plan));
+			assert.deepEqual(stepFiles(r), want, JSON.stringify(plan));
+			assert.equal(r.steps[0].title, "a");
+			assert.equal(r.summary, "S.");
+		} finally {
+			await t.close();
+		}
+	}
+});
+
+test("19.2 an answer that is no plan falls back to one step per file, in path order, and says so in the log", async () => {
+	const bad: Plan[] = ["Sure! Here are the steps.", '{"summary": "cut off", "steps": [{"title": "a", "files": ["src/limit.ts", "src/lim', { steps: [] }, { steps: [{ title: "a", summary: "s", files: ["src/nope.ts"] }] }];
 	for (const plan of bad) {
 		const { t, review } = await setup({ plan });
 		try {
@@ -121,6 +149,7 @@ test("19.2 a bad plan falls back to one step per file, in path order", async () 
 			assert.equal(r.state, "ready", JSON.stringify(plan));
 			assert.deepEqual(stepFiles(r), [["docs/notes.md"], ["src/limit.test.ts"], ["src/limit.ts"]], JSON.stringify(plan));
 			assert.ok(r.steps.every((s: any) => s.summary === "This step changes the limit."));
+			assert.ok(t.logs.some((l: string) => /labbot#4.*plan/.test(l)), `nothing in the log: ${JSON.stringify(t.logs)}`);
 		} finally {
 			await t.close();
 		}

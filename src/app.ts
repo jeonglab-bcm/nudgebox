@@ -802,6 +802,7 @@ export function createApp(opts: AppOptions): App {
 			}
 		};
 		const plan = rest.length ? readPlan(await ask(planPrompt(pr, rest)), [...byPath.keys()]) : { summary: "", steps: [] };
+		if (!plan) log(`guided review of ${pr.repo}#${pr.number}: the model's answer was no plan, so one step per file`);
 		const dropped = store.learnings(pr.repo);
 		const steps: PrepStep[] = [];
 		for (const s of plan?.steps ?? onePerFile()) {

@@ -12,6 +12,7 @@ import Anthropic from "@anthropic-ai/sdk";
 export interface Prompt {
 	system: string; // fixed instructions
 	user: string; // the item's text: data, never instructions
+	maxTokens?: number; // room the answer needs when it is long (a plan naming every file); the chat path's default is 1200
 }
 
 export type Summarize = (prompt: Prompt, onDelta?: (text: string) => void) => Promise<string>;
@@ -106,7 +107,7 @@ export interface LlmOptions {
 export const createSummarizer = (o: LlmOptions): Summarize => chat(o);
 
 function chat(o: LlmOptions & { openai?: boolean }): Summarize {
-	return async ({ system, user }, onDelta) => {
+	return async ({ system, user, maxTokens }, onDelta) => {
 		let r: Response;
 		try {
 			r = await fetch(`${o.baseUrl.replace(/\/$/, "")}/chat/completions`, {
@@ -117,10 +118,11 @@ function chat(o: LlmOptions & { openai?: boolean }): Summarize {
 					messages: [{ role: "system", content: system }, { role: "user", content: user }],
 					stream: Boolean(onDelta),
 					// OpenAI's reasoning models take only max_completion_tokens, and no temperature
-					...(o.openai ? { max_completion_tokens: 16000 } : { max_tokens: 1200, temperature: 0.3 }),
+					...(o.openai ? { max_completion_tokens: 16000 } : { max_tokens: maxTokens ?? 1200, temperature: 0.3 }),
 					...(o.noThinking ? { chat_template_kwargs: { enable_thinking: false } } : {}),
 				}),
-				signal: AbortSignal.timeout(o.timeoutMs ?? (o.openai ? 300_000 : 90_000)),
+				// a long answer gets time to be written: ~30 ms a token on the lab model
+				signal: AbortSignal.timeout(o.timeoutMs ?? (o.openai ? 300_000 : Math.max(90_000, (maxTokens ?? 0) * 30))),
 			});
 		} catch (e) {
 			const name = (e as Error).name;

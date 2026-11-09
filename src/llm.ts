@@ -121,8 +121,8 @@ function chat(o: LlmOptions & { openai?: boolean }): Summarize {
 					...(o.openai ? { max_completion_tokens: 16000 } : { max_tokens: maxTokens ?? 1200, temperature: 0.3 }),
 					...(o.noThinking ? { chat_template_kwargs: { enable_thinking: false } } : {}),
 				}),
-				// a long answer gets time to be written: ~30 ms a token on the lab model
-				signal: AbortSignal.timeout(o.timeoutMs ?? (o.openai ? 300_000 : Math.max(90_000, (maxTokens ?? 0) * 30))),
+				// a long answer (a plan over many files: 2-3 minutes on the lab model) gets the five minutes OpenAI gets
+				signal: AbortSignal.timeout(o.timeoutMs ?? (o.openai || maxTokens ? 300_000 : 90_000)),
 			});
 		} catch (e) {
 			const name = (e as Error).name;

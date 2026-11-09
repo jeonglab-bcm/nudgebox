@@ -125,6 +125,7 @@ test("19.2 a plan with slips is repaired, not thrown away", async () => {
 		[{ summary: "S.", steps: [{ title: "a", summary: "s", files: all }, { title: "b", summary: "s", files: ["src/limit.ts"] }] }, [all]], // twice: stays in the first
 		[{ summary: "S.", steps: [{ title: "a", summary: "s", files: [...all, "src/nope.ts"] }] }, [all]], // not in the PR
 		[{ summary: "S.", steps: [{ title: "a", summary: "s", files: ["src/limit.ts", "src/limit.test.ts", "package-lock.json", "docs/notes.md"] }] }, [all]], // noise in a step
+		['{"summary": "S.", "steps": [{"title": "a", "summary": "s", "files": ["src/limit.ts"]}, {"title": "b", "summary": "s", "files": ["src/limit.te', [["src/limit.ts"], ["docs/notes.md"], ["src/limit.test.ts"]]], // cut off: the complete step stays
 	];
 	for (const [plan, want] of cases) {
 		const { t, review } = await setup({ plan });
@@ -137,6 +138,33 @@ test("19.2 a plan with slips is repaired, not thrown away", async () => {
 		} finally {
 			await t.close();
 		}
+	}
+});
+
+test("19.2 while it is prepared, the review says what the model is doing", async () => {
+	const { t, review } = await setup();
+	const slow = t.llm.answer!;
+	t.llm.answer = async (p) => { await new Promise((r) => setTimeout(r, 120)); return slow(p); };
+	try {
+		const get = async () => (await t.req(`/api/review?repo=${encodeURIComponent(LAB)}&number=4`, { as: "hyunhwanj" })).json();
+		const seen: any[] = [];
+		for (let i = 0; i < 100; i++) {
+			const r = await get();
+			if (r.state !== "preparing") break;
+			if (r.progress && r.progress.phase !== seen.at(-1)?.phase) seen.push(r.progress);
+			await new Promise((r) => setTimeout(r, 20));
+		}
+		const phases = seen.map((p) => p.phase);
+		assert.ok(phases.includes("planning"), `phases seen: ${phases}`);
+		const reviewing = seen.find((p) => p.phase === "reviewing");
+		assert.ok(reviewing, `phases seen: ${phases}`);
+		assert.equal(reviewing.total, 2);
+		assert.equal(reviewing.what, "Raise the limit");
+		assert.ok(seen.every((p) => typeof p.since === "string" && !Number.isNaN(Date.parse(p.since))));
+		const { body: r } = await review("hyunhwanj");
+		assert.equal(r.state, "ready");
+	} finally {
+		await t.close();
 	}
 });
 

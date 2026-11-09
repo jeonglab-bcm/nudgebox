@@ -108,7 +108,7 @@ export type PlanStep = { title: string; summary: string; files: string[] };
  * when the answer is no plan at all (not JSON, cut off, or no step with a real file).
  */
 export function readPlan(answer: string, paths: string[]): { summary: string; steps: PlanStep[] } | null {
-	const j = parseJson(answer);
+	const j = parseJson(answer) ?? cutOffPlan(answer);
 	if (!j || !Array.isArray(j.steps)) return null;
 	const left = new Set(paths);
 	const steps: PlanStep[] = [];
@@ -217,6 +217,18 @@ export function parseJson(answer: string): any {
 	} catch {
 		return null;
 	}
+}
+
+/** A plan the model did not finish: its complete steps, the list closed after the last one. */
+function cutOffPlan(answer: string): any {
+	const s = answer.slice(Math.max(0, answer.indexOf("{")));
+	for (let end = s.lastIndexOf("}"); end > 0; end = s.lastIndexOf("}", end - 1)) {
+		try {
+			const j = JSON.parse(`${s.slice(0, end + 1)}]}`);
+			if (Array.isArray(j?.steps)) return j;
+		} catch { /* not a step boundary: try the one before */ }
+	}
+	return null;
 }
 
 const oneLine = (s: unknown) => (typeof s === "string" ? s.replace(/\s+/g, " ").trim() : "");

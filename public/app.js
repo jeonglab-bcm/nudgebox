@@ -1944,6 +1944,12 @@ function reviewForm(p, own) {
 // The server prepares the PR (noise hidden, steps in reading order, checked drafts); here
 // the person walks the steps with one key per decision.
 
+/** "12 s", "3 min 05 s": how long since `iso`, for a wait that is refreshed every second. */
+function elapsed(iso) {
+	const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
+	return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, "0")} s`;
+}
+
 async function loadGuide(t) {
 	const key = prv.key;
 	const { status, data: d } = await api(`/api/review?repo=${encodeURIComponent(t.repo)}&number=${t.number}`);
@@ -1955,6 +1961,7 @@ async function loadGuide(t) {
 	else if (d.state === "preparing") {
 		g.failed = null;
 		g.preparing = true;
+		g.progress = d.progress ?? null;
 		setTimeout(() => prv.key === key && prTarget()?.tab === "guide" && loadGuide(t), 1000);
 	} else {
 		Object.assign(g, { data: d, failed: null, preparing: false });
@@ -2090,7 +2097,19 @@ function guideView(t, p) {
 		return el("div", { class: "guide" }, el("p", { class: "hint" }, `Could not prepare the guided review: ${g.failed}`),
 			el("button", { onclick: busy(retry) }, "Try again"));
 	}
-	if (!g.data) return el("div", { class: "guide" }, el("p", { class: "hint" }, "Preparing the guided review: the AI reads the changes, one step at a time…"));
+	if (!g.data) {
+		const p = g.progress;
+		const what = !p ? "the AI reads the changes, one step at a time…"
+			: p.phase === "reading" ? `reading the changed files (${p.done} of ${p.total})…`
+			: p.phase === "planning" ? `the AI is grouping ${p.total} files into steps (a minute or three on a big one)…`
+			: p.phase === "reviewing" ? `the AI is reviewing step ${p.done + 1} of ${p.total}: ${p.what}…`
+			: `the AI is checking its draft comments on step ${p.done + 1} of ${p.total}: ${p.what}…`;
+		const total = p && p.phase !== "planning" ? p.total : 0;
+		return el("div", { class: "guide guide-preparing" },
+			el("p", { class: "hint" }, `Preparing the guided review: ${what}`),
+			total ? el("p", { class: "guide-progress" }, el("span", { class: "meter", "aria-hidden": "true" }, el("span", { style: `width:${(100 * p.done) / total}%` }))) : null,
+			p?.since ? el("p", { class: "hint" }, `Working for ${elapsed(p.since)}`) : null);
+	}
 	const d = g.data;
 	const n = d.steps.length;
 	const done = d.steps.filter((x) => x.reviewed).length;

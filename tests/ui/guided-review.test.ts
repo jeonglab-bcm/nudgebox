@@ -34,7 +34,7 @@ const model = (p: Prompt) =>
 	: p.system.startsWith("You review") ? JSON.stringify({ summary: "s.", drafts: p.user.includes("=== src/limit.ts") ? DRAFTS : [] })
 	: JSON.stringify({ real: true });
 
-async function open() {
+async function open(o: { slowMs?: number } = {}) {
 	const t = await start();
 	t.github.grant("hwan", LAB);
 	t.github.addPr({ repo: LAB, number: 4, author: "kelly", title: "Raise the limit", headSha: "h1" });
@@ -45,7 +45,7 @@ async function open() {
 		t.github.blobs.set(`${LAB}@h1:${f}`, lines((i) => (i === 14 ? `const limit = 20; // ${f}` : `line ${i + 1}`)));
 	}
 	t.differ.reply = { largeResidual: false, before: { hunks: [{ op: "update", ...at(14, 14, 16) }] }, after: { hunks: [{ op: "update", ...at(14, 14, 16) }] } };
-	t.llm.answer = model;
+	t.llm.answer = o.slowMs ? async (p) => { await new Promise((r) => setTimeout(r, o.slowMs)); return model(p); } : model;
 	await t.link("hyunhwanj", "hwan");
 	await t.app.sync();
 	const side = await sidecar(t.base, "hyunhwanj");
@@ -53,7 +53,7 @@ async function open() {
 	await ctx.route("https://github.com/**", (r) => r.fulfill({ body: "github" }));
 	const page = await ctx.newPage();
 	await page.goto(side.url + GUIDE);
-	await page.waitForSelector(".guide-step");
+	if (!o.slowMs) await page.waitForSelector(".guide-step");
 	const close = async () => {
 		await ctx.close();
 		side.server.close();
@@ -72,6 +72,21 @@ async function until(f: () => Promise<boolean>, ms = 3000) {
 		await new Promise((r) => setTimeout(r, 50));
 	}
 }
+
+test("19. while the AI works, the page says which step it is on, with a bar, and since when", async () => {
+	const s = await open({ slowMs: 1500 });
+	try {
+		await s.page.waitForSelector(".guide-preparing");
+		await until(async () => /reviewing step 1 of 2: Raise the limit/.test(await text(s.page, ".guide-preparing")), 8000);
+		assert.match(await text(s.page, ".guide-preparing"), /^Preparing the guided review: the AI is reviewing step 1 of 2: Raise the limit…\s*Working for \d+ s$/);
+		assert.equal(await s.page.locator(".guide-preparing .meter").count(), 1);
+		await until(async () => /step 2 of 2: Test the limit/.test(await text(s.page, ".guide-preparing")), 8000);
+		await s.page.waitForSelector(".guide-step", { timeout: 15000 });
+		assert.equal(await s.page.locator(".guide-preparing").count(), 0);
+	} finally {
+		await s.close();
+	}
+});
 
 test("19. the queue: one step at a time, and y k e x c s b each do one thing", async () => {
 	const s = await open();

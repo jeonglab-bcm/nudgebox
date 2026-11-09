@@ -19,6 +19,7 @@ export const WEBHOOK_SECRET = "test-webhook-secret";
 
 /** One request the app made to the LLM (SPEC 12). */
 export type LlmCall = { system: string; user: string; maxTokens?: number };
+export type LlmAnswer = (p: LlmCall) => string | Promise<string>;
 
 export type Pushed = { endpoint: string; payload: { title: string; body: string; url?: string; badge?: number }; urgency?: string };
 
@@ -33,7 +34,7 @@ export async function start(opts: { staleDays?: number; oldDays?: number; now?: 
 	// SPEC 20: `made` records each provider the settings set up, `models` the model each call
 	// went to ("server-model" is the server's own LLM), `listed` each model-list request
 	const llm = {
-		calls: [] as LlmCall[], failNext: false, reply: undefined as string | undefined, delayMs: 0, answer: undefined as ((p: LlmCall) => string) | undefined,
+		calls: [] as LlmCall[], failNext: false, reply: undefined as string | undefined, delayMs: 0, answer: undefined as LlmAnswer | undefined,
 		made: [] as LlmConfig[], models: [] as string[], listed: [] as Omit<LlmConfig, "model">[],
 	};
 	// stand-in for omnidiff (SPEC 15): records what it was asked, answers `reply`
@@ -46,7 +47,7 @@ export async function start(opts: { staleDays?: number; oldDays?: number; now?: 
 			llm.failNext = false;
 			throw Object.assign(new Error("upstream unavailable"), { status: 503 });
 		}
-		const text = llm.answer?.(prompt) ?? llm.reply ?? `- summary ${llm.calls.length}`;
+		const text = (await llm.answer?.(prompt)) ?? llm.reply ?? `- summary ${llm.calls.length}`;
 		if (onDelta) for (let i = 0; i < text.length; i += 6) {
 			if (llm.delayMs) await new Promise((r) => setTimeout(r, llm.delayMs));
 			onDelta(text.slice(i, i + 6));

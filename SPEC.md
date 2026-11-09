@@ -512,6 +512,9 @@ by everyone who can see the repo (section 4):
 
 Without an LLM there are no drafts and each file is a step; the page says so. If the
 model fails, the error is shown, nothing is kept, and **Try again** prepares it again.
+While it is prepared (minutes, on a big PR) the page says what is going on and since
+when: reading the changed files, grouping *n* files into steps, reviewing step *k* of
+*n* (its title), checking that step's draft comments, with a bar for the steps.
 
 **Per person:**
 

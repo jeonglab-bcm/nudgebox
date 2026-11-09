@@ -728,8 +728,10 @@ export function createApp(opts: AppOptions): App {
 	type PrepDraft = Draft & { id: string };
 	type PrepStep = { id: string; title: string; summary: string; files: string[]; fps: { path: string; fp: string }[]; drafts: PrepDraft[] };
 	type Prep = { head: string; ai: boolean; summary: string; noise: { path: string; why: string }[]; steps: PrepStep[] };
+	/** What the preparation is doing now, for the page to show while it waits. */
+	type Progress = { phase: "reading" | "planning" | "reviewing" | "checking"; done: number; total: number; what?: string; since: string };
 	// one preparation per PR head commit at a time; a failure is kept (in memory) until retried
-	const preparing = new Map<string, { state: "preparing" | "failed"; error?: string; done: Promise<void> }>();
+	const preparing = new Map<string, { state: "preparing" | "failed"; error?: string; done: Promise<void>; progress: Progress }>();
 	const prepWork = new Set<Promise<void>>(); // waited for by idle()
 	const short16 = (s: string) => createHash("sha256").update(s).digest("hex").slice(0, 16);
 	const prepKey = (pr: PullRequest) => `${pr.repo.toLowerCase()}#${pr.number}@${pr.headSha}|${REVIEW_FORMAT}`;
@@ -747,10 +749,11 @@ export function createApp(opts: AppOptions): App {
 	function startPrep(pr: PullRequest) {
 		const key = prepKey(pr);
 		if (store.reviewPrep(key) !== undefined || preparing.get(key)?.state === "preparing") return;
-		const entry: { state: "preparing" | "failed"; error?: string; done: Promise<void> } = { state: "preparing", done: Promise.resolve() };
+		const progress: Progress = { phase: "reading", done: 0, total: 0, since: opts.now().toISOString() };
+		const entry: { state: "preparing" | "failed"; error?: string; done: Promise<void>; progress: Progress } = { state: "preparing", done: Promise.resolve(), progress };
 		entry.done = (async () => {
 			try {
-				store.saveReviewPrep(key, await prepare(pr), opts.now().toISOString());
+				store.saveReviewPrep(key, await prepare(pr, (p) => Object.assign(progress, p)), opts.now().toISOString());
 				preparing.delete(key);
 			} catch (e) {
 				entry.state = "failed";
@@ -764,11 +767,13 @@ export function createApp(opts: AppOptions): App {
 	}
 
 	/** SPEC 19: noise, steps in reading order, and checked drafts for one head commit. */
-	async function prepare(pr: PullRequest): Promise<Prep> {
+	async function prepare(pr: PullRequest, report: (p: Partial<Progress>) => void = () => {}): Promise<Prep> {
 		const set = await github.prFiles(pr.repo, pr.number);
 		if (!set) throw new Error("the pull request is gone");
 		const files: (PrepFile & { why: string | null; file: ChangedFile })[] = [];
+		report({ phase: "reading", done: 0, total: set.files.length });
 		for (const f of set.files) {
+			report({ done: files.length });
 			const before = f.status === "added" ? null : { repo: pr.repo, ref: set.base, path: f.previous ?? f.path };
 			const after = f.status === "removed" ? null : { repo: pr.repo, ref: set.head, path: f.path };
 			let d: any = null;
@@ -801,14 +806,22 @@ export function createApp(opts: AppOptions): App {
 				throw new Error(`LLM failed: ${(e as Error).message}`);
 			}
 		};
-		const plan = rest.length ? readPlan(await ask(planPrompt(pr, rest)), [...byPath.keys()]) : { summary: "", steps: [] };
-		if (!plan) log(`guided review of ${pr.repo}#${pr.number}: the model's answer was no plan, so one step per file`);
+		report({ phase: "planning", done: 0, total: rest.length, what: undefined });
+		const answer = rest.length ? await ask(planPrompt(pr, rest)) : "";
+		const plan = rest.length ? readPlan(answer, [...byPath.keys()]) : { summary: "", steps: [] };
+		if (!plan) {
+			const a = answer.replace(/\s+/g, " ");
+			log(`guided review of ${pr.repo}#${pr.number}: the model's answer was no plan, so one step per file. It said: ${a.length > 300 ? `${a.slice(0, 180)} […] ${a.slice(-100)}` : a}`);
+		}
 		const dropped = store.learnings(pr.repo);
+		const planned = plan?.steps ?? onePerFile();
 		const steps: PrepStep[] = [];
-		for (const s of plan?.steps ?? onePerFile()) {
+		for (const s of planned) {
+			report({ phase: "reviewing", done: steps.length, total: planned.length, what: s.title });
 			const mine = s.files.map((p) => byPath.get(p)!);
 			const r = readReview(await ask(reviewPrompt(pr, s, mine, dropped)));
 			const drafts: PrepDraft[] = [];
+			if (r.drafts.length) report({ phase: "checking" });
 			for (const d of r.drafts) {
 				const f = byPath.get(d.path);
 				if (!f || !s.files.includes(d.path) || !commentable(d, f.file)) continue;
@@ -849,7 +862,7 @@ export function createApp(opts: AppOptions): App {
 		const run = preparing.get(prepKey(pr));
 		if (run?.state === "failed") return { state: "failed", error: run.error };
 		startPrep(pr);
-		return { state: "preparing" };
+		return { state: "preparing", progress: preparing.get(prepKey(pr))?.progress ?? null };
 	}
 
 	async function reviewPost(req: IncomingMessage, lab: string, what: string) {

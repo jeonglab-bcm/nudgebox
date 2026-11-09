@@ -375,6 +375,35 @@ test("16. on a phone: the sidebar above the tabs, and no sideways scrolling", as
 	}
 });
 
+test("16. on a phone: a table in the description keeps its words whole; a wide one scrolls inside itself", async () => {
+	const body = [
+		"What came back:", "",
+		"| Item | Verdict | Measure | Why |", "| --- | --- | --- | --- |",
+		"| Fig. 1 (diagram) | not attempted | not attempted | A diagram of the framework. Its panels B to D and H reuse toggle switch results. |",
+		"| Fig. 1H, toggle switch posterior | partly | 1 of 6 fields as printed | Our prior on lambda (SD 0.025) does not hold lambda at 0.25: its posterior mean is 0.34. |",
+		"", "| alpha | beta | gamma | delta | epsilon | zeta | eta | theta | iota | kappa |", "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+		"| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |",
+	].join("\n");
+	const s = await open({ device: PHONE, page: { body } });
+	try {
+		await s.page.waitForSelector(".tl[data-type=description] table");
+		const cells = await s.page.locator(".tl[data-type=description] table").first().locator("th, td").evaluateAll((xs) => xs.map((x) => {
+			const range = document.createRange(); // the text's own box, not the row's
+			range.selectNodeContents(x);
+			const line = parseFloat(getComputedStyle(x).lineHeight);
+			const words = x.textContent!.trim().split(/\s+/);
+			return { text: words.join(" "), words: words.length, lines: Math.round(range.getBoundingClientRect().height / line) };
+		}));
+		for (const c of cells) assert.ok(c.lines <= c.words, `"${c.text}" is ${c.lines} lines tall for ${c.words} words: a word was broken`);
+		for (const c of cells.filter((c) => c.words > 8)) assert.ok(c.lines <= Math.ceil(c.words / 2), `"${c.text}" is ${c.lines} lines for ${c.words} words: the column is too narrow to read`);
+		assert.ok(await s.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), "the page scrolls sideways");
+		const wide = s.page.locator(".tl[data-type=description] table").nth(1);
+		assert.ok(await wide.evaluate((t) => t.scrollWidth > t.clientWidth && getComputedStyle(t).overflowX === "auto"), "the wide table does not scroll inside itself");
+	} finally {
+		await s.close();
+	}
+});
+
 test("16. Commits tab: commits by day; a commit opens its files, diffed against its parent", async () => {
 	const s = await open();
 	try {

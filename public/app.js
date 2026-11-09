@@ -994,6 +994,7 @@ function mdPane(side, ref, text, hunks, lib, label) {
 		fold();
 		const div = el("div", { class: `md-block${b.item ? " md-item" : ""}${b.kind ? ` changed md-${b.kind}` : ""}`, title: b.kind ?? null });
 		div.innerHTML = lib.purify.sanitize(lib.marked.parser(Object.assign([b.tk], { links: tokens.links }))); // cleaned: no scripts or handlers
+		roomForProse(div);
 		out.push(div);
 	});
 	fold();
@@ -1487,7 +1488,13 @@ function md(body, cls = "comment-body") {
 	if (!body?.trim()) d.append(el("p", { class: "hint" }, "No description provided."));
 	else if (lib) d.innerHTML = lib.purify.sanitize(lib.marked.parse(body, { gfm: true, breaks: true })); // cleaned: no scripts or handlers
 	else d.textContent = body;
+	roomForProse(d);
 	return d;
+}
+
+/** A table cell holding a sentence gets room to be read; the table scrolls sideways on a phone rather than squeezing it. */
+function roomForProse(root) {
+	for (const cell of root.querySelectorAll("td")) if (cell.textContent.trim().length > 40) cell.style.minWidth = "18em";
 }
 
 function draftBox(key, placeholder, attrs = {}) {

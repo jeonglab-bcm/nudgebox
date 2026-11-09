@@ -901,10 +901,11 @@ export function createApp(opts: AppOptions): App {
 		const states = store.draftStates(lab, prKey(pr));
 		const steps = prep.steps.map((s) => {
 			const reviewed = s.fps.every((f) => fps.has(f.fp));
+			const stale = s.fps.filter((f) => paths.has(f.path) && !fps.has(f.fp)).map((f) => f.path); // viewed, but in an older version
 			return {
 				id: s.id, title: s.title, summary: s.summary, files: s.files, reviewed,
 				seen: s.fps.filter((f) => fps.has(f.fp)).map((f) => f.path), // the files you marked viewed, in this version
-				changed: !reviewed && s.fps.some((f) => paths.has(f.path) && !fps.has(f.fp)), // you reviewed an older version of a file
+				stale, changed: !reviewed && stale.length > 0,
 				skim: s.skim === true, notes: s.notes ?? {},
 				drafts: s.drafts.map((d) => ({ ...d, state: states.get(d.id) ?? "open" })),
 			};

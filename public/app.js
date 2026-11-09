@@ -329,6 +329,7 @@ function renderPage() {
 		history.replaceState(null, "", t ? `#pr/${t.repo}/${t.number}/files` : location.pathname + location.search);
 		return renderPage();
 	}
+	document.body.classList.remove("guiding");
 	if (onPr()) return renderPr();
 	document.body.classList.remove("files");
 	if (onSettings()) {
@@ -1060,7 +1061,7 @@ function diffView(f, r, github, modes = files.mdMode, labels = {}, review = null
 		? mdPane(name, r[name].ref, r[name].text, r.result[name].hunks, lib, labels[name])
 		: pane(name, r[name].ref, r[name].text, r.result[name].hunks, labels[name], review));
 	const canExplain = Boolean(data.pr?.summarize);
-	return el("div", { class: "diff" },
+	return el("div", { class: `diff${r.before && r.after ? "" : " one-side"}` }, // a new or deleted file: nothing to compare
 		md || canExplain ? el("div", { class: "diff-tools" },
 			md ? el("div", { class: "md-switch seg", role: "group", "aria-label": "Show" },
 				el("button", { "aria-pressed": String(rendered), class: rendered ? "on" : "", onclick: choose("rendered") }, "Rendered"),
@@ -1430,7 +1431,7 @@ const prHash = (t, tab = "") => `#pr/${t.repo}/${t.number}${tab ? `/${tab}` : ""
 const freshPr = (key) => ({
 	key, page: null, error: null, login: "", options: null, picker: null, mergeMenu: false, confirming: false, form: null, reviewOpen: false,
 	commits: null, commitsError: null, commit: null, conflicts: null,
-	guide: null, // SPEC 19: { data, failed, idx, editing }
+	guide: null, // SPEC 19: see freshGuide
 });
 let prv = freshPr(null);
 // text being written (comments, replies, the review), by box; survives re-renders
@@ -1476,6 +1477,7 @@ function prEscape() {
 		return render();
 	}
 	if (t.tab === "commits" && t.sha) return void (location.hash = prHash(t, "commits"));
+	if (t.tab === "guide" && guideAt() !== null) return guideTo(null); // SPEC 19: from a step to the list of steps
 	if (t.tab === "conflicts") return void (location.hash = prHash(t));
 	goBack();
 }
@@ -1555,7 +1557,7 @@ function commentForm(form) {
 	const pending = Boolean(prv.page?.pendingReview);
 	return el("div", { class: "comment-form" },
 		el("div", { class: "hint" }, form.subject === "file" ? `Comment on ${form.path}` : `Comment on line ${form.side === "LEFT" ? "−" : "+"}${form.line}`),
-		draftBox(key, "Leave a comment", { autofocus: true }),
+		draftBox(key, "Leave a comment"), // whoever opens the form puts the cursor in it: an autofocus box would take it again on every later render
 		el("div", { class: "btns" },
 			el("button", { class: "quiet", onclick: () => { prv.form = null; render(); } }, "Cancel"),
 			el("button", { onclick: busy(send("single")) }, "Add single comment"),
@@ -1616,8 +1618,19 @@ function renderPr() {
 	const content = t.tab === "commits" ? commitsView(t) : t.tab === "checks" ? checksView(p) : t.tab === "files" ? filesChangedView(t, p)
 		: t.tab === "guide" ? guideView(t, p) : conversationView(t, p);
 	const conv = t.tab === "conversation";
-	main.replaceChildren(el("div", { id: "pr-page" }, back, head,
+	const g = t.tab === "guide" ? prv.guide : null;
+	const step = g?.data ? guideAt() : null;
+	if (step !== null) { // SPEC 19: a step has the page to itself
+		document.body.classList.add("guiding");
+		main.replaceChildren(el("div", { id: "pr-page", class: "guiding" }, content));
+	} else main.replaceChildren(el("div", { id: "pr-page" }, back, head,
 		el("div", { class: `pr-layout${conv ? "" : " wide"}` }, nav, el("section", { class: "pr-content" }, content), conv ? sidebar(p) : null)));
+	if (g?.data && g.shown !== step) { // another step starts at its top; the list comes back at the step you left
+		const from = g.shown;
+		g.shown = step;
+		if (step !== null || typeof from === "number") window.scrollTo(0, 0);
+		if (step === null && typeof from === "number") main.querySelectorAll(".guide-row")[from]?.scrollIntoView({ block: "nearest" });
+	}
 	const on = nav.querySelector(".on"); // on a phone the tabs scroll sideways: keep this one in sight
 	const past = on ? on.getBoundingClientRect().right - nav.getBoundingClientRect().right : 0;
 	if (past > 0) nav.scrollLeft += past + 16;
@@ -1892,7 +1905,7 @@ function filesChangedView(t, p) {
 				render();
 			}
 		},
-		onComment: p.state === "OPEN" ? (f) => { prv.form = { subject: "file", path: f.path }; render(); } : null,
+		onComment: p.state === "OPEN" ? (f) => { prv.form = { subject: "file", path: f.path }; render(); main.querySelector(".comment-form textarea")?.focus(); } : null,
 		extra: (f) => {
 			const old = p.threads.filter((th) => th.path === f.path && (th.outdated || !th.line));
 			const fileForm = prv.form?.subject === "file" && prv.form.path === f.path ? commentForm(prv.form) : null;
@@ -1941,13 +1954,56 @@ function reviewForm(p, own) {
 }
 
 // -- guided review (SPEC 19) ------------------------------------------------------------
-// The server prepares the PR (noise hidden, steps in reading order, checked drafts); here
-// the person walks the steps with one key per decision.
+// The server prepares the PR (noise hidden, steps in reading order, checked drafts). Here
+// the tab lists the steps, and one step opens alone (…/guide/<k>), where the person
+// decides its drafts and ticks its files off, with one key per decision.
 
 /** "12 s", "3 min 05 s": how long since `iso`, for a wait that is refreshed every second. */
 function elapsed(iso) {
 	const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
 	return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, "0")} s`;
+}
+
+// `open`: the files of the step that show their diff; `cur`: the file the keys v and c act
+// on; `entered`: the step `open` was set up for; `fromList`: Back leads to the list
+const freshGuide = () => ({
+	data: null, failed: null, editing: null, loading: false, preparing: false, progress: null,
+	open: new Set(), cur: null, entered: null, shown: undefined, fromList: false,
+});
+
+const guideHash = (t, k = null) => prHash(t, k === null ? "guide" : `guide/${k + 1}`);
+
+/** The step that is open alone (its index), or null on the list of steps. */
+function guideAt() {
+	const t = prTarget();
+	const steps = prv.guide?.data?.steps;
+	if (t?.tab !== "guide" || !steps || !/^\d+$/.test(t.sha ?? "")) return null;
+	const k = Number(t.sha) - 1;
+	return k >= 0 && k < steps.length ? k : null;
+}
+
+/** Where the review goes on: the first changed step, else the first not reviewed (-1: none). */
+function guideNext(d) {
+	const changed = d.steps.findIndex((x) => x.changed);
+	return changed >= 0 ? changed : d.steps.findIndex((x) => !x.reviewed);
+}
+
+/** Open step `k`, or the list (null, or past either end). The list stays one Back away. */
+function guideTo(k) {
+	const t = prTarget();
+	const g = prv.guide;
+	const from = guideAt();
+	if (k !== null && (k < 0 || k >= g.data.steps.length)) k = null;
+	g.editing = null;
+	prv.form = null;
+	if (from === null && k !== null) {
+		g.fromList = true;
+		location.hash = guideHash(t, k);
+	} else if (from !== null && k === null && g.fromList) history.back();
+	else {
+		history.replaceState(null, "", guideHash(t, k));
+		render();
+	}
 }
 
 async function loadGuide(t) {
@@ -1963,14 +2019,7 @@ async function loadGuide(t) {
 		g.preparing = true;
 		g.progress = d.progress ?? null;
 		setTimeout(() => prv.key === key && prTarget()?.tab === "guide" && loadGuide(t), 1000);
-	} else {
-		Object.assign(g, { data: d, failed: null, preparing: false });
-		if (g.idx === null) {
-			const changed = d.steps.findIndex((x) => x.changed);
-			const open = d.steps.findIndex((x) => !x.reviewed);
-			g.idx = changed >= 0 ? changed : open >= 0 ? open : d.steps.length;
-		}
-	}
+	} else Object.assign(g, { data: d, failed: null, preparing: false });
 	render();
 }
 
@@ -1981,7 +2030,6 @@ async function guidePost(what, body) {
 	return status === 200;
 }
 
-const guideStep = () => prv.guide?.data?.steps[prv.guide.idx] ?? null;
 const openDraft = (step) => step?.drafts.find((d) => d.state === "open") ?? null;
 
 // a decided draft leaves the queue at once (the next key goes to the next draft), and
@@ -2006,27 +2054,6 @@ async function dropDraft(d) {
 	render();
 }
 
-async function lookGood() {
-	const g = prv.guide;
-	const step = guideStep();
-	if (!step) return;
-	if (!(await guidePost("step", { step: step.id, reviewed: true }))) return;
-	step.reviewed = true;
-	step.changed = false;
-	g.idx = Math.min(g.idx + 1, g.data.steps.length);
-	window.scrollTo(0, 0);
-	render();
-}
-
-function guideGo(by) {
-	const g = prv.guide;
-	g.idx = Math.max(0, Math.min(g.idx + by, g.data.steps.length));
-	g.editing = null;
-	prv.form = null;
-	window.scrollTo(0, 0);
-	render();
-}
-
 function editDraft(d) {
 	const g = prv.guide;
 	g.editing = d.id;
@@ -2035,36 +2062,101 @@ function editDraft(d) {
 	main.querySelector(".draft.editing textarea")?.focus();
 }
 
+/** Looks good: the whole step is reviewed; on to the next one that is not, else the list. */
+async function lookGood() {
+	const g = prv.guide;
+	const k = guideAt();
+	if (k === null) return;
+	const step = g.data.steps[k];
+	if (!step.reviewed) {
+		if (!(await guidePost("step", { step: step.id, reviewed: true }))) return;
+		Object.assign(step, { reviewed: true, changed: false, stale: [], seen: [...step.files] });
+	}
+	if (guideAt() !== k) return render();
+	const next = g.data.steps.findIndex((x, i) => i > k && !x.reviewed);
+	guideTo(next >= 0 ? next : null);
+}
+
+const fileRow = (path) => main.querySelector(`.guide-files .file[data-path="${CSS.escape(path)}"]`);
+
+/** Viewed: the file folds away and the next one to read opens. Shown at once, undone if the server refuses. */
+async function viewFile(step, path, on) {
+	const g = prv.guide;
+	const before = { seen: step.seen, stale: step.stale, reviewed: step.reviewed, changed: step.changed };
+	step.seen = on ? [...new Set([...step.seen, path])] : step.seen.filter((x) => x !== path);
+	if (on) step.stale = step.stale.filter((x) => x !== path);
+	step.reviewed = step.files.every((x) => step.seen.includes(x));
+	step.changed = !step.reviewed && step.stale.length > 0;
+	if (on) {
+		g.open.delete(path);
+		g.cur = step.files.find((x) => !step.seen.includes(x)) ?? null;
+		if (g.cur) g.open.add(g.cur);
+	} else g.cur = path;
+	render();
+	if (on && g.cur) fileRow(g.cur)?.scrollIntoView({ block: "start" });
+	if (await guidePost("file", { path, reviewed: on })) return;
+	Object.assign(step, before);
+	render();
+}
+
+function commentOn(path) {
+	prv.form = { subject: "file", path };
+	render();
+	main.querySelector(".guide-step .comment-form textarea")?.focus();
+}
+
 /** One key, one decision. True when the key was used. */
 function guideKey(k) {
 	const g = prv.guide;
 	if (!g?.data) return false;
-	const step = guideStep();
+	const at = guideAt();
+	if (at === null) { // the list: Enter goes on with the review
+		const next = guideNext(g.data);
+		if (k !== "Enter" || next < 0 || document.activeElement?.closest?.("a, button, summary, label")) return false;
+		return guideTo(next), true;
+	}
+	const step = g.data.steps[at];
 	const d = openDraft(step);
-	if (k === "b") return guideGo(-1), true;
-	if (!step) return false;
+	if (k === "b") return guideTo(at - 1), true;
+	if (k === "s") return guideTo(at + 1), true;
 	if (k === "y") return lookGood(), true;
-	if (k === "s") return guideGo(1), true;
+	if (k === "v" && g.cur) return viewFile(step, g.cur, true), true;
 	if (k === "k" && d) return keepDraft(d), true;
 	if (k === "e" && d) return editDraft(d), true;
 	if (k === "x" && d) return dropDraft(d), true;
-	if (k === "c") {
-		prv.form = { subject: "file", path: step.files[0] };
-		render();
-		main.querySelector(".guide-step .comment-form textarea")?.focus();
-		return true;
-	}
+	if (k === "c") return commentOn(g.cur ?? step.files[0]), true;
 	return false;
 }
 
-function draftView(d, current) {
+/** The folder every file of a step is in, said once above them ("" for one file, or none in common). */
+function commonDir(paths) {
+	if (paths.length < 2) return "";
+	const dirs = paths.map((x) => x.split("/").slice(0, -1));
+	let n = 0;
+	while (dirs.every((x) => x.length > n && x[n] === dirs[0][n])) n++;
+	return n ? `${dirs[0].slice(0, n).join("/")}/` : "";
+}
+
+const meter = (done, total) => el("span", { class: "meter", "aria-hidden": "true" }, el("span", { style: `width:${total ? (100 * done) / total : 100}%` }));
+const stepFlags = (s) => [
+	s.reviewed ? el("span", { class: "flag ok" }, "Reviewed") : null,
+	s.changed ? el("span", { class: "flag changed" }, "Changed") : null,
+	s.skim ? el("span", { class: "flag" }, "Skim") : null,
+];
+
+// a draft comment: where it is, the lines of code it is about, what it says
+function draftView(d, current, short) {
 	const g = prv.guide;
-	const where = `${d.path}:${d.side === "LEFT" ? "−" : "+"}${d.line}`;
+	const where = `${short(d.path)}:${d.side === "LEFT" ? "−" : "+"}${d.line}`;
 	const editing = g.editing === d.id;
 	const cls = `draft ${d.state}${editing ? " editing" : ""}${current ? " current" : ""}`;
+	const code = d.code?.length ? el("div", { class: "draft-code" }, d.code.map((c) =>
+		el("div", { class: `dc dc-${c.mark === "+" ? "add" : c.mark === "-" ? "del" : "ctx"}${c.hit ? " hit" : ""}` },
+			el("span", { class: "ln" }, c.n), el("span", { class: "sign", "aria-hidden": "true" }, c.mark === "-" ? "−" : c.mark.trim()), el("span", { class: "code" }, c.text)))) : null;
 	if (editing) {
 		return el("div", { class: cls },
 			el("div", { class: "draft-where" }, where),
+			code,
 			draftBox(`gdraft:${d.id}`, "Edit the comment", { rows: "3" }),
 			el("div", { class: "btns" },
 				el("button", { class: "quiet", onclick: () => { g.editing = null; render(); } }, "Cancel"),
@@ -2073,15 +2165,16 @@ function draftView(d, current) {
 	return el("div", { class: cls },
 		el("div", { class: "draft-where" }, el("span", { class: "flag ai" }, "AI draft"), " ", where,
 			d.state !== "open" ? el("span", { class: "flag" }, { kept: "Kept", dropped: "Dropped", saving: "Saving…" }[d.state]) : null),
+		d.state === "open" ? code : null,
 		el("p", { class: "draft-body" }, d.body),
 		d.state === "open" ? el("div", { class: "btns" },
-			el("button", { onclick: busy(() => keepDraft(d)) }, "Keep", el("kbd", {}, "k")),
+			el("button", { class: "quiet", onclick: busy(() => dropDraft(d)) }, "Drop", el("kbd", {}, "x")),
 			el("button", { onclick: () => editDraft(d) }, "Edit", el("kbd", {}, "e")),
-			el("button", { class: "quiet", onclick: busy(() => dropDraft(d)) }, "Drop", el("kbd", {}, "x"))) : null);
+			el("button", { onclick: busy(() => keepDraft(d)) }, "Keep", el("kbd", {}, "k"))) : null);
 }
 
 function guideView(t, p) {
-	if (!prv.guide) prv.guide = { data: null, failed: null, idx: null, editing: null, loading: false };
+	if (!prv.guide) prv.guide = freshGuide();
 	const g = prv.guide;
 	if (!g.data && !g.failed && !g.loading && !g.preparing) {
 		g.loading = true;
@@ -2095,77 +2188,176 @@ function guideView(t, p) {
 			loadGuide(t);
 		};
 		return el("div", { class: "guide" }, el("p", { class: "hint" }, `Could not prepare the guided review: ${g.failed}`),
-			el("button", { onclick: busy(retry) }, "Try again"));
+			el("div", {}, el("button", { onclick: busy(retry) }, "Try again")));
 	}
 	if (!g.data) {
-		const p = g.progress;
-		const what = !p ? "the AI reads the changes, one step at a time…"
-			: p.phase === "reading" ? `reading the changed files (${p.done} of ${p.total})…`
-			: p.phase === "planning" ? `the AI is grouping ${p.total} files into steps (a minute or three on a big one)…`
-			: p.phase === "reviewing" ? `the AI is reviewing step ${p.done + 1} of ${p.total}: ${p.what}…`
-			: `the AI is checking its draft comments on step ${p.done + 1} of ${p.total}: ${p.what}…`;
-		const total = p && p.phase !== "planning" ? p.total : 0;
+		const q = g.progress;
+		const what = !q ? "the AI reads the changes, one step at a time…"
+			: q.phase === "queued" ? "waiting for the review of the push before this one…"
+			: q.phase === "reading" ? `reading the changed files (${q.done} of ${q.total})…`
+			: q.phase === "planning" ? `the AI is grouping ${q.total} files into steps (a minute or three on a big one)…`
+			: q.phase === "reviewing" ? `the AI is reviewing step ${q.done + 1} of ${q.total}: ${q.what}…`
+			: `the AI is checking its draft comments on step ${q.done + 1} of ${q.total}: ${q.what}…`;
+		const total = q && (q.phase === "reviewing" || q.phase === "checking") ? q.total : 0;
 		return el("div", { class: "guide guide-preparing" },
-			el("p", { class: "hint" }, `Preparing the guided review: ${what}`),
-			total ? el("p", { class: "guide-progress" }, el("span", { class: "meter", "aria-hidden": "true" }, el("span", { style: `width:${(100 * p.done) / total}%` }))) : null,
-			p?.since ? el("p", { class: "hint" }, `Working for ${elapsed(p.since)}`) : null);
+			el("p", { class: "hint" }, `${q?.push ? "Updating the guided review after a push" : "Preparing the guided review"}: ${what}`),
+			total ? el("p", { class: "guide-progress" }, meter(q.done, total)) : null,
+			q?.since ? el("p", { class: "hint" }, `Working for ${elapsed(q.since)}`) : null);
 	}
-	const d = g.data;
+	const k = guideAt();
+	return k === null ? guideList(t, p, g.data) : guideStepView(t, p, g.data, k);
+}
+
+// the tab: what the PR does, how far the review is, and the steps to open
+function guideList(t, p, d) {
+	const g = prv.guide;
 	const n = d.steps.length;
 	const done = d.steps.filter((x) => x.reviewed).length;
-	const head = el("div", { class: "guide-head" },
+	const changed = d.steps.filter((x) => x.changed).length;
+	const next = guideNext(d);
+	const all = n > 0 && done === n;
+	const byPath = new Map((files.data?.files ?? []).map((f) => [f.path, f]));
+	const noise = d.noise.length ? el("details", { class: "guide-noise" },
+		el("summary", {}, `${plural(d.noise.length, "file")} hidden: no real change to review`),
+		el("ul", {}, d.noise.map((x) => el("li", {}, el("code", {}, x.path), ` · ${x.why}`)))) : null;
+	const head = [
 		d.summary ? el("p", { class: "guide-summary" }, d.summary) : null,
 		d.note ? el("p", { class: "hint" }, d.note) : null,
-		d.changedSinceReview ? el("p", { class: "guide-changed" }, `${plural(d.changedSinceReview, "step")} changed since your review`) : null,
-		el("p", { class: "guide-progress" }, g.idx < n ? `Step ${g.idx + 1} of ${n}` : `${n} of ${n}`, el("span", { class: "hint" }, ` · ${done} reviewed`),
-			el("span", { class: "meter", "aria-hidden": "true" }, el("span", { style: `width:${n ? (100 * done) / n : 100}%` }))),
-		d.noise.length ? el("details", { class: "guide-noise" },
-			el("summary", {}, `${plural(d.noise.length, "file")} hidden: no real change to review`),
-			el("ul", {}, d.noise.map((x) => el("li", {}, el("code", {}, x.path), ` · ${x.why}`)))) : null);
-	if (!n) return el("div", { class: "guide" }, head, el("p", { class: "hint" }, "Nothing to review: every changed file is noise."));
-	if (g.idx >= n) {
-		const pending = p.pendingReview?.comments ?? 0;
-		const own = p.author.toLowerCase() === prv.login.toLowerCase();
-		if (prv.reviewOpen && !drafts.has("review") && d.summary) drafts.set("review", d.summary);
-		return el("div", { class: "guide" }, head, el("div", { class: "guide-done" },
-			el("h3", {}, done === n ? `All ${n} steps reviewed` : `${done} of ${n} steps reviewed`),
-			el("p", {}, `${plural(pending, "pending comment")} in your review.`),
-			el("div", { class: "btns" },
-				el("button", { class: "quiet", onclick: () => guideGo(-1) }, "Back", el("kbd", {}, "b")),
-				p.state === "OPEN" && !prv.reviewOpen ? el("button", { class: "primary", onclick: () => { prv.reviewOpen = true; render(); } }, "Submit review") : null),
-			prv.reviewOpen && p.state === "OPEN" ? reviewForm(p, own) : null));
-	}
-	const step = d.steps[g.idx];
+		changed ? el("p", { class: "guide-changed" }, `${plural(changed, "step")} changed since your review`) : null];
+	if (!n) return el("div", { class: "guide" }, head, el("p", { class: "hint" }, "Nothing to review: every changed file is noise."), noise);
+
+	g.fromList = false;
+	const sizes = d.steps.map((s) => s.files.map((x) => byPath.get(x)).filter(Boolean).reduce((a, f) => [a[0] + f.additions, a[1] + f.deletions], [0, 0]));
+	const most = Math.max(1, ...sizes.map(([a, b]) => a + b));
+	const rows = d.steps.map((s, k) => {
+		const fs = s.files.map((x) => byPath.get(x)).filter(Boolean);
+		const [adds, dels] = sizes[k];
+		const open = s.drafts.filter((x) => x.state === "open").length;
+		return el("li", {}, el("a", { class: `guide-row${s.reviewed ? " done" : ""}${k === next ? " next" : ""}`, href: guideHash(t, k), onclick: () => { g.fromList = true; } },
+			el("span", { class: "guide-num", "aria-hidden": "true" }, s.reviewed ? "✓" : k + 1),
+			el("span", { class: "guide-row-text" },
+				el("span", { class: "guide-row-title" }, s.title, stepFlags(s)),
+				s.summary ? el("span", { class: "guide-row-summary" }, s.summary) : null,
+				el("span", { class: "guide-row-meta" },
+					el("span", {}, plural(s.files.length, "file")),
+					fs.length ? el("span", { class: "counts" }, el("span", { class: "add" }, `+${adds}`), " ", el("span", { class: "del" }, `−${dels}`)) : null,
+					s.drafts.length ? el("span", { class: open ? "ai" : "" }, open ? `${plural(open, "AI comment")} to decide` : `${plural(s.drafts.length, "AI comment")} decided`) : null)),
+			// how big the step is next to the others, at a glance
+			adds + dels ? el("span", { class: "guide-size", "aria-hidden": "true", title: `${adds + dels} changed lines` },
+				el("span", { class: "add", style: `width:${(100 * adds) / most}%` }), el("span", { class: "del", style: `width:${(100 * dels) / most}%` })) : null));
+	});
+
+	const pending = p.pendingReview?.comments ?? 0;
+	const own = p.author.toLowerCase() === prv.login.toLowerCase();
+	const canSubmit = p.state === "OPEN";
+	if (prv.reviewOpen && !drafts.has("review") && d.summary) drafts.set("review", d.summary);
+	const finish = all || done > 0 || pending > 0 ? el("div", { class: `guide-done${all ? " all" : ""}` },
+		el("div", { class: "guide-done-text" },
+			el("h3", {}, all ? `All ${n} steps reviewed` : `${done} of ${n} steps reviewed`),
+			el("p", {}, `${plural(pending, "pending comment")} in your review.`)),
+		canSubmit && !prv.reviewOpen ? el("button", { class: all ? "primary" : "", onclick: () => { prv.reviewOpen = true; render(); } }, "Submit review") : null,
+		canSubmit && prv.reviewOpen ? reviewForm(p, own) : null) : null;
+
+	return el("div", { class: "guide" }, head,
+		el("div", { class: "guide-top" },
+			el("p", { class: "guide-progress" }, `${done} of ${n} steps reviewed`, meter(done, n)),
+			next >= 0 ? el("button", { class: "primary", onclick: () => guideTo(next) }, done || changed ? `Continue with step ${next + 1}` : "Start review", el("kbd", {}, "↵")) : null),
+		all ? finish : null,
+		el("ol", { class: "guide-steps" }, rows),
+		all ? null : finish,
+		noise);
+}
+
+/** On entering a step: a small step opens whole, a big one at its first file to read, data stays folded. */
+function enterStep(step) {
+	const g = prv.guide;
+	const todo = step.files.filter((x) => !step.seen.includes(x)).map((x) => files.data.files.find((f) => f.path === x)).filter(Boolean);
+	const lines = todo.reduce((a, f) => a + f.additions + f.deletions, 0);
+	const small = todo.length <= 8 && lines <= 400;
+	g.open = new Set(step.skim ? [] : (small ? todo : todo.slice(0, 1)).map((f) => f.path));
+	g.cur = todo[0]?.path ?? null;
+	g.entered = step.id;
+}
+
+// one step alone: what it does, what the AI flagged, and its files to tick off
+function guideStepView(t, p, d, k) {
+	const g = prv.guide;
+	const step = d.steps[k];
+	const n = d.steps.length;
+	const done = d.steps.filter((x) => x.reviewed).length;
+	if (files.data && g.entered !== step.id) enterStep(step);
+	const dir = commonDir(step.files);
+	const short = (path) => path.slice(dir.length);
 	const current = openDraft(step);
-	const filesOf = step.files.map((path) => {
+	const canComment = p.state === "OPEN";
+	const stop = (e) => e.stopPropagation();
+
+	const rows = step.files.map((path) => {
 		const f = files.data?.files.find((x) => x.path === path);
-		if (!f) return el("p", { class: "hint" }, files.error ?? `Loading ${path}…`);
-		if (!files.diffs.has(path)) {
+		if (!f) return el("li", { class: "hint" }, files.error ?? `Loading ${short(path)}…`);
+		const isOpen = g.open.has(path);
+		const seen = step.seen.includes(path);
+		if (isOpen && !files.diffs.has(path)) {
 			files.diffs.set(path, null);
 			loadDiff(files, t.repo, f);
 		}
-		const fileForm = prv.form?.subject === "file" && prv.form.path === path ? commentForm(prv.form) : null;
-		return el("div", { class: "file-diff" },
-			el("div", { class: "guide-file" }, el("code", {}, path), el("span", { class: "counts" }, el("span", { class: "add" }, `+${f.additions}`), " ", el("span", { class: "del" }, `−${f.deletions}`))),
-			fileForm,
-			diffView(f, files.diffs.get(path), `${p.url}/files`, files.mdMode, undefined, {
-				path, commentable: p.state === "OPEN" ? f.commentable : null,
+		const box = el("input", { type: "checkbox", class: "viewed", checked: seen });
+		box.addEventListener("change", () => viewFile(step, path, box.checked));
+		const viewed = el("label", { class: `viewed-box${seen ? " on" : ""}` }, box, "Viewed");
+		viewed.addEventListener("click", stop);
+		const row = el("div", { class: `file${isOpen ? " open" : ""}${seen ? " is-viewed" : ""}${g.cur === path ? " cur" : ""}`, "data-path": path, role: "button", tabindex: "0", "aria-expanded": String(isOpen) },
+			el("span", { class: `status s-${f.status}`, title: f.status }, STATUS[f.status] ?? "?"),
+			el("span", { class: "path", title: f.previous ? `renamed from ${f.previous}` : path }, short(path),
+				step.stale.includes(path) ? el("span", { class: "flag changed" }, "Changed") : null,
+				step.notes[path] ? el("span", { class: "file-note" }, step.notes[path]) : null),
+			el("span", { class: "counts" }, el("span", { class: "add" }, `+${f.additions}`), " ", el("span", { class: "del" }, `−${f.deletions}`)),
+			el("span", { class: "tools" },
+				canComment ? el("button", { class: "quiet file-comment", "aria-label": "Comment on file", title: "Comment on file", onclick: (e) => { stop(e); g.cur = path; commentOn(path); } },
+					el("span", { class: "long" }, "Comment"), el("span", { class: "short", "aria-hidden": "true" }, "💬")) : null,
+				viewed));
+		const toggle = () => {
+			if (isOpen) g.open.delete(path);
+			else g.open.add(path), (g.cur = path);
+			render();
+		};
+		row.addEventListener("click", toggle);
+		row.addEventListener("keydown", (e) => e.target === row && (e.key === "Enter" || e.key === " ") && (e.preventDefault(), toggle()));
+		// one item per file, so its row stays on top only while its own diff is on screen
+		return el("li", { class: "guide-file" }, row,
+			prv.form?.subject === "file" && prv.form.path === path ? el("div", { class: "file-extra" }, commentForm(prv.form)) : null,
+			isOpen ? el("div", { class: "file-diff" }, diffView(f, files.diffs.get(path), `${p.url}/files`, files.mdMode, undefined, {
+				path, commentable: canComment ? f.commentable : null,
 				threads: p.threads.filter((th) => th.path === path && th.line && !th.outdated),
 				form: prv.form,
 				onAdd: (side, line) => { prv.form = { subject: "line", path, side, line }; render(); main.querySelector(".comment-form textarea")?.focus(); },
-			}, { repo: t.repo, number: t.number }));
+			}, { repo: t.repo, number: t.number })) : null);
 	});
-	return el("div", { class: "guide" }, head,
+
+	const read = plural(step.files.length, "file");
+	const decided = step.drafts.length > 0 && !current;
+	const ai = step.skim ? "Data and figures: the AI did not read these. Skim them and tick them off."
+		: !d.ai ? null
+		: step.drafts.length ? `The AI read ${read} and flagged ${plural(step.drafts.length, "line")}.${decided ? " All decided." : ""}`
+		: `The AI read ${read} and found nothing to flag.`;
+	const last = !d.steps.some((x, i) => i > k && !x.reviewed);
+	return el("div", { class: "guide" },
+		el("div", { class: "guide-bar" },
+			el("button", { class: "quiet", onclick: () => guideTo(null) }, "‹ Steps"),
+			el("p", { class: "guide-progress" }, `Step ${k + 1} of ${n}`, meter(done, n)),
+			el("span", { class: "hint" }, `${done} reviewed`)),
 		el("article", { class: "guide-step" },
-			el("h3", {}, step.title, step.reviewed ? el("span", { class: "flag" }, "Reviewed") : null, step.changed ? el("span", { class: "flag" }, "Changed") : null),
+			el("h2", {}, step.title, stepFlags(step)),
 			step.summary ? el("p", { class: "guide-step-summary" }, step.summary) : null,
-			step.drafts.length ? el("div", { class: "drafts" }, step.drafts.map((x) => draftView(x, x === current))) : null,
-			filesOf),
+			ai ? el("p", { class: "guide-ai" }, ai) : null,
+			step.drafts.length ? el("div", { class: "drafts" }, step.drafts.map((x) => draftView(x, x === current, short))) : null,
+			el("p", { class: "guide-files-head" }, el("b", {}, `${step.seen.length} of ${step.files.length} viewed`), dir ? el("span", {}, "in ", el("code", {}, dir)) : null),
+			el("ul", { class: "files guide-files" }, rows)),
 		el("div", { class: "guide-keys btns" },
-			el("button", { class: "quiet", onclick: () => guideGo(-1), disabled: g.idx === 0 }, "Back", el("kbd", {}, "b")),
-			el("button", { class: "quiet", onclick: () => guideKey("c") }, "Comment", el("kbd", {}, "c")),
-			el("button", { class: "quiet", onclick: () => guideGo(1) }, "Skip", el("kbd", {}, "s")),
-			el("button", { class: "primary", onclick: busy(lookGood) }, "Looks good", el("kbd", {}, "y"))));
+			el("button", { class: "quiet", onclick: () => guideTo(k - 1) }, "Back", el("kbd", {}, "b")),
+			canComment ? el("button", { class: "quiet wide", onclick: () => commentOn(g.cur ?? step.files[0]) }, "Comment", el("kbd", {}, "c")) : null,
+			el("button", { class: "quiet", onclick: () => guideTo(k + 1) }, "Skip", el("kbd", {}, "s")),
+			g.cur && !step.reviewed ? el("button", { onclick: busy(() => viewFile(step, g.cur, true)) }, "Viewed", el("kbd", {}, "v")) : null,
+			el("button", { class: "primary", onclick: busy(lookGood) }, !step.reviewed ? "Looks good" : last ? "Done" : "Next step", el("kbd", {}, "y"))));
 }
 
 // -- resolving conflicts

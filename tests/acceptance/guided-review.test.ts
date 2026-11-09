@@ -487,7 +487,8 @@ test("19.8 after a push the plan is kept: only a changed step is read again, and
 		assert.deepEqual(notes.notes, { "docs/notes.md": "Describes the limit." });
 		// the changed one comes back, and says which of its files you have seen in this version
 		assert.deepEqual([limit.reviewed, limit.changed, limit.seen], [false, true, ["src/limit.ts"]]);
-		assert.deepEqual([added.reviewed, added.changed], [false, false]);
+		assert.deepEqual(limit.stale, ["src/limit.test.ts"]); // and which you saw only as it was before the push
+		assert.deepEqual([added.reviewed, added.changed, added.stale], [false, false, []]);
 		assert.equal(after.changedSinceReview, 1);
 	} finally {
 		await t.close();

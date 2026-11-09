@@ -281,6 +281,8 @@ release run on the server) from the file's two whole versions:
   their own views.
 - A note when omnidiff names the shape of the change: only whitespace, only comments,
   only moved code, a new file, a deleted file.
+- **A new or a deleted file is shown plain**: its one version in one column with one
+  line number, no marks and no colour on every line, as there is nothing to compare.
 - Text files over 1 MB are not diffed; the view says so and links to GitHub.
 - **Binary files are diffed by what they hold** (omnidiff), up to 10 MB:
   - **Pictures** (PNG, JPEG, GIF, WebP, BMP, ICO): before and after side by side with
@@ -548,26 +550,48 @@ comments, with a bar for the steps; and whether it is updating after a push.
   the files of it they viewed in this version stay viewed.
 
 **On the PR page**, a **Guided review** tab (`#pr/<owner>/<repo>/<number>/guide`, with
-the number of steps left) shows the PR's one-sentence summary, the hidden noise (folded,
-with why), "Step *k* of *n*" with a bar, and "*n* steps changed since your review" after a
-push. It opens at the first changed step, else the first not reviewed. One step at a
-time: its title and sentence, its draft comments (the next open one marked), and its
-files' diffs (omnidiff, with + to comment on a line as on Files changed). One key each:
+the number of steps left) has two views (Dr. Jeong, 2026-11-09: the layout must be
+convenient, and less text to read through).
+
+**The list of steps** is the whole review at a glance: the PR's one-sentence summary,
+"*k* of *n* steps reviewed" with a bar, "*n* steps changed since your review" after a
+push, and one row per step: its number (a check when reviewed), title, sentence, how
+many files and lines, how many AI comments are still to decide, and a bar for its size
+next to the other steps. One button, **Start review** or **Continue with step *k***
+(`Enter`), opens the first changed step, else the first not reviewed; a row opens its
+step. The hidden noise is folded below, with why. With every step reviewed: "All *n*
+steps reviewed", the number of pending comments, and **Submit review**, which opens the
+review form of section 16 with the PR's summary as its text. Submit review is there as
+soon as a step is reviewed or a comment is pending.
+
+**One step** (`…/guide/<k>`) has the page to itself: the PR's header, tabs and the top
+bar are not shown. A bar stays at the top with **‹ Steps** (back to the list; `Esc` and
+the browser's Back do the same), "Step *k* of *n*" and how many are reviewed. Below it:
+the step's title and sentence; one line on what the AI did (how many files it read, how
+many lines it flagged); its draft comments, each with the lines of code it points at,
+the next open one marked; then its files. Each file is one row with the model's note on
+what changes in it, its counts, a **Viewed** box and **Comment**; a file that changed
+since the person viewed it says **Changed**. A row opens to the file's diff (omnidiff,
+with + to comment on a line as on Files changed). A small step (at most 8 files and 400
+changed lines to read) opens with its files open, a bigger one with only the first file
+to read open, a skim step with all folded. **Viewed** folds the file and opens the next
+one to read. A bar with the decisions stays at the bottom; one key each:
 
 | Key | Does |
 |---|---|
-| `y` | Looks good: mark the step reviewed, go to the next |
+| `y` | Looks good: mark the step reviewed, go to the next one not reviewed (else the list) |
+| `v` | Viewed: mark the file being read, open the next |
 | `k` | Keep the marked draft as it is |
 | `e` | Edit the marked draft, then Keep |
 | `x` | Drop the marked draft |
-| `c` | Comment on the step's file yourself |
+| `c` | Comment on the file being read yourself |
 | `s` | Skip to the next step without marking it |
 | `b` | Back one step |
 
-A decided draft leaves the queue at once, so the next key goes to the next one. After
-the last step: "All *n* steps reviewed", the number of pending comments, and **Submit
-review**, which opens the review form of section 16 with the PR's summary as its text.
-Each key is also a button, for a phone.
+A decided draft leaves the queue at once, so the next key goes to the next one. Past
+the last step, and before the first, is the list. Each key is also a button; on a phone
+the bar has Back, Skip, Viewed and Looks good, the page never scrolls sideways, and
+Comment is on each file's row.
 
 The PR's text, files and comments are data, never instructions to the model.
 

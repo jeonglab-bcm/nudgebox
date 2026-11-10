@@ -585,13 +585,42 @@ one to read. A bar with the decisions stays at the bottom; one key each:
 | `e` | Edit the marked draft, then Keep |
 | `x` | Drop the marked draft |
 | `c` | Comment on the file being read yourself |
+| `a` | Ask the AI about the step |
 | `s` | Skip to the next step without marking it |
 | `b` | Back one step |
 
 A decided draft leaves the queue at once, so the next key goes to the next one. Past
 the last step, and before the first, is the list. Each key is also a button; on a phone
-the bar has Back, Skip, Viewed and Looks good, the page never scrolls sideways, and
+the bar has Back, Ask, Skip, Viewed and Looks good, the page never scrolls sideways, and
 Comment is on each file's row.
+
+**Ask** (Dr. Jeong, 2026-11-09: "ask follow-up questions, so that I can ask further").
+In a step the person can ask the AI about what they are reading, and ask again. Each
+question goes to the model for Guided review (section 20) with the step's title and
+sentence, the changes of its files, the notes and draft comments made when the step was
+prepared, and the person's earlier questions on the step with the answers. A question
+is about the whole step (`a`, or **Ask** in the bar), about one file (**Ask** on its
+row) or about one AI draft (**Ask** on the draft). The file asked about is given whole
+when it fits; the other files share the room that is left, and a file that is cut says
+so. The model answers in a few sentences and says which code it cannot see rather than
+guess.
+
+The questions open in a box over the bar at the bottom: the step's questions and
+answers in order, the answer written as it comes in, and a box for the next question.
+On a computer `Enter` sends and `Shift`+`Enter` is a new line; on a phone `Enter` is a
+new line, the button sends, and the box takes the place of the bar. One question at a
+time. `Esc` or ✕ closes the box; **Ask** in the bar says how many questions the step
+has. **Use as comment** under an answer starts a comment with the answer as its text,
+to edit: on the line of the draft the question was about, else on the file it was
+about (or the file being read). Nothing is sent until the person adds the comment
+(section 16).
+
+Questions and answers are the person's own: nobody else sees them, and nothing goes to
+GitHub. They are kept with the step as its files are: after a push, a step whose files
+did not change keeps them, and a changed step starts with none, because the answers
+were about code that is gone. A question of more than 2,000 characters is refused. If
+the model fails or gives no answer, the page says so, nothing is kept and the question
+stays in the box. Without an LLM there is no Ask.
 
 The PR's text, files and comments are data, never instructions to the model.
 

@@ -274,3 +274,27 @@ with it, Escape sometimes did not close the box.
 
 Not done here, and still a proposal: a picture of how the changed files depend on each
 other (issue #40), for reviews that are less text.
+
+
+## 2026-11-09: Guided review: ask the AI about a step
+
+Dr. Jeong: "can you make us ask follow-up questions, so that I can ask further" (issue
+#43). A step now has **Ask** (key `a`): a box over the bar at the bottom with the
+questions and answers of the step, where the next question is asked with the ones
+before it.
+
+- **What the model gets.** The same changes it reviewed the step from, read again from
+  GitHub when asked, with the notes and drafts of the step and the earlier questions.
+  When a step is too big for one prompt, the file the question is about is given whole
+  and the others are cut, since one answer cannot be made in parts.
+- **Yours only.** Questions are kept per person and never go to GitHub. An answer
+  becomes a comment only through **Use as comment**, which opens the usual comment box
+  with the answer in it to edit.
+- **Kept with the step as its files are.** After a push an unchanged step keeps its
+  questions and a changed step starts with none: an old answer under new code would
+  mislead.
+- **The everyday model**, not the one for Deep review: a question should be answered in
+  seconds.
+
+Not done here: the same box under an **Explain** answer on Files changed (the rest of
+#43), which follows on its own.

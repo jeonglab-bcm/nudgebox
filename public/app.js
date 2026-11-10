@@ -2323,7 +2323,7 @@ function elapsed(iso) {
 // on; `entered`: the step `open` was set up for; `fromList`: Back leads to the list;
 // `ask`: the question box is open ({ about }); `asking`: the question the AI is answering
 const freshGuide = () => ({
-	data: null, failed: null, editing: null, loading: false, preparing: false, progress: null,
+	data: null, failed: null, editing: null, loading: false, preparing: false, polling: false, progress: null,
 	open: new Set(), cur: null, entered: null, shown: undefined, fromList: false,
 	ask: null, asking: null, askPin: true, askTop: 0,
 });
@@ -2363,19 +2363,37 @@ function guideTo(k) {
 	}
 }
 
+// While the review is prepared the page asks again every second. `g.polling` is true while a
+// question is out or due, so the view can start the asking again whenever it has stopped:
+// after a look at another tab, or after a request that failed (a phone asleep, no network).
 async function loadGuide(t) {
 	const key = prv.key;
-	const { status, data: d } = await api(`/api/review?repo=${encodeURIComponent(t.repo)}&number=${t.number}`);
-	if (prv.key !== key) return;
 	const g = prv.guide;
+	g.polling = true;
+	const again = (ms) => setTimeout(() => {
+		if (prv.key !== key || prv.guide !== g) return;
+		if (prTarget()?.tab === "guide") loadGuide(t);
+		else g.polling = false; // the view asks again when it is back
+	}, ms);
+	let r;
+	try {
+		r = await api(`/api/review?repo=${encodeURIComponent(t.repo)}&number=${t.number}`);
+	} catch {
+		if (prv.key === key && prv.guide === g) again(2000);
+		return;
+	}
+	if (prv.key !== key || prv.guide !== g) return;
+	const { status, data: d } = r;
 	g.loading = false;
+	g.polling = false;
 	if (status !== 200) g.failed = d.error || `Could not load the guided review (${status})`;
 	else if (d.state === "failed") g.failed = d.error;
 	else if (d.state === "preparing") {
 		g.failed = null;
 		g.preparing = true;
 		g.progress = d.progress ?? null;
-		setTimeout(() => prv.key === key && prTarget()?.tab === "guide" && loadGuide(t), 1000);
+		g.polling = true;
+		again(1000);
 	} else Object.assign(g, { data: d, failed: null, preparing: false });
 	render();
 }
@@ -2537,8 +2555,8 @@ function draftView(d, current, short) {
 function guideView(t, p) {
 	if (!prv.guide) prv.guide = freshGuide();
 	const g = prv.guide;
-	if (!g.data && !g.failed && !g.loading && !g.preparing) {
-		g.loading = true;
+	if (!g.data && !g.failed && !g.polling) {
+		g.loading = !g.preparing;
 		loadGuide(t);
 	}
 	if (g.failed) {

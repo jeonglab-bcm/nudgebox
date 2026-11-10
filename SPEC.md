@@ -564,6 +564,12 @@ While it is prepared (minutes, on a big PR) the page says what is going on and s
 when: waiting for the review of the push before, reading the changed files, grouping
 *n* files into steps, reviewing step *k* of *n* (its title), checking that step's draft
 comments, with a bar for the steps; and whether it is updating after a push.
+The page keeps asking until the review is there: a request that fails (a phone asleep, no
+network) or a look at another tab does not stop it.
+
+After a restart of the server, the reviews that are not kept are prepared in the
+background, before anybody opens them: the PRs active in the last 14 days, the latest
+first, one at a time. An older PR is prepared when somebody opens it.
 
 **Per person:**
 

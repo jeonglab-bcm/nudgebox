@@ -798,3 +798,21 @@ test("19.12 after a push, the questions of a step that did not change stay; a ch
 		await t.close();
 	}
 });
+
+test("19. after a start, the reviews of PRs active in the last 14 days are prepared before anyone opens them, one at a time", async () => {
+	const { t, calls } = await setup();
+	try {
+		t.github.prs.get(`${MINE}#2`)!.updatedAt = new Date(Date.now() - 30 * 86_400_000).toISOString();
+		await t.app.sync();
+		assert.equal(calls("You plan").length, 0);
+		await t.app.warm();
+		assert.equal(calls("You plan").length, 1, "one PR is recent, the other is not");
+		const r = await (await t.req(`/api/review?repo=${encodeURIComponent(LAB)}&number=4`, { as: "hyunhwanj" })).json();
+		assert.equal(r.state, "ready", "nobody waits");
+		assert.equal(r.steps.length, 2);
+		await t.app.warm(); // what is kept is not made again
+		assert.equal(calls("You plan").length, 1);
+	} finally {
+		await t.close();
+	}
+});

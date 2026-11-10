@@ -78,6 +78,7 @@ export type ServerAi = Omit<LlmConfig, "timeoutMs"> & { deepModel?: string };
 
 export interface App {
 	handler: (req: IncomingMessage, res: ServerResponse) => void;
+	warm(): Promise<void>; // SPEC 19: prepares the guided reviews of recently active PRs (after a start)
 	sync(): Promise<void>; // full refresh from GitHub (start-up and every 10 min)
 	runStaleDigest(): Promise<void>; // the daily stale-PR push
 	idle(): Promise<void>; // resolves when webhook-triggered work has finished
@@ -829,6 +830,23 @@ export function createApp(opts: AppOptions): App {
 	}
 
 	/**
+	 * SPEC 19: after a start, the guided reviews that are not kept (a new version of the
+	 * server can ask for them in a new form) are prepared before anybody opens them: the
+	 * PRs active in the last 14 days, the latest first, one at a time.
+	 */
+	async function warm() {
+		if (!ai()) return;
+		const since = opts.now().getTime() - 14 * 86_400_000;
+		const recent = store.prs().filter((p) => Date.parse(p.updatedAt) >= since).sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+		for (const seen of recent) {
+			const pr = store.pr(seen.repo, seen.number);
+			if (!pr) continue; // merged or closed meanwhile
+			startPrep(pr);
+			await preparing.get(prepKey(pr))?.done;
+		}
+	}
+
+	/**
 	 * SPEC 19: noise, steps in reading order, and checked drafts for one head commit. After
 	 * a push it builds on the review of the push before: the plan is kept, and a step
 	 * whose files did not change keeps its drafts, so only what changed is read again.
@@ -1519,6 +1537,7 @@ export function createApp(opts: AppOptions): App {
 	return {
 		handler,
 		sync,
+		warm,
 		runStaleDigest,
 		idle: async () => {
 			let seen: Promise<void>;

@@ -660,6 +660,19 @@ body.guiding .chrome { display: none; }
 .ask-form textarea { flex: 1; min-width: 0; font: inherit; color: inherit; resize: none; }
 .ask-send { border: 1px solid var(--fg); border-radius: 6px; padding: 8px 14px; font-size: 14px; font-weight: 600; white-space: nowrap; }
 .ask-send:disabled { opacity: .5; }
+/* SPEC 19.13: the box to ask about the whole pull request, open on the PR page */
+.ask-card { display: grid; gap: 10px; padding: 12px 14px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 10px; background: var(--bg); min-width: 0; }
+.conversation > .ask-card { margin-bottom: 16px; }
+.ask-card .ask-head { flex-wrap: wrap; gap: 2px 10px; }
+.ask-card .ask-thread { max-height: min(50vh, 460px); }
+.ask-card .ask-form textarea { padding: 8px 10px; min-height: 38px; field-sizing: content; max-height: 9em; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
+.ask-ideas { display: flex; flex-wrap: wrap; gap: 6px; }
+.ask-idea { border: 1px solid var(--line); background: var(--faint); color: var(--fg); border-radius: 999px; padding: 5px 12px; font-size: 13px; }
+.ask-idea:hover, .ask-idea:focus-visible { border-color: var(--accent); }
+.ask-invite { display: flex; align-items: center; gap: 8px; width: 100%; max-width: 78ch; text-align: left; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--muted); padding: 9px 12px; font-size: 14px; cursor: text; }
+.ask-invite:hover, .ask-invite:focus-visible { border-color: var(--accent); color: var(--fg); }
+.ask-invite .spark { color: var(--accent); } .ask-invite-text { flex: 1; min-width: 0; }
+.ask-invite .n { font: 600 11px var(--mono); background: var(--faint); color: var(--fg); border-radius: 999px; padding: 2px 8px; white-space: nowrap; }
 .guide kbd { margin-left: 6px; }
 .guide .primary kbd { background: transparent; color: inherit; border-color: color-mix(in oklch, var(--bg) 40%, transparent); }
 @media not ((hover: hover) and (pointer: fine)) { .guide kbd { display: none; } }
@@ -675,6 +688,8 @@ body.guiding .chrome { display: none; }
   .ask-thread { max-height: min(46vh, 420px); max-height: min(46dvh, 420px); }
   .ask-form textarea { font-size: 16px; } /* smaller text makes an iPhone zoom in */
   .ask-head .hint { display: none; }
+  .ask-card .ask-head .hint { display: inline; }
+  .ask-idea { padding: 8px 12px; font-size: 14px; }
 }
 /* a new or deleted file has nothing to compare with: plain code, no marks on every line */
 .one-side .code-line.changed, .one-side .u-add, .one-side .u-del { background: none; }

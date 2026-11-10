@@ -11,7 +11,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ChangedFile, GitHubPort, Issue, NewReviewComment, PullRequest } from "./github.ts";
+import type { ChangedFile, GitHubPort, Issue, NewReviewComment, PrFiles, PullRequest } from "./github.ts";
 import { Store, type LinkedUser } from "./store.ts";
 import { seal, unseal } from "./crypto.ts";
 import { buildInbox, isMine, reviewRequested, type Viewer } from "./inbox.ts";
@@ -22,7 +22,7 @@ import type { Differ, DiffSide } from "./omnidiff.ts";
 import { hasMarkers, planMerge, type ReadFile } from "./conflicts.ts";
 import { EXPLAIN_FORMAT, explainAskPrompt, explainPrompt } from "./explain.ts";
 import { CODE_KINDS, CodeError, type CodeIntel } from "./code.ts";
-import { askPrompt, carryPlan, checkPrompt, codeAt, commentable, dataSteps, isData, MAX_DRAFTS_PER_STEP, MAX_QUESTION, noiseReason, numberedChanges, parseJson, planPrompt, readCheck, readPlan, readReview, REVIEW_FORMAT, reviewPrompts, type AskAbout, type CodeLine, type Draft, type FileChanges, type PlanStep } from "./review.ts";
+import { askPrPrompt, askPrompt, carryPlan, checkPrompt, codeAt, commentable, dataSteps, isData, MAX_DRAFTS_PER_STEP, MAX_QUESTION, noiseReason, numberedChanges, parseJson, planPrompt, readCheck, readPlan, readReview, REVIEW_FORMAT, reviewPrompts, type AskAbout, type CodeLine, type Draft, type FileChanges, type PlanStep } from "./review.ts";
 
 export interface Config {
 	orgs: string[]; // accounts the GitHub App is installed on
@@ -870,21 +870,26 @@ export function createApp(opts: AppOptions): App {
 		};
 	}
 
-	async function prepare(pr: PullRequest, report: (p: Partial<Progress>) => void = () => {}): Promise<Prep> {
-		const set = await github.prFiles(pr.repo, pr.number);
-		if (!set) throw new Error("the pull request is gone");
+	/** Every changed file of a PR as the model reads it, a few at a time: a big PR is a hundred round trips to GitHub. */
+	async function readChanges(repo: string, set: PrFiles, each: () => void = () => {}): Promise<Read[]> {
 		const files: Read[] = new Array(set.files.length);
-		let read = 0;
-		report({ phase: "reading", done: 0, total: set.files.length });
-		const readOne = (f: ChangedFile) => readChange(pr.repo, set, f);
-		let next = 0; // a few files at a time: a big PR is a hundred round trips to GitHub
+		let next = 0;
 		await Promise.all(Array.from({ length: Math.min(6, set.files.length) }, async () => {
 			while (next < set.files.length) {
 				const k = next++;
-				files[k] = await readOne(set.files[k]);
-				report({ done: ++read });
+				files[k] = await readChange(repo, set, set.files[k]);
+				each();
 			}
 		}));
+		return files;
+	}
+
+	async function prepare(pr: PullRequest, report: (p: Partial<Progress>) => void = () => {}): Promise<Prep> {
+		const set = await github.prFiles(pr.repo, pr.number);
+		if (!set) throw new Error("the pull request is gone");
+		let read = 0;
+		report({ phase: "reading", done: 0, total: set.files.length });
+		const files = await readChanges(pr.repo, set, () => report({ done: ++read }));
 		const noise = files.filter((f) => f.why).map((f) => ({ path: f.path, why: f.why! }));
 		const seen = files.filter((f) => !f.why);
 		// steps to skim, without asking the model (with no omnidiff nothing is read, and that makes no file data)
@@ -1054,18 +1059,21 @@ export function createApp(opts: AppOptions): App {
 	 * SPEC 19, Ask: a question about one step of a guided review, answered by the model from
 	 * what it saw when it reviewed the step and the questions before. Kept for the person who
 	 * asked, with the step; never sent to GitHub. One question per person and step at a time.
+	 * With no step the question is about the whole pull request (SPEC 19.13): it needs no
+	 * prepared review, and is kept with the pull request.
 	 */
 	async function askFor(req: IncomingMessage, lab: string): Promise<SummaryRun> {
 		if (!ai()) throw new HttpError(503, "AI answers are not set up");
 		const b = await json(req);
 		const pr = await reviewTarget(lab, b.repo, b.number);
-		const prep = store.reviewPrep(prepKey(pr)) as Prep | undefined;
-		if (!prep) throw new HttpError(409, "the guided review is not ready yet");
-		const step = prep.steps.find((x) => x.id === b.step);
-		if (!step) throw new HttpError(404, "no such step");
 		const question = typeof b.question === "string" ? b.question.trim() : "";
 		if (!question) bad("the question is empty");
 		if (question.length > MAX_QUESTION) bad(`the question is too long (at most ${MAX_QUESTION} characters)`);
+		const prep = store.reviewPrep(prepKey(pr)) as Prep | undefined;
+		if (b.step === undefined || b.step === null) return askPr(lab, pr, prep, question);
+		if (!prep) throw new HttpError(409, "the guided review is not ready yet");
+		const step = prep.steps.find((x) => x.id === b.step);
+		if (!step) throw new HttpError(404, "no such step");
 		let about: AskAbout | null = null;
 		if (b.about?.draft !== undefined) {
 			const d = step.drafts.find((x) => x.id === b.about.draft);
@@ -1093,7 +1101,35 @@ export function createApp(opts: AppOptions): App {
 		});
 	}
 
-	/** Summarize as one JSON answer. */
+	const PR_THREAD = ""; // no step has this id
+
+	/** SPEC 19.13: a question about the whole pull request. */
+	function askPr(lab: string, pr: PullRequest, prep: Prep | undefined, question: string): SummaryRun {
+		const id = `ask:${lab}:${askScope(pr)}:${PR_THREAD}`;
+		if (summarizing.has(id)) throw new HttpError(409, "wait for the answer to your last question");
+		const earlier = store.asks(lab, askScope(pr)).filter((a) => a.thread === PR_THREAD);
+		return startRun(id, async () => {
+			const gone = (e: unknown): never => { throw new HttpError(502, `could not read it from GitHub: ${(e as Error).message}`); };
+			const [set, content] = await Promise.all([github.prFiles(pr.repo, pr.number).catch(gone), github.prContent(pr.repo, pr.number).catch(() => null)]);
+			if (!set) throw new HttpError(404, "the pull request is gone");
+			const files = await readChanges(pr.repo, set);
+			const data = (f: Read) => isData(f.path, opts.diff ? f.text : "");
+			const left = { noise: files.filter((f) => f.why).map((f) => f.path), data: files.filter((f) => !f.why && data(f)).map((f) => f.path) };
+			const review = prep?.ai ? { summary: prep.summary, steps: prep.steps.filter((x) => !x.skim) } : null;
+			return askPrPrompt(pr, content?.body ?? "", review, files.filter((f) => !f.why && !data(f)), left, earlier, question, opts.now().toISOString().slice(0, 10));
+		}, (answer) => {
+			if (!answer.trim()) throw new HttpError(502, "the model gave no answer; ask again");
+			store.addAsk(lab, askScope(pr), PR_THREAD, { question, answer: answer.trim(), about: null }, opts.now().toISOString());
+		});
+	}
+
+	/** SPEC 19.13: what `lab` asked about the whole pull request, oldest first, and whether there is an AI to ask. */
+	async function prAsks(lab: string, repo: string | null, number: number) {
+		const pr = await reviewTarget(lab, repo, number);
+		const asks = store.asks(lab, askScope(pr)).filter((a) => a.thread === PR_THREAD).map(({ question, answer, at }) => ({ question, answer, at }));
+		return { ai: Boolean(ai()), asks };
+	}
+
 	/**
 	 * SPEC 15: a file's bytes for the page to draw (a picture or a PDF). The type comes from
 	 * the bytes, never the name; anything else is a download. A sandbox CSP and nosniff keep
@@ -1410,6 +1446,9 @@ export function createApp(opts: AppOptions): App {
 		}
 		if (method === "GET" && path === "/api/review") { // SPEC 19
 			return send(res, 200, await reviewGet(lab, url.searchParams.get("repo"), Number(url.searchParams.get("number"))));
+		}
+		if (method === "GET" && path === "/api/review/asks") { // SPEC 19.13
+			return send(res, 200, await prAsks(lab, url.searchParams.get("repo"), Number(url.searchParams.get("number"))));
 		}
 		if (method === "POST" && path === "/api/review/ask") { // SPEC 19, Ask
 			const run = await askFor(req, lab);

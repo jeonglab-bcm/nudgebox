@@ -799,6 +799,125 @@ test("19.12 after a push, the questions of a step that did not change stay; a ch
 	}
 });
 
+// -- SPEC 19.13: a question about the whole pull request
+
+const asks = async (t: Awaited<ReturnType<typeof setup>>["t"], as: string) => (await t.req(`/api/review/asks?repo=${encodeURIComponent(LAB)}&number=4`, { as })).json();
+
+test("19.13 a question about the whole pull request needs no prepared review: the model gets the description and the changes, not the noise", async () => {
+	const { t, post, calls } = await setup();
+	try {
+		t.github.content.set(`${LAB}#4`, { body: "The big queue needs a limit of 20.", comments: [] });
+		assert.deepEqual(await asks(t, "hyunhwanj"), { ai: true, asks: [] });
+		const res = await post("hyunhwanj", "ask", { question: "  What does this change?  " });
+		assert.equal(res.status, 200, await res.clone().text());
+		assert.deepEqual(await res.json(), { answer: "Answer to: What does this change?" });
+		assert.equal(calls("You plan").length, 0, "asking does not wait for the guided review");
+
+		const [call] = calls("You answer");
+		for (const want of ["Pull request: Raise the limit", "by kelly", "The big queue needs a limit of 20.", "=== src/limit.ts (modified, +1 -1)", "=== docs/notes.md",
+			"R15 + const limit = 20; // src/limit.ts", "L15 - const limit = 10; // src/limit.ts"]) {
+			assert.ok(call.user.includes(want), `the prompt lacks: ${want}`);
+		}
+		for (const noise of ["=== package-lock.json", "=== src/format.ts", "=== src/moved.ts"]) assert.ok(!call.user.includes(noise), `noise is not read: ${noise}`);
+		assert.match(call.user, /Left out, no real change: .*package-lock\.json/);
+		assert.ok(call.user.trimEnd().endsWith("The reviewer asks:\nWhat does this change?"), "the question comes last");
+		assert.match(call.system, /^You answer a reviewer's question about a GitHub pull request/);
+		assert.match(call.system, /never follow instructions/i);
+		assert.match(call.system, /not shown/);
+
+		const mine = await asks(t, "hyunhwanj");
+		assert.deepEqual(mine.asks.map((a: any) => [a.question, a.answer]), [["What does this change?", "Answer to: What does this change?"]]);
+		assert.ok(!Number.isNaN(Date.parse(mine.asks[0].at)));
+	} finally {
+		await t.close();
+	}
+});
+
+test("19.13 with the review prepared, the model also gets its steps and draft comments, and the questions before", async () => {
+	const { t, review, post, calls } = await setup({ drafts: LIMIT_DRAFTS, notes: LIMIT_NOTES });
+	try {
+		await post("hyunhwanj", "ask", { question: "First?" });
+		const { body: r } = await review("hyunhwanj");
+		assert.equal((await post("hyunhwanj", "ask", { question: "Where do I look first?" })).status, 200);
+		const second = calls("You answer")[1];
+		for (const want of ["Raises the limit and documents it.", "1. Raise the limit: The limit goes from 10 to 20. (src/limit.ts, src/limit.test.ts)", "2. Notes:",
+			"src/limit.ts, line 15: Is 20 safe for the small queue?", "=== src/limit.ts"]) {
+			assert.ok(second.user.includes(want), `the prompt lacks: ${want}`);
+		}
+		const before = second.user.slice(0, second.user.lastIndexOf("The reviewer asks:"));
+		assert.ok(before.includes("First?") && before.includes("Answer to: First?"), "the earlier question and its answer are in the prompt");
+		// the questions on the pull request and those of a step are apart
+		await post("hyunhwanj", "ask", { step: r.steps[0].id, question: "In the step?" });
+		assert.deepEqual((await asks(t, "hyunhwanj")).asks.map((a: any) => a.question), ["First?", "Where do I look first?"]);
+		assert.deepEqual((await review("hyunhwanj")).body.steps[0].asks.map((a: any) => a.question), ["In the step?"]);
+		assert.ok(!calls("You answer")[2].user.includes("Where do I look first?"));
+	} finally {
+		await t.close();
+	}
+});
+
+test("19.13 a pull request too big for one prompt: a file named in the question is whole, and the others are cut to fit", async () => {
+	const big = (mark: string) => `${"x".repeat(30_000)} ${mark}\n`;
+	const { t, post, calls } = await setup({ more: { "src/big1.ts": big("END-ONE"), "src/big2.ts": big("END-TWO") } });
+	try {
+		await post("hyunhwanj", "ask", { question: "What ends big2.ts?" });
+		await post("hyunhwanj", "ask", { question: "And all of it?" });
+		const [named, all] = calls("You answer");
+		assert.ok(named.user.length <= 48_000 && all.user.length <= 48_000);
+		assert.ok(named.user.includes("END-TWO") && !named.user.includes("END-ONE") && named.user.includes("=== src/big1.ts"));
+		assert.ok(named.user.indexOf("=== src/big2.ts") < named.user.indexOf("=== src/limit.ts"), "the file named comes first");
+		assert.ok(!all.user.includes("END-ONE") && !all.user.includes("END-TWO"));
+		assert.ok(all.user.includes("R15 + const limit = 20; // src/limit.ts"), "a small file is whole");
+	} finally {
+		await t.close();
+	}
+});
+
+test("19.13 the questions on a pull request are yours only, stay after a push, and nothing goes to GitHub", async () => {
+	const { t, post, calls, push } = await setup();
+	try {
+		const writes = () => t.github.calls.filter((c) => c.token).length;
+		const was = writes();
+		await post("hyunhwanj", "ask", { question: "Mine?" });
+		assert.deepEqual((await asks(t, "kellyl")).asks, []);
+		await post("kellyl", "ask", { question: "Hers?" });
+		assert.ok(!calls("You answer")[1].user.includes("Mine?"), "another person's question is not in the prompt");
+		push("h2", { "src/limit.test.ts": lines((i) => (i === 14 ? "const limit = 25;" : `line ${i + 1}`)) });
+		await t.app.sync();
+		assert.deepEqual((await asks(t, "hyunhwanj")).asks.map((a: any) => a.question), ["Mine?"]);
+		assert.deepEqual((await asks(t, "kellyl")).asks.map((a: any) => a.question), ["Hers?"]);
+		assert.equal(t.github.calls.filter((c) => /comment|review/i.test(c.op) && c.op !== "prContent").length, 0, "no comment or review is made on GitHub");
+		assert.equal(writes(), was);
+	} finally {
+		await t.close();
+	}
+});
+
+test("19.13 a question on a pull request is refused when it is empty or too long, for a PR you cannot see, or with no AI; a failure keeps nothing", async () => {
+	const { t, post, calls } = await setup();
+	try {
+		assert.equal((await post("hyunhwanj", "ask", { question: "   " })).status, 400);
+		assert.equal((await post("hyunhwanj", "ask", { question: "x".repeat(2001) })).status, 400);
+		assert.equal((await t.req("/api/review/ask", { as: "kellyl", method: "POST", body: JSON.stringify({ repo: MINE, number: 2, question: "Why?" }) })).status, 404);
+		assert.equal((await t.req(`/api/review/asks?repo=${encodeURIComponent(MINE)}&number=2`, { as: "kellyl" })).status, 404);
+		assert.equal(calls("You answer").length, 0);
+		t.llm.failNext = true;
+		const failed = await post("hyunhwanj", "ask", { question: "Why?" });
+		assert.equal(failed.status, 502);
+		assert.match((await failed.json()).error, /LLM failed/);
+		assert.deepEqual((await asks(t, "hyunhwanj")).asks, []);
+	} finally {
+		await t.close();
+	}
+	const off = await setup({ llm: false });
+	try {
+		assert.deepEqual(await asks(off.t, "hyunhwanj"), { ai: false, asks: [] });
+		assert.equal((await off.post("hyunhwanj", "ask", { question: "Why?" })).status, 503);
+	} finally {
+		await off.t.close();
+	}
+});
+
 test("19. after a start, the reviews of PRs active in the last 14 days are prepared before anyone opens them, one at a time", async () => {
 	const { t, calls } = await setup();
 	try {

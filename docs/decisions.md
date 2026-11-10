@@ -396,3 +396,27 @@ The wait itself came from the deploy: the kept reviews were in the old form, so 
 PR was prepared again when first opened. Now the server prepares them in the background
 after a start (PRs active in the last 14 days, one at a time, so a paid LLM is not
 asked about 45 PRs at once or about PRs nobody looks at).
+
+## 2026-11-10: Ask the AI: a box on the pull request, open
+
+Dr. Jeong, after the follow-up questions were live: "no further chat function". They
+were there, but only inside one step of a guided review, behind **Ask** in the bottom
+bar, and the review of the PR at hand was still being prepared. A function that needs
+a finished review and a button to be found is not there for whoever opens the PR.
+
+- The box is on the PR page itself, open, at the top of Conversation (where a PR
+  opens) and of Guided review. No button to find it.
+- It asks about the whole PR and needs no prepared review, so the wait for a review
+  is no longer dead time. With a review, its steps and drafts go along.
+- Three questions to ask with one click, because an empty box does not say what it is
+  good for.
+- A big PR does not fit one prompt: the files the question names go first and whole,
+  the rest is cut evenly. Whole-repository answers are not promised; the model says
+  what it cannot see.
+- In a step, a line "Ask the AI about this step…" under the summary opens the step's
+  questions. The step's box stays closed until asked for: open, it would cover a third
+  of a phone's screen over the code.
+- A floating chat button over every page was not built: the bottom of the page is taken
+  (the step's bar, the compare tray, the key hints), and a box in the flow is found
+  without it.
+

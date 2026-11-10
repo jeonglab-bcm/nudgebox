@@ -571,26 +571,41 @@ textarea:focus, .merge-confirm input:focus { outline: 2px solid var(--accent); o
 .dep-graph { display: grid; gap: 8px; padding: 10px 12px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); min-width: 0; margin: 0 0 12px; }
 .guide .dep-graph { margin: 0; }
 .dep-graph.folded { padding-bottom: 10px; }
+main:has(.files-changed.beside) { max-width: 1632px; }
+:root:has(.files-changed.beside) { --gutter: max(20px, calc((100% - 1632px) / 2 + 12px)); }
+#pr-page:has(.files-changed.beside) { max-width: none; }
+.files-split .file { scroll-margin-top: var(--top, 0px); }
+.files-split .file.open { position: sticky; top: var(--top, 0px); z-index: 2; background: var(--bg); box-shadow: 0 2px 6px oklch(0% 0 0 / .06); }
+.files-split { display: grid; grid-template-columns: clamp(260px, 24vw, 360px) minmax(0, 1fr); gap: 16px; align-items: start; }
+.files-side { position: sticky; top: calc(var(--top, 0px) + 8px); max-height: calc(100vh - var(--top, 0px) - 16px); overflow: auto; overscroll-behavior: contain; min-width: 0; border: 1px solid var(--line); border-radius: 10px; }
+.files-side .dep-graph { margin: 0; border: 0; }
+.files-main { min-width: 0; }
+.files-main .files { margin-top: 8px; }
 .dep-head { display: flex; align-items: baseline; gap: 10px; width: 100%; border: 0; background: none; padding: 2px 0; text-align: left; color: var(--fg); min-height: 32px; cursor: pointer; }
 .dep-title { font-weight: 650; }
 .dep-fold { margin-left: auto; color: var(--muted); }
 .dep-how { margin: 0; font-size: 12.5px; }
-.dep-scroll { overflow-x: auto; }
-.dep-graph svg { display: block; }
-.dep-node { cursor: pointer; outline: none; }
-.dep-node rect { fill: var(--faint); stroke: var(--line); stroke-width: 1; }
-.dep-node:hover rect, .dep-node:focus-visible rect { stroke: var(--muted); }
-.dep-node.picked rect { stroke: var(--accent); stroke-width: 2; fill: var(--sel); }
-.dep-node text { font: 500 12.5px var(--sans); fill: var(--fg); user-select: none; }
-.dep-node .dep-step-dot { fill: var(--bg); stroke: var(--line); }
-.dep-node text.dep-step { font: 600 11px var(--mono); fill: var(--muted); }
-.dep-node.dim { opacity: 0.3; }
-.dep-link { fill: none; stroke: var(--muted); stroke-width: 1.1; opacity: 0.5; }
-.dep-link.mention { stroke-dasharray: 4 3; }
-.dep-link.on { stroke: var(--accent); stroke-width: 1.8; opacity: 1; }
-.dep-link.dim { opacity: 0.12; }
-#dep-arrow path { fill: var(--muted); }
-#dep-arrow-on path { fill: var(--accent); }
+.dep-tree { list-style: none; margin: 0; padding: 0; min-width: 0; }
+.dep-row { display: flex; align-items: center; min-height: 36px; min-width: 0; gap: 0; }
+.dep-twigs { display: flex; flex-wrap: wrap; gap: 5px 6px; min-width: 0; padding: 3px 0; }
+.dep-rail, .dep-elbow { position: relative; flex: 0 0 22px; align-self: stretch; }
+.dep-rail.on::before, .dep-elbow::before { content: ""; position: absolute; left: 10px; top: 0; bottom: 0; border-left: 1px solid var(--muted); opacity: 0.55; }
+.dep-elbow.last::before { bottom: 50%; }
+.dep-elbow::after { content: ""; position: absolute; left: 10px; right: 2px; top: 50%; border-top: 1px solid var(--muted); opacity: 0.55; }
+.dep-row.twigs .dep-elbow::after { top: 18px; }
+.dep-row.twigs .dep-elbow.last::before { bottom: auto; height: 18px; }
+.dep-elbow.named::after { border-top-style: dashed; }
+.dep-node.named { border-style: dashed; border-color: var(--muted); }
+.dep-node { display: inline-flex; align-items: center; gap: 6px; min-width: 0; min-height: 30px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--faint); color: var(--fg); font: 500 13px var(--sans); cursor: pointer; }
+.dep-node:hover, .dep-node:focus-visible { border-color: var(--muted); }
+.dep-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dep-node.near { border-color: var(--accent); }
+.dep-node.picked { border-style: solid; border-color: var(--accent); background: var(--sel); box-shadow: 0 0 0 1px var(--accent); }
+.dep-step { flex: none; min-width: 18px; height: 18px; padding: 0 4px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); color: var(--muted); font: 600 11px/16px var(--mono); text-align: center; }
+.dep-again { flex: none; color: var(--muted); font-size: 12px; }
+.dep-caret { flex: none; margin-left: 4px; min-width: 30px; min-height: 30px; padding: 0 6px; border: 0; background: none; color: var(--muted); font: 500 12px var(--sans); white-space: nowrap; cursor: pointer; }
+.dep-caret:hover { color: var(--fg); }
+.dep-pick-row { margin: 4px 0 8px; }
 .dep-alone, .dep-docs { margin: 0; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 13px; }
 .dep-chip { border: 1px solid var(--line); background: var(--faint); border-radius: 999px; padding: 4px 10px; font: 500 12.5px var(--sans); color: var(--fg); min-height: 30px; cursor: pointer; }
 .dep-chip .n { color: var(--muted); font-weight: 400; }
@@ -598,7 +613,7 @@ textarea:focus, .merge-confirm input:focus { outline: 2px solid var(--accent); o
 .dep-pick { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; padding: 8px 10px; border-radius: 8px; background: var(--sel); font-size: 13px; min-width: 0; }
 .dep-pick-path { font: 500 12.5px var(--mono); overflow-wrap: anywhere; flex-basis: 100%; }
 .dep-pick span { overflow-wrap: anywhere; min-width: 0; }
-.dep-pick button { margin-left: auto; }
+.dep-pick-go { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
 .kind-filter { margin: 0 0 10px; }
 .kind-switch { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--faint); max-width: 100%; }
 .kind-switch button { display: inline-flex; gap: 6px; align-items: baseline; border: 0; background: none; padding: 6px 12px; border-radius: 6px; color: var(--muted); font-weight: 500; min-height: 36px; }

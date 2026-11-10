@@ -2237,19 +2237,8 @@ function commitView(t) {
 
 // -- Files changed: omnidiff diffs plus GitHub's review tools
 
-// -- dependency graph (SPEC 22): which changed file uses which ----------------------------
-const SVG_NS = "http://www.w3.org/2000/svg";
-function svg(tag, attrs = {}, ...kids) {
-	const e = document.createElementNS(SVG_NS, tag);
-	for (const [k, v] of Object.entries(attrs)) {
-		if (k === "onclick") e.addEventListener("click", v);
-		else if (v !== false && v != null) e.setAttribute(k, v);
-	}
-	for (const k of kids.flat()) if (k != null) e.append(k instanceof Node ? k : document.createTextNode(String(k)));
-	return e;
-}
-
-let deps = { key: null, data: null, loading: false, pick: null };
+// -- dependency graph (SPEC 22): which changed file uses which, as a tree -------------------
+let deps = { key: null, data: null, loading: false, pick: null, at: null, shut: null, goto: null };
 let depsOpen = (() => { try { return localStorage.getItem("ghd-graph") !== "0"; } catch { return true; } })();
 
 /** Asks once per PR and head commit; a failure shows no graph. */
@@ -2257,7 +2246,7 @@ async function loadDeps(t) {
 	if (!files.data) return;
 	const key = `${files.key}@${files.data.head}`;
 	if (deps.key === key) return;
-	deps = { key, data: null, loading: true, pick: null };
+	deps = { key, data: null, loading: true, pick: null, at: null, shut: null, goto: null };
 	const { status, data: d } = await api(`/api/prs/graph?repo=${encodeURIComponent(t.repo)}&number=${t.number}`);
 	if (deps.key !== key) return;
 	deps.loading = false;
@@ -2267,129 +2256,93 @@ async function loadDeps(t) {
 
 const baseName = (p) => p.slice(p.lastIndexOf("/") + 1);
 
-/** The room the drawing has: the page's width without its padding and the card's. */
-function depsWidth() {
-	const page = $("#pr-page");
-	const cs = page ? getComputedStyle(page) : null;
-	const w = page ? page.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) : document.documentElement.clientWidth - 32;
-	return Math.max(240, Math.min(1000, Math.floor(w) - 26));
-}
+// wide enough for the tree beside the files (SPEC 22)
+const roomy = matchMedia("(min-width: 1100px)");
+roomy.addEventListener("change", () => render());
 
 /**
- * Where each file stands: a file under the files it uses, so the drawing reads from the top.
- * Only code that is linked to other code is drawn. A link that would close a circle does
- * not move a file (it is still drawn).
+ * The tree: at the top the files that no other changed file uses, under each file the
+ * files it uses. A file used in several places has a line in each, and its own branches
+ * once: under `home`, the place nearest to a top. Only code linked to other code is in it.
  */
-function depsLayout(g, width, badge, shortName) {
+function depsTree(g) {
 	const kind = new Map(g.nodes.map((n) => [n.path, n.kind]));
 	const links = g.links.filter((l) => kind.get(l.from) === "code" && kind.get(l.to) === "code");
 	const linked = new Set(links.flatMap((l) => [l.from, l.to]));
 	const drawn = g.nodes.filter((n) => linked.has(n.path)).map((n) => n.path);
 	const uses = new Map(drawn.map((p) => [p, []]));
 	const users = new Map(drawn.map((p) => [p, []]));
-	const reaches = (a, b, seen = new Set()) => a === b || (!seen.has(a) && (seen.add(a), uses.get(a).some((x) => reaches(x, b, seen))));
-	for (const l of [...links].sort((a, b) => (a.how === "import" ? 0 : 1) - (b.how === "import" ? 0 : 1))) {
-		if (reaches(l.to, l.from)) continue; // a circle
-		uses.get(l.from).push(l.to);
+	for (const l of links) {
+		uses.get(l.from).push(l);
 		users.get(l.to).push(l.from);
 	}
-	const level = new Map();
-	const depth = (p) => {
-		if (!level.has(p)) level.set(p, uses.get(p).length ? 1 + Math.max(...uses.get(p).map(depth)) : 0);
-		return level.get(p);
-	};
-	drawn.forEach(depth);
-	// a file used only far below goes down to just above its first user: shorter arrows, a narrower top
-	for (const p of [...drawn].sort((a, b) => level.get(b) - level.get(a))) {
-		if (users.get(p).length) level.set(p, Math.min(...users.get(p).map((x) => level.get(x))) - 1);
-	}
-	const layers = [];
-	for (const p of drawn) (layers[level.get(p)] ??= []).push(p);
-	for (let i = 0; i < layers.length; i++) layers[i] ??= [];
-
-	// fewer crossings: a file goes under the middle of what it uses, then over the middle of what uses it
-	const at = new Map();
-	const place = () => layers.forEach((row) => row.forEach((p, i) => at.set(p, (i + 0.5) / row.length)));
-	const sortBy = (row, near) => {
-		const mid = (p) => (near.get(p).length ? near.get(p).reduce((a, x) => a + at.get(x), 0) / near.get(p).length : at.get(p));
-		const m = new Map(row.map((p) => [p, mid(p)]));
-		row.sort((a, b) => m.get(a) - m.get(b));
-	};
-	place();
-	for (let pass = 0; pass < 2; pass++) {
-		for (let i = 1; i < layers.length; i++) { sortBy(layers[i], uses); place(); }
-		for (let i = layers.length - 2; i >= 0; i--) { sortBy(layers[i], users); place(); }
-	}
-
-	const gap = 10;
-	const h = 32;
-	const w = width < 520 ? Math.floor((width - gap) / 2) : 160;
-	const cols = Math.max(1, Math.floor((width + gap) / (w + gap)));
-	const box = new Map();
-	let y = 6;
-	for (const row of layers) {
-		for (let i = 0; i < row.length; i += cols) {
-			const part = row.slice(i, i + cols);
-			const x0 = (width - (part.length * w + (part.length - 1) * gap)) / 2;
-			part.forEach((p, k) => box.set(p, { x: x0 + k * (w + gap), y, cx: x0 + k * (w + gap) + w / 2 }));
-			y += h + (i + cols < row.length ? 10 : 0);
+	const reach = (p, seen = new Set()) => {
+		if (!seen.has(p)) {
+			seen.add(p);
+			for (const l of uses.get(p)) reach(l.to, seen);
 		}
-		y += 40;
-	}
-	const height = y - 40 + 6;
-
-	// where a link leaves and enters a file: side by side, in the order of the other ends
-	const ports = new Map();
-	const port = (p, side, link, otherX) => {
-		const key = `${p}\n${side}`;
-		if (!ports.has(key)) ports.set(key, []);
-		ports.get(key).push({ link, otherX });
+		return seen;
 	};
-	for (const l of links) {
-		const [a, b] = [box.get(l.to), box.get(l.from)];
-		const down = b.y > a.y;
-		port(l.to, down ? "bottom" : "top", l, b.cx);
-		port(l.from, down ? "top" : "bottom", l, a.cx);
-	}
-	const off = new Map();
-	for (const [key, list] of ports) {
-		list.sort((a, b) => a.otherX - b.otherX);
-		const step = Math.min(12, (w - 28) / list.length);
-		list.forEach((x, i) => off.set(`${key}\n${x.link.from}\n${x.link.to}`, (i - (list.length - 1) / 2) * step));
-	}
-	const paths = links.map((l) => {
-		const [a, b] = [box.get(l.to), box.get(l.from)];
-		const down = b.y > a.y;
-		const id = `${l.from}\n${l.to}`;
-		const sx = a.cx + off.get(`${l.to}\n${down ? "bottom" : "top"}\n${id}`);
-		const ex = b.cx + off.get(`${l.from}\n${down ? "top" : "bottom"}\n${id}`);
-		const sy = down ? a.y + h : a.y;
-		const ey = down ? b.y - 5 : b.y + h + 5; // room for the arrow's head
-		const k = (down ? 1 : -1) * Math.max(14, Math.abs(ey - sy) * 0.45);
-		return { link: l, d: `M${sx.toFixed(1)} ${sy} C${sx.toFixed(1)} ${(sy + k).toFixed(1)} ${ex.toFixed(1)} ${(ey - k).toFixed(1)} ${ex.toFixed(1)} ${ey}` };
-	});
-
-	// a name as long as its box takes
-	const label = (p) => {
-		const name = shortName(p);
-		const room = Math.floor((w - 16 - (badge(p) ? 22 : 0)) / 6.9);
-		return name.length <= room ? name : `${name.slice(0, Math.ceil((room - 1) * 0.6))}…${name.slice(name.length - Math.floor((room - 1) * 0.4))}`;
+	const home = new Map();
+	const tops = [];
+	const claim = (top) => {
+		tops.push(top);
+		home.set(top, null);
+		const queue = [top];
+		for (let i = 0; i < queue.length; i++) {
+			for (const l of uses.get(queue[i])) {
+				if (home.has(l.to)) continue;
+				home.set(l.to, queue[i]);
+				queue.push(l.to);
+			}
+		}
 	};
-	return { links, drawn, box, paths, w, h, height, label };
+	// the top with the most under it goes first, and keeps what it shares with the others
+	const size = new Map(drawn.map((p) => [p, reach(p).size]));
+	drawn.filter((p) => !users.get(p).length).sort((a, b) => size.get(b) - size.get(a)).forEach(claim);
+	for (const p of drawn) if (!home.has(p)) claim(p); // files that only use each other, in a circle
+	return { kind, links, drawn, uses, users, home, tops };
 }
 
 /**
- * The card with the drawing. `o.badge(path)` is a short mark on a file (its step), and
- * `o.open(path)` gives { label, go } for the button of the picked file.
+ * The lines of the tree as they are shown, top to bottom. A file with branches has a line
+ * of its own; the files under it that have none here (they use nothing, or their branches
+ * are elsewhere) share one line. `shut` files keep their branches folded.
+ */
+function depsRows(T, shut) {
+	const rows = [];
+	const walk = (p, how, trail) => {
+		const kids = T.uses.get(p);
+		const open = !shut.has(p);
+		rows.push({ id: `own:${p}`, trail, items: [{ path: p, how }], own: p, kids: kids.length, open });
+		if (!open) return;
+		const limb = (l) => T.home.get(l.to) === p && T.uses.get(l.to).length > 0;
+		const twigs = kids.filter((l) => !limb(l));
+		const limbs = kids.filter(limb);
+		if (twigs.length) rows.push({ id: `twigs:${p}`, trail: [...trail, !limbs.length], items: twigs.map((l) => ({ path: l.to, how: l.how, again: T.uses.get(l.to).length > 0 })) });
+		limbs.forEach((l, i) => walk(l.to, l.how, [...trail, i === limbs.length - 1]));
+	};
+	for (const top of T.tops) walk(top, null, []);
+	return rows;
+}
+
+/**
+ * The card with the tree. `o.badge(path)` is a short mark on a file (its step), and
+ * `o.open(path)` gives { label, go } for the button of the picked file. With `o.tap(path)`
+ * a tap on a file calls it (and it renders): the tree stands beside what the tap opens.
  */
 function depsCard(t, o) {
 	loadDeps(t);
 	const g = deps.data;
 	if (!g) return null;
-	const kind = new Map(g.nodes.map((n) => [n.path, n.kind]));
-	const width = depsWidth();
-	// a name is the file's name; two files of one name carry their folder
-	// the shortest end of the path that no other file here shares
+	const T = depsTree(g);
+	if (!T.links.length) return null;
+	const kind = T.kind;
+	// a big tree starts with only the tops' own branches open
+	if (!deps.shut) deps.shut = new Set(depsRows(T, new Set()).length > 40 ? T.drawn.filter((p) => T.home.get(p) !== null && T.uses.get(p).length) : []);
+	const rows = depsRows(T, deps.shut);
+
+	// a name is the shortest end of the path that no other file here shares
 	const short = new Map();
 	for (const n of g.nodes) {
 		const parts = n.path.split("/");
@@ -2399,64 +2352,98 @@ function depsCard(t, o) {
 		short.set(n.path, tail());
 	}
 	const shortName = (p) => short.get(p) ?? baseName(p);
-	const L = depsLayout(g, width, o.badge, shortName);
-	if (!L.links.length) return null;
-	const pick = deps.pick && kind.has(deps.pick) ? deps.pick : null;
-	const setPick = (p) => { deps.pick = deps.pick === p ? null : p; render(); };
 
+	const pick = deps.pick && kind.has(deps.pick) ? deps.pick : null;
+	const setPick = (p, at = null) => {
+		const same = deps.pick === p && deps.at === at;
+		deps.pick = same ? null : p;
+		deps.at = same ? null : at;
+		deps.reveal = !same && !!o.tap;
+		if (!same && o.tap) o.tap(p); // beside the code: the tap opens the file there
+		else render();
+	};
 	// what the picked file touches: for code what it uses and what uses it, for a document the files it names
 	const usesOf = (p) => g.links.filter((l) => l.from === p).map((l) => l.to);
-	const usersOf = (p) => L.links.filter((l) => l.to === p).map((l) => l.from);
-	const near = pick ? new Set([pick, ...usesOf(pick), ...usersOf(pick)]) : null;
-	const lit = (l) => pick && (l.from === pick || l.to === pick);
+	const usersOf = (p) => T.links.filter((l) => l.to === p).map((l) => l.from);
+	// its branches show what a file uses; the marks show what uses it (for a document, what it names)
+	const near = new Set(!pick ? [] : kind.get(pick) === "doc" ? usesOf(pick) : usersOf(pick));
 
 	const head = el("button", { class: "dep-head", "aria-expanded": String(depsOpen), onclick: () => {
 		depsOpen = !depsOpen;
 		try { depsOpen ? localStorage.removeItem("ghd-graph") : localStorage.setItem("ghd-graph", "0"); } catch {}
 		render();
-	} }, el("span", { class: "dep-title" }, "Dependency graph"), el("span", { class: "hint" }, `${plural(L.drawn.length, "file")}, ${plural(L.links.length, "link")}`),
+	} }, el("span", { class: "dep-title" }, "Dependency graph"), el("span", { class: "hint" }, `${plural(T.drawn.length, "file")}, ${plural(T.links.length, "link")}`),
 		el("span", { class: "dep-fold", "aria-hidden": "true" }, depsOpen ? "▾" : "▸"));
 	if (!depsOpen) return el("section", { class: "dep-graph folded" }, head);
 
-	const arrow = (id) => svg("marker", { id, viewBox: "0 0 10 10", refX: "5", refY: "5", markerWidth: "7", markerHeight: "7", orient: "auto-start-reverse" },
-		svg("path", { d: "M1 1.5 L9 5 L1 8.5 z" }));
-	const drawing = svg("svg", { width, height: L.height, viewBox: `0 0 ${width} ${L.height}`, role: "group", "aria-label": "Which changed file uses which" },
-		svg("defs", {}, arrow("dep-arrow"), arrow("dep-arrow-on")),
-		L.paths.map(({ link, d }) => svg("path", { class: `dep-link${link.how === "mention" ? " mention" : ""}${lit(link) ? " on" : ""}${pick && !lit(link) ? " dim" : ""}`, d,
-			"marker-end": `url(#${lit(link) ? "dep-arrow-on" : "dep-arrow"})` })),
-		L.drawn.map((p) => {
-			const b = L.box.get(p);
-			const mark = o.badge(p);
-			const node = svg("g", { class: `dep-node${p === pick ? " picked" : ""}${near && !near.has(p) ? " dim" : ""}`, "data-path": p, role: "button", tabindex: "0",
-				"aria-pressed": String(p === pick), "aria-label": p, transform: `translate(${b.x.toFixed(1)} ${b.y})`, onclick: () => setPick(p) },
-				svg("title", {}, p),
-				svg("rect", { width: L.w, height: L.h, rx: "7" }),
-				mark ? svg("circle", { cx: "15", cy: L.h / 2, r: "9", class: "dep-step-dot" }) : null,
-				mark ? svg("text", { class: "dep-step", x: "15", y: L.h / 2 + 4, "text-anchor": "middle" }, mark) : null,
-				svg("text", { class: "dep-name", x: mark ? 30 : 10, y: L.h / 2 + 4.5 }, L.label(p)));
-			node.addEventListener("keydown", (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), e.stopPropagation(), setPick(p)));
-			return node;
-		}));
-
-	const chip = (p, extra = null) => el("button", { class: `dep-chip${p === pick ? " picked" : ""}`, "aria-pressed": String(p === pick), title: p, onclick: () => setPick(p) }, shortName(p), extra);
-	const alone = g.nodes.filter((n) => n.kind === "code" && !L.drawn.includes(n.path));
-	const docs = g.nodes.filter((n) => n.kind === "doc");
+	// the line where a file has its own branches
+	const ownAt = new Map();
+	rows.forEach((r, i) => r.own && ownAt.set(r.own, i));
+	/** Shows a file where its branches are: opens what hides it, picks it there and brings it into view. */
+	const toOwn = (p) => {
+		for (let up = T.home.get(p); up != null; up = T.home.get(up)) deps.shut.delete(up);
+		deps.pick = p;
+		deps.at = deps.goto = `own:${p}`;
+		render();
+	};
+	const here = pick && rows.some((r) => r.id === deps.at && r.items.some((x) => x.path === pick)) ? deps.at : null;
 	const list = (ps) => ps.map(shortName).join(", ");
-	const picked = pick ? (() => {
+	const picked = () => {
 		const [a, b] = [usesOf(pick), usersOf(pick)];
 		const to = o.open(pick);
+		const elsewhere = T.drawn.includes(pick) && T.uses.get(pick).length > 0 && here !== `own:${pick}`;
 		return el("div", { class: "dep-pick" },
 			el("code", { class: "dep-pick-path" }, pick),
 			a.length ? el("span", {}, el("b", {}, kind.get(pick) === "doc" ? "Names " : "Uses "), list(a)) : null,
 			b.length ? el("span", {}, el("b", {}, "Used by "), list(b)) : null,
 			!a.length && !b.length ? el("span", { class: "hint" }, "No link to another changed file.") : null,
-			to ? el("button", { onclick: to.go }, to.label) : null);
-	})() : null;
+			el("span", { class: "dep-pick-go" },
+				elsewhere ? el("button", { onclick: () => toOwn(pick) }, "Go to its branch") : null,
+				to ? el("button", { onclick: to.go }, to.label) : null));
+	};
 
+	const tree = el("ol", { class: "dep-tree" }, rows.flatMap((r, i) => {
+		const file = (x) => {
+			const mark = o.badge(x.path);
+			const where = !x.again ? null : !ownAt.has(x.path) ? "…" : ownAt.get(x.path) < i ? "↑" : "↓";
+			return el("button", { class: `dep-node${x.how === "mention" ? " named" : ""}${x.path === pick ? " picked" : ""}${near.has(x.path) ? " near" : ""}`, "data-path": x.path,
+				title: `${x.path}${x.how === "mention" ? "\nRun or read by its name, not imported" : ""}${where ? "\nIts own files are listed in another place" : ""}`,
+				"aria-pressed": String(x.path === pick), onclick: () => setPick(x.path, r.id) },
+				mark ? el("span", { class: "dep-step" }, mark) : null,
+				el("span", { class: "dep-name" }, shortName(x.path)),
+				where ? el("span", { class: "dep-again", "aria-label": "its own files are listed in another place" }, where) : null);
+		};
+		const named = r.own ? r.items[0].how === "mention" : false;
+		const line = el("li", { class: `dep-row${r.own ? "" : " twigs"}`, "data-depth": String(r.trail.length), "data-row": r.id },
+			r.trail.map((last, k) => (k < r.trail.length - 1
+				? el("span", { class: `dep-rail${last ? "" : " on"}`, "aria-hidden": "true" })
+				: el("span", { class: `dep-elbow${last ? " last" : ""}${named ? " named" : ""}`, "aria-hidden": "true" }))),
+			r.own ? file(r.items[0]) : el("div", { class: "dep-twigs" }, r.items.map(file)),
+			r.own ? el("button", { class: "dep-caret", "aria-expanded": String(r.open), "aria-label": `${r.open ? "Fold" : "Unfold"} ${shortName(r.own)}`, onclick: () => {
+				deps.shut.has(r.own) ? deps.shut.delete(r.own) : deps.shut.add(r.own);
+				render();
+			} }, r.open ? "▾" : `▸ ${r.kids}`) : null);
+		return here === r.id ? [line, el("li", { class: "dep-pick-row" }, picked())] : [line];
+	}));
+	if (deps.goto) {
+		const id = deps.goto;
+		deps.goto = null;
+		// beside the code the tree scrolls on its own, and the page stays where it is
+		requestAnimationFrame(() => [...document.querySelectorAll(".dep-row")].find((x) => x.dataset.row === id)?.scrollIntoView({ block: o.tap ? "nearest" : "center" }));
+	}
+
+	if (deps.reveal) { // in its own column the tree scrolls by itself: what the tap says must be in view
+		deps.reveal = false;
+		requestAnimationFrame(() => document.querySelector(".files-side .dep-pick")?.scrollIntoView({ block: "nearest" }));
+	}
+
+	const chip = (p, extra = null) => el("button", { class: `dep-chip${p === pick ? " picked" : ""}`, "aria-pressed": String(p === pick), title: p, onclick: () => setPick(p) }, shortName(p), extra);
+	const alone = g.nodes.filter((n) => n.kind === "code" && !T.drawn.includes(n.path));
+	const docs = g.nodes.filter((n) => n.kind === "doc");
 	return el("section", { class: "dep-graph" }, head,
-		el("p", { class: "hint dep-how" }, "A file stands under the files it uses. Dashed arrow: named, not imported. Tap a file to see its links."),
-		el("div", { class: "dep-scroll" }, drawing),
-		picked,
+		el("p", { class: "hint dep-how" }, `Under each file: the files it uses. Dashed: run or read by its name, not imported. ${o.tap ? "Tap a file to open it." : "Tap a file to see what uses it."}`),
+		tree,
+		pick && !here ? picked() : null,
 		alone.length ? el("p", { class: "dep-alone" }, el("span", { class: "hint" }, "Not linked to the others: "), alone.map((n) => chip(n.path))) : null,
 		docs.length ? el("p", { class: "dep-docs" }, el("span", { class: "hint" }, "Documents: "),
 			docs.map((n) => chip(n.path, usesOf(n.path).length ? el("span", { class: "n" }, ` names ${usesOf(n.path).length}`) : null))) : null);
@@ -2539,19 +2526,32 @@ function filesChangedView(t, p) {
 			onAdd: (side, line) => { prv.form = { subject: "line", path: f.path, side, line }; render(); main.querySelector(".comment-form textarea")?.focus(); },
 		}),
 	});
+	const openFile = (path) => {
+		const f = files.data.files.find((x) => x.path === path);
+		if (f) {
+			files.open.add(path);
+			if (!files.diffs.has(path)) { files.diffs.set(path, null); loadDiff(files, t.repo, f); }
+		}
+		render();
+		[...main.querySelectorAll("li.file")].find((li) => li.dataset.path === path)?.scrollIntoView({ block: "start" });
+	};
+	// with room for two columns the tree stands beside the files, and a tap on it opens the file
+	const beside = roomy.matches && depsOpen;
+	// the page is built anew on every change: the tree's column keeps its place
+	const was = main.querySelector(".files-side")?.scrollTop;
+	if (was) requestAnimationFrame(() => { const side = main.querySelector(".files-side"); if (side) side.scrollTop = was; });
 	const graph = depsCard(t, {
 		badge: () => null,
-		open: (path) => {
-			const f = files.data.files.find((x) => x.path === path);
-			return f && { label: "Open file", go: () => {
-				files.open.add(path);
-				if (!files.diffs.has(path)) { files.diffs.set(path, null); loadDiff(files, t.repo, f); }
-				render();
-				[...main.querySelectorAll("li.file")].find((li) => li.dataset.path === path)?.scrollIntoView({ block: "start" });
-			} };
-		},
+		tap: beside ? openFile : null,
+		open: (path) => (beside || !files.data.files.some((x) => x.path === path) ? null : { label: "Open file", go: () => openFile(path) }),
 	});
-	return el("div", { class: "files-changed" }, head, form, graph, kindSwitch(kinds), list);
+	if (!beside || !graph) return el("div", { class: "files-changed" }, head, form, graph, kindSwitch(kinds), list);
+	const bar = document.querySelector(".chrome");
+	const top = bar && getComputedStyle(bar).position === "sticky" ? Math.round(bar.getBoundingClientRect().height) : 0;
+	return el("div", { class: "files-changed beside" }, head, form,
+		el("div", { class: "files-split", style: `--top: ${top}px` },
+			el("aside", { class: "files-side" }, graph),
+			el("div", { class: "files-main" }, kindSwitch(kinds), list)));
 }
 
 function reviewForm(p, own) {

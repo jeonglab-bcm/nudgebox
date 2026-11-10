@@ -281,6 +281,18 @@ release run on the server) from the file's two whole versions:
   their own views.
 - A note when omnidiff names the shape of the change: only whitespace, only comments,
   only moved code, a new file, a deleted file.
+- **Code is coloured by its language** (issue 44): keywords, strings, numbers, comments
+  and names each in their own colour, in the light and the dark theme. The language
+  comes from the file's name (`.py`, `.R`, `.ts`, `Makefile`, `Dockerfile`, …); the
+  languages are the ones the lab writes: Python, R, TypeScript and JavaScript, shell,
+  LaTeX, Nextflow, C and C++, Rust, MATLAB, Julia, Lua, JSON, YAML, TOML, Makefile,
+  Dockerfile, HTML and CSS, Markdown source, and the other common ones. The colours
+  sit **under** omnidiff's marks: a changed part keeps its mark and its colour, and
+  the text is never altered. The same colours are in the phone's one column, in the
+  code above a review thread, in the AI's draft comments (section 19) and in Compare.
+  A file of an unknown kind, and a file over 200,000 characters, stay plain. The
+  highlighter (highlight.js) is served by Nudgebox, not a third party, and loads when
+  the first diff opens.
 - **A new or a deleted file is shown plain**: its one version in one column with one
   line number, no marks and no colour on every line, as there is nothing to compare.
 - Text files over 1 MB are not diffed; the view says so and links to GitHub.

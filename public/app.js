@@ -879,17 +879,117 @@ function markLines(side, text, hunks) {
 	return { lines, marks };
 }
 
-// one line's code with omnidiff's marks as spans
-function codeParts(line, marks) {
+// -- syntax colours (SPEC 15): highlight.js, loaded when code is first drawn -------------
+const HL = "/vendor/highlight-11.12.0";
+const HL_MORE = ["latex", "groovy", "dockerfile", "matlab", "julia"]; // the lab's languages that the common build lacks
+const HL_MAX = 200_000; // characters: a longer file stays plain, so the page stays fast
+const HL_EXT = {
+	py: "python", pyi: "python", pyw: "python", smk: "python", r: "r", rmd: "markdown", qmd: "markdown", md: "markdown", markdown: "markdown",
+	ts: "typescript", tsx: "typescript", mts: "typescript", cts: "typescript", js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript",
+	sh: "bash", bash: "bash", zsh: "bash", sbatch: "bash", slurm: "bash", json: "json", ipynb: "json", yml: "yaml", yaml: "yaml", toml: "ini", ini: "ini", cfg: "ini",
+	c: "c", h: "c", cpp: "cpp", cc: "cpp", cxx: "cpp", hpp: "cpp", hh: "cpp", rs: "rust", go: "go", java: "java", kt: "kotlin", lua: "lua", pl: "perl", pm: "perl",
+	php: "php", rb: "ruby", swift: "swift", cs: "csharp", sql: "sql", css: "css", scss: "scss", less: "less", html: "xml", htm: "xml", xml: "xml", svg: "xml",
+	tex: "latex", sty: "latex", cls: "latex", nf: "groovy", groovy: "groovy", gradle: "groovy", jl: "julia", m: "matlab", mk: "makefile", diff: "diff", patch: "diff",
+	graphql: "graphql", dockerfile: "dockerfile",
+};
+const HL_FILE = { makefile: "makefile", gnumakefile: "makefile", snakefile: "python", "nextflow.config": "groovy", ".bashrc": "bash", ".zshrc": "bash", ".profile": "bash", ".bash_profile": "bash" };
+
+/** The language of a file by its name; null when Nudgebox does not know it. */
+function langOf(path) {
+	const name = path.split("/").pop().toLowerCase();
+	if (HL_FILE[name]) return HL_FILE[name];
+	if (/^dockerfile(\.|$)/.test(name)) return "dockerfile";
+	return (name.includes(".") && HL_EXT[name.split(".").pop()]) || null;
+}
+
+let hlLib = null;
+function loadHl() {
+	hlLib ??= Promise.all([import(`${HL}.min.mjs`), ...HL_MORE.map((l) => import(`${HL}-${l}.min.mjs`))]).then(([core, ...more]) => {
+		more.forEach((m, i) => core.default.registerLanguage(HL_MORE[i], m.default));
+		hlLib.ready = core.default;
+		render();
+	}).catch(() => {}); // without the highlighter the code is plain
+	return hlLib.ready;
+}
+
+// highlight.js writes HTML: spans with a class around escaped text. Only these pieces occur in it.
+const HL_PIECE = /<span class="([^"]*)">|<\/span>|&(?:amp|lt|gt|quot|#x27);|[^<&]+/g;
+
+/** Per line, the coloured ranges [start, end, class] in highlight.js's HTML. A range takes its innermost span. */
+function tokenLines(html) {
+	const lines = [[]];
+	const open = [];
+	let col = 0;
+	for (const m of html.matchAll(HL_PIECE)) {
+		if (m[1] !== undefined) open.push(m[1]);
+		else if (m[0] === "</span>") open.pop();
+		else {
+			const cls = open.findLast((c) => c.startsWith("hljs-"));
+			(m[0][0] === "&" ? ["x"] : m[0].split("\n")).forEach((piece, k) => { // an escaped character is one character of the file
+				if (k) lines.push([]), col = 0;
+				const row = lines.at(-1), last = row.at(-1);
+				if (cls && piece) {
+					if (last && last[1] === col && last[2] === cls) last[1] += piece.length;
+					else row.push([col, col + piece.length, cls]);
+				}
+				col += piece.length;
+			});
+		}
+	}
+	return lines;
+}
+
+const hlCache = new Map(); // language -> text -> its lines' ranges
+
+/** The coloured ranges of each line of `text`, a file or a piece of one; null when it stays plain. */
+function hlLines(text, path) {
+	const lang = path ? langOf(path) : null;
+	if (!lang || text.length > HL_MAX) return null;
+	const hljs = loadHl();
+	if (!hljs?.getLanguage(lang)) return null;
+	if (!hlCache.has(lang)) hlCache.set(lang, new Map());
+	const kept = hlCache.get(lang);
+	let lines = kept.get(text);
+	if (!lines) {
+		try {
+			lines = tokenLines(hljs.highlight(text, { language: lang, ignoreIllegals: true }).value);
+		} catch {
+			return null;
+		}
+		kept.set(text, lines);
+		if (kept.size > 40) kept.delete(kept.keys().next().value); // the oldest goes
+	}
+	return lines;
+}
+
+/** `line` from column `from` to `to`, as text and one span per coloured range. */
+function hlNodes(line, toks, from = 0, to = line.length) {
+	if (!toks?.length) return [line.slice(from, to)];
+	const out = [];
+	let at = from;
+	for (const [start, end, cls] of toks) {
+		if (end <= at) continue;
+		if (start >= to) break;
+		const a = Math.max(start, at), b = Math.min(end, to);
+		if (a > at) out.push(line.slice(at, a));
+		out.push(el("span", { class: cls }, line.slice(a, b)));
+		at = b;
+	}
+	if (at < to) out.push(line.slice(at, to));
+	return out;
+}
+
+// one line's code with omnidiff's marks as spans, and the syntax colours inside and around them
+function codeParts(line, marks, toks) {
 	const parts = [];
 	let at = 0;
 	for (const m of [...marks].sort((a, b) => a.start - b.start)) {
 		if (m.start < at) continue; // overlapping ranges: keep the first
-		if (m.start > at) parts.push(line.slice(at, m.start));
-		parts.push(el("span", { class: `m-${m.op}`, title: m.title }, line.slice(m.start, m.end)));
+		if (m.start > at) parts.push(...hlNodes(line, toks, at, m.start));
+		parts.push(el("span", { class: `m-${m.op}`, title: m.title }, hlNodes(line, toks, m.start, m.end)));
 		at = m.end;
 	}
-	if (at < line.length) parts.push(line.slice(at));
+	if (at < line.length) parts.push(...hlNodes(line, toks, at));
 	return parts;
 }
 
@@ -901,8 +1001,9 @@ function lineNo(n, sideKey, review) {
 		onclick: (e) => { e.stopPropagation(); review.onAdd(sideKey, n); } }, n);
 }
 
-function pane(side, ref, text, hunks, label, review) {
+function pane(side, ref, text, hunks, label, review, path) {
 	const { lines, marks } = markLines(side, text, hunks);
+	const toks = hlLines(text, path);
 	const show = lines.map(() => false);
 	marks.forEach((m, row) => {
 		if (m.length) for (let r = Math.max(0, row - 3); r <= Math.min(lines.length - 1, row + 3); r++) show[r] = true;
@@ -925,7 +1026,7 @@ function pane(side, ref, text, hunks, label, review) {
 	lines.forEach((line, row) => {
 		if (!show[row]) return void hidden++;
 		fold();
-		const parts = codeParts(line, marks[row]);
+		const parts = codeParts(line, marks[row], toks?.[row]);
 		const n = row + 1;
 		const add = review && inRanges(review.commentable?.[sideKey === "LEFT" ? "left" : "right"], n)
 			? el("button", { class: "add-comment", "aria-label": `Comment on line ${n}`, title: "Comment on this line",
@@ -1059,7 +1160,7 @@ function diffView(f, r, github, modes = files.mdMode, labels = {}, review = null
 	const choose = (mode) => (e) => { e.stopPropagation(); modes.set(f.path, mode); render(); };
 	const side = (name) => r[name] && (rendered
 		? mdPane(name, r[name].ref, r[name].text, r.result[name].hunks, lib, labels[name])
-		: pane(name, r[name].ref, r[name].text, r.result[name].hunks, labels[name], review));
+		: pane(name, r[name].ref, r[name].text, r.result[name].hunks, labels[name], review, r[name].path ?? f.path));
 	const canExplain = Boolean(data.pr?.summarize);
 	return el("div", { class: `diff${r.before && r.after ? "" : " one-side"}` }, // a new or deleted file: nothing to compare
 		md || canExplain ? el("div", { class: "diff-tools" },
@@ -1101,12 +1202,12 @@ function uLine(row, a, b, review) {
 	const old = row.i !== undefined ? row.i + 1 : null, now = row.j !== undefined ? row.j + 1 : null;
 	const del = row.t === "del";
 	const k = del ? row.i : row.j;
-	const [lines, marks] = del ? [a.lines, a.marks] : [b.lines, b.marks];
+	const { lines, marks, toks } = del ? a : b;
 	return el("div", { class: `u-line u-${row.t}` },
 		del ? lineNo(old, "LEFT", review) : el("span", { class: "ln old" }, old ?? ""),
 		del ? el("span", { class: "ln new" }) : lineNo(now, "RIGHT", review),
 		el("span", { class: "sign", "aria-hidden": "true" }, { del: "−", add: "+", ctx: "" }[row.t]),
-		el("span", { class: "code" }, codeParts(lines[k], marks[k])));
+		el("span", { class: "code" }, codeParts(lines[k], marks[k], toks?.[k])));
 }
 
 function uExtras(row, review) {
@@ -1120,7 +1221,7 @@ function uExtras(row, review) {
 }
 
 function unifiedView(r, labels, review) {
-	const side = (name) => (r[name] ? markLines(name, r[name].text, r.result[name].hunks) : { lines: [], marks: [] });
+	const side = (name) => (r[name] ? { ...markLines(name, r[name].text, r.result[name].hunks), toks: hlLines(r[name].text, r[name].path) } : { lines: [], marks: [] });
 	const a = side("before"), b = side("after");
 	const rows = unify(a, b);
 	const changed = rows.map((x) => x.t !== "ctx");
@@ -1510,9 +1611,10 @@ const when = (iso) => el("time", { datetime: iso, title: new Date(iso).toLocaleS
 
 // -- threads and line comments
 
-function hunkView(h) {
+function hunkView(h, path) {
 	const lines = h.split("\n").filter((l) => !l.startsWith("@@")).slice(-6);
-	return el("pre", { class: "hunk" }, lines.map((l) => el("div", { class: l[0] === "+" ? "h-add" : l[0] === "-" ? "h-del" : "" }, l)));
+	const toks = hlLines(lines.map((l) => l.slice(1)).join("\n"), path); // the sign in front is not code
+	return el("pre", { class: "hunk" }, lines.map((l, k) => el("div", { class: l[0] === "+" ? "h-add" : l[0] === "-" ? "h-del" : "" }, l.slice(0, 1), hlNodes(l.slice(1), toks?.[k]))));
 }
 
 function threadView(th, where) {
@@ -1527,7 +1629,7 @@ function threadView(th, where) {
 			th.line ? el("span", { class: "thread-line" }, `line ${th.line}`) : null,
 			th.outdated ? el("span", { class: "flag" }, "Outdated") : null,
 			th.resolved ? el("span", { class: "flag" }, "Resolved") : null),
-		where === "conversation" && th.diffHunk ? hunkView(th.diffHunk) : null,
+		where === "conversation" && th.diffHunk ? hunkView(th.diffHunk, th.path) : null,
 		...th.comments.map((c) => el("div", { class: "thread-comment" },
 			el("div", { class: "c-head" }, el("b", {}, c.author), " ", when(c.at), c.pending ? el("span", { class: "flag pending" }, "Pending") : null),
 			md(c.body))),
@@ -2150,9 +2252,10 @@ function draftView(d, current, short) {
 	const where = `${short(d.path)}:${d.side === "LEFT" ? "−" : "+"}${d.line}`;
 	const editing = g.editing === d.id;
 	const cls = `draft ${d.state}${editing ? " editing" : ""}${current ? " current" : ""}`;
-	const code = d.code?.length ? el("div", { class: "draft-code" }, d.code.map((c) =>
+	const toks = d.code?.length ? hlLines(d.code.map((c) => c.text).join("\n"), d.path) : null;
+	const code = d.code?.length ? el("div", { class: "draft-code" }, d.code.map((c, k) =>
 		el("div", { class: `dc dc-${c.mark === "+" ? "add" : c.mark === "-" ? "del" : "ctx"}${c.hit ? " hit" : ""}` },
-			el("span", { class: "ln" }, c.n), el("span", { class: "sign", "aria-hidden": "true" }, c.mark === "-" ? "−" : c.mark.trim()), el("span", { class: "code" }, c.text)))) : null;
+			el("span", { class: "ln" }, c.n), el("span", { class: "sign", "aria-hidden": "true" }, c.mark === "-" ? "−" : c.mark.trim()), el("span", { class: "code" }, hlNodes(c.text, toks?.[k]))))) : null;
 	if (editing) {
 		return el("div", { class: cls },
 			el("div", { class: "draft-where" }, where),

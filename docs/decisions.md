@@ -274,3 +274,30 @@ with it, Escape sometimes did not close the box.
 
 Not done here, and still a proposal: a picture of how the changed files depend on each
 other (issue #40), for reviews that are less text.
+
+## 2026-11-09: Syntax colours in diffs
+
+Dr. Jeong asked for syntax highlighting (issue 44). Diffs were one colour of text with
+omnidiff's marks; a long change in Python or R was hard to scan.
+
+**highlight.js** (BSD-3-Clause, one pinned release in `public/vendor/`), not
+tree-sitter or Shiki: it is one small file with no build step and no WebAssembly, it
+covers every language the lab writes, and it runs in the browser on the text the page
+already has, so the server and the kept diffs do not change. Tree-sitter grammars are
+more exact but are one WebAssembly file per language to build and ship; the colours
+here only help reading, they decide nothing.
+
+The languages were chosen from the lab's repos on 2026-11-09 (Python in 25, shell 14,
+TeX 8, R 7, Nextflow 6, then Makefile, JavaScript, TypeScript, Dockerfile, C++, Rust,
+MATLAB, Lua, Julia, C): the common set of highlight.js plus LaTeX, Groovy (for
+Nextflow), Dockerfile, MATLAB and Julia. The language comes from the file name only;
+guessing from the text is slow and often wrong.
+
+A whole file is coloured once (about 0.1 s for 200,000 characters) and kept, then cut
+into lines, so a string or a comment that runs over lines is right on every line. A
+token has a colour and no background, so the marks show through; the colours were
+checked for contrast on every mark, in both themes. Files over 200,000 characters stay
+plain so a huge data file does not stall a phone.
+
+Not done here: colours inside the code blocks of rendered Markdown and of the AI's
+answers.

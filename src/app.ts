@@ -97,6 +97,8 @@ const STATIC: Record<string, string> = {
 	"/vendor/purify-3.4.17.es.mjs": "text/javascript", // SPEC 15: cleans it (MPL-2.0 or Apache-2.0)
 	"/vendor/pdf-6.5.438.min.mjs": "text/javascript", // SPEC 15: draws PDF pages (pdf.js, Apache-2.0)
 	"/vendor/pdf.worker-6.5.438.min.mjs": "text/javascript",
+	"/vendor/highlight-11.12.0.min.mjs": "text/javascript", // SPEC 15: syntax colours (highlight.js, BSD-3-Clause)
+	...Object.fromEntries(["latex", "groovy", "dockerfile", "matlab", "julia"].map((l) => [`/vendor/highlight-11.12.0-${l}.min.mjs`, "text/javascript"])),
 	"/fonts/Inter-400-700.woff2": "font/woff2",
 	"/fonts/SpaceGrotesk-500-700.woff2": "font/woff2",
 	"/fonts/JetBrainsMono-400-600.woff2": "font/woff2",

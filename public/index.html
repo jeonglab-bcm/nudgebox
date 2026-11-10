@@ -294,17 +294,20 @@ button.link { border: 0; background: none; padding: 0; font: inherit; text-decor
   --bg: oklch(99% 0 0); --fg: oklch(18% 0 0); --muted: oklch(46% 0 0); --faint: oklch(95% 0 0); --line: oklch(91% 0 0);
   --accent: oklch(60% 0.21 32); --accent-ink: oklch(99% 0 0); --sel: oklch(96.5% 0.014 32);
   --ok: oklch(52% 0.13 150); --bad: oklch(55% 0.2 27); --wait: oklch(62% 0.13 75); --move: oklch(55% 0.13 255);
+  --hl-comment: oklch(43% 0 0); --hl-keyword: oklch(46% 0.2 305); --hl-string: oklch(42% 0.1 185); --hl-number: oklch(44% 0.17 255); --hl-title: oklch(45% 0.12 55); --hl-type: oklch(46% 0.14 350);
   --sans: "Inter", system-ui, sans-serif; --display: "Space Grotesk", var(--sans); --mono: "JetBrains Mono", ui-monospace, monospace;
   --fast: 150ms; --ease: cubic-bezier(0.4, 0, 0.2, 1); }
 /* theme (SPEC 14): light unless the device is dark; a choice in Settings wins either way */
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark;
   --bg: oklch(15% 0 0); --fg: oklch(94% 0 0); --muted: oklch(68% 0 0); --faint: oklch(21% 0 0); --line: oklch(26% 0 0);
   --accent: oklch(70% 0.17 32); --accent-ink: oklch(15% 0 0); --sel: oklch(20.5% 0.022 32);
-  --ok: oklch(74% 0.14 150); --bad: oklch(70% 0.17 27); --wait: oklch(80% 0.13 80); --move: oklch(74% 0.1 255); } }
+  --ok: oklch(74% 0.14 150); --bad: oklch(70% 0.17 27); --wait: oklch(80% 0.13 80); --move: oklch(74% 0.1 255);
+  --hl-comment: oklch(76% 0 0); --hl-keyword: oklch(78% 0.13 305); --hl-string: oklch(78% 0.1 185); --hl-number: oklch(78% 0.11 255); --hl-title: oklch(80% 0.1 70); --hl-type: oklch(78% 0.1 350); } }
 :root[data-theme="dark"] { color-scheme: dark;
   --bg: oklch(15% 0 0); --fg: oklch(94% 0 0); --muted: oklch(68% 0 0); --faint: oklch(21% 0 0); --line: oklch(26% 0 0);
   --accent: oklch(70% 0.17 32); --accent-ink: oklch(15% 0 0); --sel: oklch(20.5% 0.022 32);
-  --ok: oklch(74% 0.14 150); --bad: oklch(70% 0.17 27); --wait: oklch(80% 0.13 80); --move: oklch(74% 0.1 255); }
+  --ok: oklch(74% 0.14 150); --bad: oklch(70% 0.17 27); --wait: oklch(80% 0.13 80); --move: oklch(74% 0.1 255);
+  --hl-comment: oklch(76% 0 0); --hl-keyword: oklch(78% 0.13 305); --hl-string: oklch(78% 0.1 185); --hl-number: oklch(78% 0.11 255); --hl-title: oklch(80% 0.1 70); --hl-type: oklch(78% 0.1 350); }
 body { background: var(--bg); color: var(--fg); font: 14px/1.45 var(--sans); font-feature-settings: "cv11", "ss01"; }
 .chrome { background: var(--bg); }
 .bar { padding-top: 18px; padding-bottom: 12px; }
@@ -433,6 +436,15 @@ kbd { font: 500 11px var(--mono); padding: 1px 5px; border-radius: 4px; backgrou
 .m-delete { background: color-mix(in oklch, var(--bad) 22%, transparent); border-radius: 2px; text-decoration: line-through; text-decoration-color: color-mix(in oklch, var(--bad) 60%, transparent); }
 .m-update { background: color-mix(in oklch, var(--wait) 30%, transparent); border-radius: 2px; }
 .m-move { background: color-mix(in oklch, var(--move) 22%, transparent); border-radius: 2px; outline: 1px dashed color-mix(in oklch, var(--move) 70%, transparent); outline-offset: -1px; }
+/* SPEC 15: syntax colours. A token has a colour and no background, so omnidiff's marks show through. */
+.hljs-comment, .hljs-quote, .hljs-meta, .hljs-doctag { color: var(--hl-comment); } .hljs-comment, .hljs-quote { font-style: italic; }
+.hljs-keyword, .hljs-selector-tag, .hljs-name, .hljs-section { color: var(--hl-keyword); }
+.hljs-string, .hljs-regexp, .hljs-symbol, .hljs-link, .hljs-char { color: var(--hl-string); }
+.hljs-number, .hljs-literal, .hljs-bullet { color: var(--hl-number); }
+.hljs-title, .hljs-selector-id, .hljs-selector-class { color: var(--hl-title); }
+.hljs-built_in, .hljs-type, .hljs-attr, .hljs-attribute, .hljs-variable, .hljs-template-variable { color: var(--hl-type); }
+.hljs-emphasis { font-style: italic; } .hljs-strong, .hljs-section { font-weight: 600; }
+.hljs-addition { color: var(--ok); } .hljs-deletion { color: var(--bad); }
 #tray { background: var(--bg); border-top: 1px solid var(--line); box-shadow: 0 -4px 16px oklch(0% 0 0 / .06); font-size: 13px; }
 #tray .label { font: 500 11px var(--sans); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
 #tray .picked { font: 12.5px var(--mono); background: var(--faint); border-radius: 6px; padding: 3px 4px 3px 8px; }

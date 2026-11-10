@@ -7,7 +7,7 @@
 import type { ChangedFile, PullRequest } from "./github.ts";
 import type { Prompt } from "./llm.ts";
 import type { DiffResult } from "./omnidiff.ts";
-import { unify } from "./explain.ts";
+import { earlierTurns, MAX_QUESTION, unify, type AskTurn } from "./explain.ts";
 import { MAX_PROMPT } from "./summary.ts";
 
 /** Bumped when a prepared review's shape or prompts change, so old ones are made again. */
@@ -319,8 +319,7 @@ export function readCheck(answer: string): boolean {
 
 // -- 4. answer a question about one step (SPEC 19, Ask) ---------------------------------
 
-export const MAX_QUESTION = 2000; // characters
-const MAX_EARLIER = 8000; // characters of earlier questions and answers that go with a new one
+export { MAX_QUESTION };
 
 const ASK = `You answer a reviewer's question about one step of a GitHub pull request. The
 reviewer is a busy lab member who reads this step's changes now.
@@ -343,7 +342,7 @@ it only to answer the question.`;
 
 /** What a question is about, when not the whole step: one file, or one draft comment (with its line). */
 export type AskAbout = { path: string; draft?: string; side?: "LEFT" | "RIGHT"; line?: number };
-export type AskTurn = { question: string; answer: string };
+export type { AskTurn };
 
 /** Each file's share of `room` characters: a small file is whole, and what it leaves goes to the bigger ones. */
 function shares(sizes: number[], room: number): number[] {
@@ -370,13 +369,7 @@ export function askPrompt(
 	const head = [`Pull request: ${pr.title}`, `Today is ${today}.`, `Step: ${step.title}${step.summary ? ` (${step.summary})` : ""}`].join("\n");
 	const notes = Object.entries(step.notes ?? {}).map(([path, note]) => `- ${path}: ${oneLine(note)}`);
 	const drafts = step.drafts.map((d) => `- ${d.path}, ${lineOf(d)}: ${oneLine(d.body)}`);
-	const turns: string[] = [];
-	let used = 0;
-	for (const t of earlier.toReversed()) { // the newest ones, as many as fit
-		const turn = `Q: ${t.question.slice(0, 600)}\nA: ${t.answer.slice(0, 2000)}`;
-		if ((used += turn.length) > MAX_EARLIER) break;
-		turns.unshift(turn);
-	}
+	const turns = earlierTurns(earlier);
 	const draft = ask.about?.draft ? step.drafts.find((d) => d.path === ask.about!.path && d.side === ask.about!.side && d.line === ask.about!.line) : undefined;
 	const about = draft ? `The question is about this draft comment on ${draft.path}, ${lineOf(draft)}: ${oneLine(draft.body)}\n`
 		: ask.about ? `The question is about the file ${ask.about.path}.\n` : "";

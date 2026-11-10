@@ -298,3 +298,21 @@ before it.
 
 Not done here: the same box under an **Explain** answer on Files changed (the rest of
 #43), which follows on its own.
+
+## 2026-11-09: Explain: questions under an explanation
+
+The rest of #43. An explanation was one answer with no way to ask further.
+
+- **A box under the explanation, not a panel.** Explain sits above one file's diff, so
+  the questions stay there too, between the explanation and the diff. No dock as in
+  Guided review: there is no bar of buttons to sit on, and several files can be open.
+- **The explanation is shared; the questions are not.** An explanation is kept per file
+  version pair for everyone. Questions are kept per person under the same pair, as in
+  Guided review, so nobody reads what another person asked.
+- **Only after Explain.** The model answers from the changes, the explanation and the
+  earlier questions. Asking with no explanation would need a second way to start, for
+  one click saved.
+- **No "Use as comment" here.** On Files changed the comment boxes are on the lines; in
+  Guided review the answer could go to the draft it was about. It can follow if wanted.
+- `render()` now keeps the cursor in a box being typed in on every page (it did only on
+  the PR page), since Compare has this box too.

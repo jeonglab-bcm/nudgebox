@@ -20,7 +20,7 @@ import type { LlmConfig, Prompt, Provider, Summarize } from "./llm.ts";
 import { issuePrompt, prPrompt, SUMMARY_FORMAT } from "./summary.ts";
 import type { Differ, DiffSide } from "./omnidiff.ts";
 import { hasMarkers, planMerge, type ReadFile } from "./conflicts.ts";
-import { EXPLAIN_FORMAT, explainPrompt } from "./explain.ts";
+import { EXPLAIN_FORMAT, explainAskPrompt, explainPrompt } from "./explain.ts";
 import { askPrompt, carryPlan, checkPrompt, codeAt, commentable, dataSteps, isData, MAX_DRAFTS_PER_STEP, MAX_QUESTION, noiseReason, numberedChanges, parseJson, planPrompt, readCheck, readPlan, readReview, REVIEW_FORMAT, reviewPrompts, type AskAbout, type CodeLine, type Draft, type FileChanges, type PlanStep } from "./review.ts";
 
 export interface Config {
@@ -705,10 +705,8 @@ export function createApp(opts: AppOptions): App {
 		return r;
 	}
 
-	/** SPEC 17: Explain a file's diff. The kept explanation, or the run making it. */
-	async function explainFor(req: IncomingMessage, lab: string): Promise<{ kept: string } | { run: SummaryRun }> {
-		if (!ai()) throw new HttpError(503, "AI explanations are not set up");
-		const b = await json(req);
+	/** SPEC 17: the diff a request body names, as Explain reads it, and where its explanation is kept. */
+	async function explainTarget(b: any, lab: string) {
 		const sides = await sidesOf(b, lab);
 		const d = await diffOf(sides);
 		// a binary side comes back with its size and no text
@@ -720,10 +718,40 @@ export function createApp(opts: AppOptions): App {
 		const title = pr && repos.has(pr.repo.toLowerCase()) ? pr.title : null;
 		const key = `explain:${JSON.stringify(sides.map((s) => s && [s.repo.toLowerCase(), s.ref, s.path]))}`;
 		const version = `${EXPLAIN_FORMAT}|${title ?? ""}`;
-		const kept = store.summary(key, version);
-		if (kept !== undefined) return { kept };
-		const path = (sides[1] ?? sides[0])!.path;
-		return { run: modelRun(key, version, async () => explainPrompt(path, title, before, after, d.result)) };
+		return { key, version, path: (sides[1] ?? sides[0])!.path, title, before, after, result: d.result };
+	}
+
+	/** SPEC 17: Explain a file's diff. The kept explanation, or the run making it, and this person's questions under it. */
+	async function explainFor(req: IncomingMessage, lab: string): Promise<({ kept: string } | { run: SummaryRun }) & { asks: object[] }> {
+		if (!ai()) throw new HttpError(503, "AI explanations are not set up");
+		const x = await explainTarget(await json(req), lab);
+		const asks = store.asks(lab, x.key).map(({ question, answer, at }) => ({ question, answer, at }));
+		const kept = store.summary(x.key, x.version);
+		if (kept !== undefined) return { kept, asks };
+		return { run: modelRun(x.key, x.version, async () => explainPrompt(x.path, x.title, x.before, x.after, x.result)), asks };
+	}
+
+	/**
+	 * SPEC 17: a question about an explained diff, answered by the model from the same
+	 * changes, the explanation and the questions before. Kept for the person who asked,
+	 * with the explanation. One question per person and diff at a time.
+	 */
+	async function explainAskFor(req: IncomingMessage, lab: string): Promise<SummaryRun> {
+		if (!ai()) throw new HttpError(503, "AI answers are not set up");
+		const b = await json(req);
+		const x = await explainTarget(b, lab);
+		const question = typeof b.question === "string" ? b.question.trim() : "";
+		if (!question) bad("the question is empty");
+		if (question.length > MAX_QUESTION) bad(`the question is too long (at most ${MAX_QUESTION} characters)`);
+		const explanation = store.summary(x.key, x.version);
+		if (explanation === undefined) throw new HttpError(409, "explain the file first");
+		const id = `ask:${lab}:${x.key}`;
+		if (summarizing.has(id)) throw new HttpError(409, "wait for the answer to your last question");
+		const earlier = store.asks(lab, x.key);
+		return startRun(id, async () => explainAskPrompt(x.path, x.title, x.before, x.after, x.result, explanation, earlier, question), (answer) => {
+			if (!answer.trim()) throw new HttpError(502, "the model gave no answer; ask again");
+			store.addAsk(lab, x.key, "", { question, answer: answer.trim(), about: null }, opts.now().toISOString());
+		});
 	}
 
 	// -- guided review (SPEC 19) -------------------------------------------------------
@@ -1074,7 +1102,7 @@ export function createApp(opts: AppOptions): App {
 	}
 
 	/** A model run as server-sent events: stage, text pieces, then done ({[name], cached}) or error. */
-	async function streamRun(res: ServerResponse, s: { kept: string } | { run: SummaryRun }, name: string) {
+	async function streamRun(res: ServerResponse, s: { kept: string } | { run: SummaryRun }, name: string, more: object = {}) {
 		res.writeHead(200, {
 			"content-type": "text/event-stream", "cache-control": "no-store", "x-content-type-options": "nosniff",
 			"x-accel-buffering": "no", // nginx: pass each event on at once
@@ -1083,7 +1111,7 @@ export function createApp(opts: AppOptions): App {
 			if (!res.writableEnded) res.write(`${event ? `event: ${event}\n` : ""}data: ${JSON.stringify(data)}\n\n`);
 		};
 		if ("kept" in s) {
-			emit("done", { [name]: s.kept, cached: true });
+			emit("done", { [name]: s.kept, cached: true, ...more });
 			return res.end();
 		}
 		const run = s.run;
@@ -1093,7 +1121,7 @@ export function createApp(opts: AppOptions): App {
 		const watch = (e: SummaryEvent) => ("delta" in e ? emit(null, { delta: e.delta }) : emit("stage", e));
 		run.watchers.add(watch);
 		try {
-			emit("done", { [name]: await run.done, cached: false });
+			emit("done", { [name]: await run.done, cached: false, ...more });
 		} catch (e) {
 			emit("error", { error: (e as Error).message });
 		} finally {
@@ -1351,8 +1379,13 @@ export function createApp(opts: AppOptions): App {
 		}
 		if (method === "POST" && path === "/api/explain") { // SPEC 17
 			const s = await explainFor(req, lab);
-			if (String(req.headers.accept ?? "").includes("text/event-stream")) return streamRun(res, s, "explanation");
-			return send(res, 200, "kept" in s ? { explanation: s.kept, cached: true } : { explanation: await s.run.done, cached: false });
+			if (String(req.headers.accept ?? "").includes("text/event-stream")) return streamRun(res, s, "explanation", { asks: s.asks });
+			return send(res, 200, "kept" in s ? { explanation: s.kept, cached: true, asks: s.asks } : { explanation: await s.run.done, cached: false, asks: s.asks });
+		}
+		if (method === "POST" && path === "/api/explain/ask") { // SPEC 17
+			const run = await explainAskFor(req, lab);
+			if (String(req.headers.accept ?? "").includes("text/event-stream")) return streamRun(res, { run }, "answer");
+			return send(res, 200, { answer: (await run.done).trim() });
 		}
 		if (method === "POST" && path === "/api/summarize" && String(req.headers.accept ?? "").includes("text/event-stream")) {
 			return summarizeStream(req, res, lab);

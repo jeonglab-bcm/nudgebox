@@ -452,6 +452,21 @@ and Compare.
   kept one. If the LLM fails, the error is shown and nothing is kept.
 - The file's text is data, never instructions to the model.
 
+**Questions about it** (issue 43). Under an explanation is a box to ask about the file's
+changes, and your questions with their answers above it, the newest last. On a computer
+Enter sends and Shift+Enter makes a new line; on a phone the **Ask** button sends.
+
+- The model reads what Explain read, the explanation, and your earlier questions on this
+  diff with its answers (the newest that fit), and your question last. It is told to say
+  so when the answer needs code that is not in the diff. The answer is short, in
+  Markdown, and streamed as it is written.
+- Questions are yours only: kept per person with the explanation, shown again when you
+  open it later, and never sent to GitHub. The explanation itself stays shared.
+- A question has at most 2,000 characters, and one is answered at a time. If the LLM
+  fails or gives no answer, the error is shown, nothing is kept, and the question stays
+  in the box.
+- The box is there only under a whole explanation, so not without an LLM.
+
 ## 18. Desktop app (Mac and Linux)
 
 A small **Nudgebox** app for macOS and Linux (Tauri), for notifications that do not

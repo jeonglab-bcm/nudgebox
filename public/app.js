@@ -318,7 +318,11 @@ function fold(id, title, entries) {
 }
 
 function render() {
+	// keep the focus and the caret in a box being typed in, on every page
+	const focused = document.activeElement?.dataset?.draft;
+	const caret = focused ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
 	renderPage();
+	if (document.activeElement?.dataset?.draft !== focused) refocus(focused, caret);
 	renderTray();
 }
 
@@ -1023,7 +1027,7 @@ async function explain(r, pr) {
 		await streamPost("/api/explain", { before: sideRef(r.before), after: sideRef(r.after), ...(pr ? { pr } : {}) }, (event, data) => {
 			if (event === "stage") explaining.set(k, data.stage);
 			else if (event === "message") explained.set(k, explained.get(k) + data.delta);
-			else if (event === "done") explained.set(k, data.explanation), explaining.delete(k);
+			else if (event === "done") explained.set(k, data.explanation), explainAsks.set(k, data.asks ?? []), explaining.delete(k);
 			repaint();
 		});
 		if (explaining.has(k)) throw new Error("The explanation stopped before the end; try again");
@@ -1044,6 +1048,60 @@ function explainBox(r) {
 	const live = stage ? " streaming" : "";
 	return el("div", { class: `explain${live}`, role: "status" },
 		text ? el("p", {}, inline(text)) : el("p", { class: "pending" }, stage === "reading" ? "Reading the changes…" : "Writing…"));
+}
+
+// Questions under an explanation: yours only, answered from the same changes and kept with it.
+const explainAsks = new Map(); // diff key -> [{question, answer}]
+const explainAsking = new Map(); // diff key -> {question, text, stage} while the model answers
+
+async function explainAsk(r, pr) {
+	const k = diffKey(r);
+	const key = `explain-ask:${k}`;
+	const question = (drafts.get(key) ?? "").trim();
+	if (explainAsking.has(k)) return;
+	if (!question) return toast("Write a question first");
+	const run = { question, text: "", stage: "reading" };
+	explainAsking.set(k, run);
+	drafts.delete(key);
+	render();
+	try {
+		let answer = null;
+		await streamPost("/api/explain/ask", { before: sideRef(r.before), after: sideRef(r.after), ...(pr ? { pr } : {}), question }, (event, data) => {
+			if (event === "stage") run.stage = data.stage;
+			else if (event === "message") run.text += data.delta;
+			else if (event === "done") answer = data.answer.trim();
+			repaint();
+		});
+		if (answer === null) throw new Error("The answer stopped before the end; ask again");
+		explainAsks.set(k, [...(explainAsks.get(k) ?? []), { question, answer }]);
+	} catch (e) {
+		if (!drafts.get(key)?.trim()) drafts.set(key, question); // the question is not lost
+		toast(e.message);
+	} finally {
+		explainAsking.delete(k);
+		render();
+	}
+}
+
+function explainAskBox(r, pr) {
+	const k = diffKey(r);
+	if (!explained.get(k) || explaining.has(k)) return null; // only under a whole explanation
+	const live = explainAsking.get(k);
+	const send = () => explainAsk(r, pr);
+	const turn = (x, streaming) => el("div", { class: `ask-turn${streaming ? " streaming" : ""}` },
+		el("div", { class: "ask-q" }, x.question),
+		streaming && !x.text ? el("p", { class: "ask-answer pending", role: "status" }, x.stage === "reading" ? "Reading the changes…" : "Writing…")
+			: md(streaming ? x.text : x.answer, "ask-answer"));
+	const box = draftBox(`explain-ask:${k}`, phone() ? "Ask about these changes" : "Ask about these changes (only you see it)", { rows: "1", "aria-label": "Your question about these changes" });
+	box.addEventListener("keydown", (e) => {
+		if (e.key !== "Enter" || e.shiftKey || e.isComposing || !sendsOnEnter()) return;
+		e.preventDefault();
+		send();
+	});
+	return el("div", { class: "explain-ask", onclick: (e) => e.stopPropagation() },
+		(explainAsks.get(k) ?? []).map((x) => turn(x, false)), live ? turn(live, true) : null,
+		el("div", { class: "ask-form" }, box,
+			el("button", { class: "primary ask-send", disabled: Boolean(live), onclick: send }, "Ask")));
 }
 
 function diffView(f, r, github, modes = files.mdMode, labels = {}, review = null, pr = null) {
@@ -1068,7 +1126,7 @@ function diffView(f, r, github, modes = files.mdMode, labels = {}, review = null
 				el("button", { "aria-pressed": String(!rendered), class: rendered ? "" : "on", onclick: choose("plain") }, "Plain diff")) : null,
 			canExplain ? el("button", { class: "explain-btn", disabled: explaining.has(diffKey(r)), title: "Explain this file's changes (AI)",
 				onclick: (e) => { e.stopPropagation(); explain(r, pr); } }, el("span", { class: "spark", "aria-hidden": "true" }, "✦"), "Explain") : null) : null,
-		explainBox(r),
+		explainBox(r), explainAskBox(r, pr),
 		note ? el("p", { class: "note" }, note) : null,
 		rendered && review && (review.threads.length || review.commentable) ? el("p", { class: "note" }, "Line comments are on the Plain diff.") : null,
 		rendered && !lib ? el("p", { class: "pending" }, "Rendering…")

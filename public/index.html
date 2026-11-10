@@ -568,6 +568,15 @@ textarea:focus, .merge-confirm input:focus { outline: 2px solid var(--accent); o
 .guide-progress { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font: 600 14px var(--display); }
 .guide-progress .meter { flex: 1 1 120px; min-width: 60px; height: 6px; border-radius: 3px; background: var(--faint); overflow: hidden; }
 .guide-progress .meter span { display: block; height: 100%; background: var(--ok); transition: width var(--fast) var(--ease); }
+.kind-filter { margin: 0 0 10px; }
+.kind-switch { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--faint); max-width: 100%; }
+.kind-switch button { display: inline-flex; gap: 6px; align-items: baseline; border: 0; background: none; padding: 6px 12px; border-radius: 6px; color: var(--muted); font-weight: 500; min-height: 36px; }
+.kind-switch button[aria-pressed="true"] { color: var(--fg); background: var(--bg); box-shadow: 0 0 0 1px var(--line); }
+.kind-switch .n { font: 500 12px var(--mono); color: var(--muted); }
+.kind-hidden { margin: 6px 0 0; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.kind-hidden button.link { margin-left: 8px; border: 0; background: none; padding: 0; color: var(--accent); font: inherit; cursor: pointer; text-decoration: underline; }
+.guide-nocode { margin: 4px 0 12px; }
+.guide-nocode > summary { cursor: pointer; color: var(--muted); font-size: 13px; padding: 6px 0; }
 .guide-noise summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .guide-noise ul { margin: 6px 0 0; padding-left: 18px; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
 .guide-top { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }

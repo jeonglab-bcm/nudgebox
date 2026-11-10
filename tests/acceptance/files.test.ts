@@ -54,6 +54,25 @@ test("15. Files lists a PR's changed files against where its branch left the bas
 	}
 });
 
+test("15. every changed file says what it is: code, a doc, or something else", async () => {
+	const t = await setup();
+	try {
+		const paths = {
+			code: ["src/a.ts", "pipeline/fit.py", "main.nf", "run.sbatch", "scripts/fetch.sh", "analysis/plot.R", "Makefile", "docker/Dockerfile", "workflow/Snakefile", "site/index.html", "notebooks/explore.ipynb", "lib/x.test.tsx"],
+			doc: ["README.md", "docs/guide.MD", "paper/methods.qmd", "docs/index.rst", "README"],
+			other: ["params/run.json", ".github/workflows/ci.yml", "nextflow.config", "requirements.txt", "data/table.tsv", "figures/fig1.png", "out/fit.npz", "package-lock.json", ".gitignore", "pyproject.toml", "bin/tool", "LICENSE"],
+		};
+		const all = Object.values(paths).flat();
+		t.github.prFileSets.set(`${LAB}#4`, { base: "base-sha", head: "head-sha", files: all.map((path) => ({ path, status: "modified" as const, additions: 1, deletions: 0 })) });
+		const body = await (await files(t, "hyunhwanj", LAB, 4)).json();
+		const got: Record<string, string[]> = { code: [], doc: [], other: [] };
+		for (const f of body.files) got[f.kind].push(f.path);
+		assert.deepEqual(got, paths);
+	} finally {
+		await t.close();
+	}
+});
+
 test("15. Files only for PRs you can see", async () => {
 	const t = await setup();
 	try {

@@ -257,6 +257,10 @@ button.link { border: 0; background: none; padding: 0; font: inherit; text-decor
 .explain code { font: 12.5px var(--mono); padding: 1px 5px; border-radius: 4px; background: var(--bg); }
 .explain.streaming { border-left-style: dashed; }
 .explain .pending { color: var(--muted); }
+/* SPEC 17: your questions under the explanation, and the box for the next one */
+.explain-ask { display: grid; gap: 12px; margin: 0 0 14px; max-width: 78ch; min-width: 0; }
+.explain-ask .ask-form textarea { padding: 7px 10px; min-height: 36px; field-sizing: content; max-height: 9em; }
+.explain-ask .ask-send { padding: 7px 14px; }
 /* the diff on a phone (SPEC 15): one unified column, old and new line numbers */
 .u-lines { font: 11.5px/1.55 var(--mono); font-variant-ligatures: none; }
 .u-line { display: grid; grid-template-columns: 2.4em 2.4em 1.1em minmax(0, 1fr); align-items: start; }

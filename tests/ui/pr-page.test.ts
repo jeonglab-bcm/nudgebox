@@ -507,3 +507,78 @@ for (const [device, name] of [[DESKTOP, "a computer"], [PHONE, "a phone"]] as co
 		}
 	});
 }
+
+for (const [device, name] of [[DESKTOP, "a computer"], [PHONE, "a phone"]] as const) {
+	test(`17. a question under an explanation is answered there, and is there again after a reload, on ${name}`, async () => {
+		const s = await open({ device, hash: `${PR}/files` });
+		const explainIt = async () => {
+			await s.page.waitForSelector(".file");
+			await s.page.locator(".file", { hasText: "src/limit.ts" }).locator(".path").click();
+			await s.page.waitForSelector(".file-diff .m-update");
+			await s.page.locator(".file-diff").getByRole("button", { name: "Explain", exact: true }).click();
+			await s.page.waitForSelector(".explain:not(.streaming) code");
+		};
+		try {
+			s.t.llm.reply = "The change raises `limit` from 10 to 20.";
+			s.t.llm.answer = (p) => (p.system.startsWith("You answer") ? "Because **10** was too low." : undefined);
+			s.t.llm.delayMs = 15;
+			await s.page.waitForSelector(".file");
+			assert.equal(await s.page.locator(".explain-ask").count(), 0, "no question box before an explanation");
+			await explainIt();
+			const box = s.page.locator(".explain-ask textarea");
+			await box.fill("Why 20?");
+			if (device === PHONE) await s.page.locator(".explain-ask").getByRole("button", { name: "Ask" }).click();
+			else await box.press("Enter");
+			await s.page.waitForSelector(".explain-ask .ask-turn:not(.streaming) .ask-answer strong");
+			assert.equal(await s.page.locator(".explain-ask .ask-q").textContent(), "Why 20?");
+			assert.equal((await s.page.locator(".explain-ask .ask-answer").textContent())!.trim(), "Because 10 was too low.");
+			assert.equal(await box.inputValue(), "", "the box is empty for the next question");
+			assert.equal(await s.page.locator(".explain").textContent(), "The change raises limit from 10 to 20.");
+			assert.ok(s.t.llm.calls[1].user.endsWith("The reader asks:\nWhy 20?\n"));
+
+			// under the explanation, above the diff, and inside the page's width
+			const [ex, ask, diff] = await Promise.all([".explain", ".explain-ask", device === PHONE ? ".unified" : ".panes"].map((x) => s.page.locator(x).boundingBox()));
+			assert.ok(ex!.y + ex!.height <= ask!.y + 1 && ask!.y + ask!.height <= diff!.y + 1, "the questions are not between the explanation and the diff");
+			assert.ok(ask!.x >= 0 && ask!.x + ask!.width <= device.viewport!.width, "the questions are wider than the page");
+			assert.equal(await s.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "the page scrolls sideways");
+
+			if (device === DESKTOP) { // the box keeps the cursor while an answer comes in
+				await box.fill("And 30?");
+				await box.press("Enter");
+				await s.page.waitForSelector(".explain-ask .ask-turn.streaming");
+				await s.page.keyboard.type("next");
+				await s.page.waitForFunction(() => document.querySelectorAll(".explain-ask .ask-turn:not(.streaming)").length === 2);
+				assert.equal(await box.inputValue(), "next");
+				assert.ok(s.t.llm.calls[2].user.includes("Q: Why 20?"), "the second question goes with the first");
+			}
+
+			await s.page.reload();
+			await explainIt();
+			await s.page.waitForSelector(".explain-ask .ask-turn");
+			assert.equal(await s.page.locator(".explain-ask .ask-q").first().textContent(), "Why 20?");
+		} finally {
+			await s.close();
+		}
+	});
+}
+
+test("17. a question that fails stays in the box, and the model's error is shown", async () => {
+	const s = await open({ hash: `${PR}/files` });
+	try {
+		s.t.llm.reply = "The change raises `limit` from 10 to 20.";
+		await s.page.waitForSelector(".file");
+		await s.page.locator(".file", { hasText: "src/limit.ts" }).locator(".path").click();
+		await s.page.waitForSelector(".file-diff .m-update");
+		await s.page.locator(".file-diff").getByRole("button", { name: "Explain", exact: true }).click();
+		await s.page.waitForSelector(".explain:not(.streaming) code");
+		s.t.llm.failNext = true;
+		const box = s.page.locator(".explain-ask textarea");
+		await box.fill("Why 20?");
+		await box.press("Enter");
+		await s.page.waitForFunction(() => /LLM/.test(document.querySelector("#toast")!.textContent!));
+		assert.equal(await box.inputValue(), "Why 20?");
+		assert.equal(await s.page.locator(".explain-ask .ask-turn").count(), 0);
+	} finally {
+		await s.close();
+	}
+});

@@ -37,8 +37,8 @@ const model = (p: Prompt) =>
 	: JSON.stringify({ real: true });
 
 /** Opens the guided review of labbot#4: at its list of steps, or at step `step`. */
-async function open(o: { slowMs?: number; step?: number; phone?: boolean } = {}) {
-	const t = await start();
+async function open(o: { slowMs?: number; step?: number; phone?: boolean; llm?: false } = {}) {
+	const t = await start({ llm: o.llm });
 	t.github.grant("hwan", LAB);
 	t.github.addPr({ repo: LAB, number: 4, author: "kelly", title: "Raise the limit", headSha: "h1" });
 	t.github.pages.set(`${LAB}#4`, { baseRef: "main", headRef: "feature", commits: 1, additions: 4, deletions: 4, changedFiles: 4, pendingReview: { id: "rv1", comments: 2 } });
@@ -48,7 +48,7 @@ async function open(o: { slowMs?: number; step?: number; phone?: boolean } = {})
 		t.github.blobs.set(`${LAB}@h1:${f}`, lines((i) => (i === 14 ? `const limit = 20; // ${f}` : `line ${i + 1}`)));
 	}
 	t.differ.reply = { largeResidual: false, before: { hunks: [{ op: "update", ...at(14, 14, 16) }] }, after: { hunks: [{ op: "update", ...at(14, 14, 16) }] } };
-	t.llm.answer = o.slowMs ? async (p) => { await new Promise((r) => setTimeout(r, o.slowMs)); return model(p); } : model;
+	if (o.llm !== false) t.llm.answer = o.slowMs ? async (p) => { await new Promise((r) => setTimeout(r, o.slowMs)); return model(p); } : model;
 	await t.link("hyunhwanj", "hwan");
 	await t.app.sync();
 	const side = await sidecar(t.base, "hyunhwanj");
@@ -501,6 +501,164 @@ test("19. on a phone, Ask opens over the buttons at the bottom and fits the scre
 		await until(async () => (await s.page.locator(".ask-dock").count()) === 0);
 		const keys = await s.page.locator(".guide-keys").boundingBox();
 		assert.ok(Math.abs(keys!.y + keys!.height - 844) <= 1, "the buttons are back at the bottom");
+	} finally {
+		await s.close();
+	}
+});
+
+// -- SPEC 19.13: Ask the AI about the whole pull request, in sight on the PR page
+
+const card = (page: Page) => page.locator(".ask-card");
+const tab = (page: Page, name: string) => page.locator(".pr-tabs a", { hasText: name }).click();
+
+test("19.13 the pull request has an open box to ask the AI, on Guided review and on Conversation, with the same questions", async () => {
+	const s = await open();
+	try {
+		const box = card(s.page).locator("textarea");
+		await box.waitFor();
+		assert.match(await text(s.page, ".ask-card .ask-head"), /Ask the AI/);
+		assert.ok(await s.page.evaluate(() => document.querySelector(".ask-card")!.getBoundingClientRect().top < document.querySelector(".guide-steps")!.getBoundingClientRect().top), "it is above the steps");
+		assert.equal(await turns(s.page).count(), 0);
+		assert.ok(!(await box.evaluate((b) => b === document.activeElement)), "it does not take the cursor: Enter still starts the review");
+
+		// Enter sends; the answer comes in pieces under the question
+		s.t.llm.delayMs = 40;
+		await box.click();
+		await s.page.keyboard.type("What changes?");
+		await s.page.keyboard.press("Enter");
+		await s.page.waitForSelector(".ask-card .ask-turn.streaming");
+		assert.ok(await card(s.page).locator(".ask-send").isDisabled(), "one question at a time");
+		await asked(s.page, 1);
+		s.t.llm.delayMs = 0;
+		assert.match(await text(s.page, ".ask-card .ask-answer"), /Because limit is the cap\. \(What changes\?\)/);
+		assert.equal(await card(s.page).locator("textarea").inputValue(), "");
+		assert.match(answers(s)[0].system, /about a GitHub pull request/);
+		assert.equal(await hash(s.page), GUIDE, "the page stays where it was");
+		assert.equal(await s.page.locator(".guide-steps .guide-row").count(), 2);
+
+		// the same questions on Conversation, where the next one is asked with the button
+		await tab(s.page, "Conversation");
+		await s.page.waitForSelector(".conversation");
+		await asked(s.page, 1);
+		await card(s.page).locator("textarea").fill("And what could break?");
+		await card(s.page).locator(".ask-send").click();
+		await asked(s.page, 2);
+		const before = answers(s)[1].user.slice(0, answers(s)[1].user.lastIndexOf("The reviewer asks:"));
+		assert.ok(before.includes("What changes?") && before.includes("is the cap. (What changes?)"), "the second question is asked with the first and its answer");
+		assert.equal(s.calls("addReviewComment").length + s.calls("addComment").length, 0, "nothing goes to GitHub");
+
+		// kept: there again after a reload
+		await s.page.reload();
+		await s.page.waitForSelector(".conversation");
+		await asked(s.page, 2);
+		assert.deepEqual((await s.page.locator(".ask-card .ask-q").allTextContents()).map((x) => x.trim()), ["What changes?", "And what could break?"]);
+	} finally {
+		await s.close();
+	}
+});
+
+test("19.13 before the first question the box offers three questions; one click asks", async () => {
+	const s = await open();
+	try {
+		const ideas = card(s.page).locator(".ask-ideas button");
+		await ideas.first().waitFor();
+		assert.deepEqual(await ideas.allTextContents(), ["What does this change?", "What could break?", "Where should I look first?"]);
+		await ideas.nth(2).click();
+		await asked(s.page, 1);
+		assert.match(await text(s.page, ".ask-card .ask-q"), /Where should I look first\?/);
+		assert.equal(await ideas.count(), 0, "they make room for the answers");
+	} finally {
+		await s.close();
+	}
+});
+
+test("19.13 while the guided review is prepared the box is there, and its answer stays when the steps come", async () => {
+	const s = await open({ slowMs: 500 });
+	try {
+		await s.page.waitForSelector(".guide-preparing");
+		const box = card(s.page).locator("textarea");
+		await box.waitFor();
+		await box.fill("What changes?");
+		await card(s.page).locator(".ask-send").click();
+		await asked(s.page, 1);
+		assert.match(await text(s.page, ".ask-card .ask-answer"), /is the cap\. \(What changes\?\)/);
+		await s.page.waitForSelector(".guide-steps", { timeout: 20000 });
+		assert.equal(await turns(s.page).count(), 1);
+	} finally {
+		await s.close();
+	}
+});
+
+test("19.13 when the AI cannot answer the pull request's question, the page says so and the question is still in the box", async () => {
+	const s = await open();
+	try {
+		const box = card(s.page).locator("textarea");
+		await box.waitFor();
+		s.t.llm.failNext = true;
+		await box.fill("Why?");
+		await card(s.page).locator(".ask-send").click();
+		await until(async () => /LLM failed/.test(await text(s.page, "#toast")));
+		assert.equal(await box.inputValue(), "Why?");
+		assert.equal(await turns(s.page).count(), 0);
+	} finally {
+		await s.close();
+	}
+});
+
+test("19.13 in a step, the line under its summary opens the step's questions", async () => {
+	const s = await open({ step: 1 });
+	try {
+		await onStep(s.page, 1);
+		const invite = s.page.locator(".guide-step .ask-invite");
+		assert.match(await text(s.page, ".guide-step .ask-invite"), /Ask the AI about this step/);
+		assert.equal(await card(s.page).count(), 0, "a step has its own questions");
+		await invite.click();
+		const box = s.page.locator(".ask-dock textarea");
+		await box.waitFor();
+		assert.ok(await box.evaluate((b) => b === document.activeElement), "the cursor is in the question box");
+		await s.page.keyboard.type("Why 20?");
+		await s.page.keyboard.press("Enter");
+		await asked(s.page, 1);
+		assert.match(answers(s)[0].system, /one step of a GitHub pull request/);
+		await s.page.locator(".ask-close").click();
+		assert.match(await text(s.page, ".guide-step .ask-invite"), /1 question/);
+	} finally {
+		await s.close();
+	}
+});
+
+test("19.13 on a phone the box fits the screen and only the button sends", async () => {
+	const s = await open({ phone: true });
+	try {
+		const box = card(s.page).locator("textarea");
+		await box.waitFor();
+		await box.fill("What changes?");
+		await box.focus();
+		await s.page.keyboard.press("Enter");
+		assert.equal(await turns(s.page).count(), 0, "Enter is a new line on a phone");
+		await box.fill("What changes?");
+		await card(s.page).locator(".ask-send").tap();
+		await asked(s.page, 1);
+		const m = await s.page.evaluate(() => {
+			const c = document.querySelector(".ask-card")!.getBoundingClientRect();
+			return { page: document.documentElement.scrollWidth, screen: innerWidth, left: c.left, right: c.right, font: parseFloat(getComputedStyle(document.querySelector(".ask-card textarea")!).fontSize) };
+		});
+		assert.ok(m.page <= m.screen, `the page is ${m.page}px wide on a ${m.screen}px screen`);
+		assert.ok(m.left >= 0 && m.right <= 390, "the box is on the screen");
+		assert.ok(m.font >= 16, "a box with smaller text makes an iPhone zoom in");
+	} finally {
+		await s.close();
+	}
+});
+
+test("19.13 with no AI there is no box", async () => {
+	const s = await open({ llm: false });
+	try {
+		await s.page.waitForSelector(".guide-steps");
+		assert.equal(await card(s.page).count(), 0);
+		await tab(s.page, "Conversation");
+		await s.page.waitForSelector(".conversation");
+		assert.equal(await card(s.page).count(), 0);
 	} finally {
 		await s.close();
 	}

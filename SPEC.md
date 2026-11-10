@@ -655,6 +655,30 @@ were about code that is gone. A question of more than 2,000 characters is refuse
 the model fails or gives no answer, the page says so, nothing is kept and the question
 stays in the box. Without an LLM there is no Ask.
 
+In a step, a line **Ask the AI about this step…** under the step's sentence opens the
+same box, so that Ask is in sight where the step is read; it says how many questions
+the step has.
+
+**Ask about the whole pull request** (Dr. Jeong, 2026-11-09: "no further chat
+function"; the only Ask was inside a step, behind a button). The PR page has a box
+**Ask the AI**, open, at the top of Conversation and of Guided review (above the
+steps; also while the review is being prepared, and when preparing it failed). Before
+the first question it offers three to ask with one click: "What does this change?",
+"What could break?", "Where should I look first?". The questions and answers are
+listed in the box, the answer written as it comes in; `Enter` and the button send as
+in a step. Both tabs show the same list.
+
+A question goes to the model for Guided review with the PR's title, author and
+description, its changed files (noise, data and figures are named, not shown), the
+earlier questions with the answers and, when the guided review is prepared, its
+summary, steps and draft comments. A file the question names (by path or file name)
+comes first and whole when it fits; the others share the room that is left. Asking
+does not wait for the guided review.
+
+These questions are the person's own, are never sent to GitHub, and stay after a
+push. The limits and failures are those of a step's question. Without an LLM there is
+no box.
+
 The PR's text, files and comments are data, never instructions to the model.
 
 ## 20. AI settings

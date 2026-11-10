@@ -1786,6 +1786,8 @@ const freshPr = (key) => ({
 	key, page: null, error: null, login: "", options: null, picker: null, mergeMenu: false, confirming: false, form: null, reviewOpen: false,
 	commits: null, commitsError: null, commit: null, conflicts: null,
 	guide: null, // SPEC 19: see freshGuide
+	// SPEC 19.13: your questions about the whole PR; `live`: the one the AI is answering
+	ask: { ai: false, asks: [], live: null, pin: true, top: 0 },
 });
 let prv = freshPr(null);
 // text being written (comments, replies, the review), by box; survives re-renders
@@ -1934,6 +1936,7 @@ function renderPr() {
 		prv = freshPr(key);
 		files = fileSet(key);
 		loadPr();
+		loadAsks();
 	}
 	if ((t.tab === "files" || t.tab === "guide") && files.key === key && !files.data && !files.error && !files.loading) {
 		files.loading = true;
@@ -2021,7 +2024,7 @@ function conversationView(t, p) {
 				el("span", { class: "msg" }, x.message), el("span", { class: "who" }, x.author), el("code", { class: "sha" }, x.sha.slice(0, 7))));
 		} else items.push(el("div", { class: "tl tl-line", "data-type": "event" }, el("span", { class: "dot", "aria-hidden": "true" }), eventText(x), " ", when(x.at)));
 	}
-	return el("div", { class: "conversation" }, el("div", { class: "timeline" }, items), mergeBox(t, p), commentBox(p));
+	return el("div", { class: "conversation" }, askCard(t), el("div", { class: "timeline" }, items), mergeBox(t, p), commentBox(p));
 }
 
 function eventText(x) {
@@ -2567,7 +2570,7 @@ function guideView(t, p) {
 			loadGuide(t);
 		};
 		return el("div", { class: "guide" }, el("p", { class: "hint" }, `Could not prepare the guided review: ${g.failed}`),
-			el("div", {}, el("button", { onclick: busy(retry) }, "Try again")));
+			el("div", {}, el("button", { onclick: busy(retry) }, "Try again")), askCard(t));
 	}
 	if (!g.data) {
 		const q = g.progress;
@@ -2578,10 +2581,12 @@ function guideView(t, p) {
 			: q.phase === "reviewing" ? `the AI is reviewing step ${q.done + 1} of ${q.total}: ${q.what}…`
 			: `the AI is checking its draft comments on step ${q.done + 1} of ${q.total}: ${q.what}…`;
 		const total = q && (q.phase === "reviewing" || q.phase === "checking") ? q.total : 0;
-		return el("div", { class: "guide guide-preparing" },
-			el("p", { class: "hint" }, `${q?.push ? "Updating the guided review after a push" : "Preparing the guided review"}: ${what}`),
-			total ? el("p", { class: "guide-progress" }, meter(q.done, total)) : null,
-			q?.since ? el("p", { class: "hint" }, `Working for ${elapsed(q.since)}`) : null);
+		return el("div", { class: "guide" },
+			el("div", { class: "guide guide-preparing" },
+				el("p", { class: "hint" }, `${q?.push ? "Updating the guided review after a push" : "Preparing the guided review"}: ${what}`),
+				total ? el("p", { class: "guide-progress" }, meter(q.done, total)) : null,
+				q?.since ? el("p", { class: "hint" }, `Working for ${elapsed(q.since)}`) : null),
+			askCard(t, "You do not have to wait: ask about the pull request now."));
 	}
 	const k = guideAt();
 	return k === null ? guideList(t, p, g.data) : guideStepView(t, p, g.data, k);
@@ -2603,7 +2608,7 @@ function guideList(t, p, d) {
 		d.summary ? el("p", { class: "guide-summary" }, d.summary) : null,
 		d.note ? el("p", { class: "hint" }, d.note) : null,
 		changed ? el("p", { class: "guide-changed" }, `${plural(changed, "step")} changed since your review`) : null];
-	if (!n) return el("div", { class: "guide" }, head, el("p", { class: "hint" }, "Nothing to review: every changed file is noise."), noise);
+	if (!n) return el("div", { class: "guide" }, head, askCard(t), el("p", { class: "hint" }, "Nothing to review: every changed file is noise."), noise);
 
 	g.fromList = false;
 	const sizes = d.steps.map((s) => s.files.map((x) => byPath.get(x)).filter(Boolean).reduce((a, f) => [a[0] + f.additions, a[1] + f.deletions], [0, 0]));
@@ -2637,7 +2642,7 @@ function guideList(t, p, d) {
 		canSubmit && !prv.reviewOpen ? el("button", { class: all ? "primary" : "", onclick: () => { prv.reviewOpen = true; render(); } }, "Submit review") : null,
 		canSubmit && prv.reviewOpen ? reviewForm(p, own) : null) : null;
 
-	return el("div", { class: "guide" }, head,
+	return el("div", { class: "guide" }, head, askCard(t),
 		el("div", { class: "guide-top" },
 			el("p", { class: "guide-progress" }, `${done} of ${n} steps reviewed`, meter(done, n)),
 			next >= 0 ? el("button", { class: "primary", onclick: () => guideTo(next) }, done || changed ? `Continue with step ${next + 1}` : "Start review", el("kbd", {}, "↵")) : null),
@@ -2730,6 +2735,10 @@ function guideStepView(t, p, d, k) {
 			el("h2", {}, step.title, stepFlags(step)),
 			step.summary ? el("p", { class: "guide-step-summary" }, step.summary) : null,
 			ai ? el("p", { class: "guide-ai" }, ai) : null,
+			// SPEC 19.13: Ask is in sight where the step is read, not only in the bar at the bottom
+			d.ai ? el("button", { class: "ask-invite", onclick: () => openAsk(null) },
+				el("span", { class: "spark", "aria-hidden": "true" }, "✦"), el("span", { class: "ask-invite-text" }, "Ask the AI about this step…"),
+				step.asks.length ? el("span", { class: "n" }, plural(step.asks.length, "question")) : null) : null,
 			step.drafts.length ? el("div", { class: "drafts" }, step.drafts.map((x) => draftView(x, x === current, short))) : null,
 			el("p", { class: "guide-files-head" }, el("b", {}, `${step.seen.length} of ${step.files.length} viewed`), dir ? el("span", {}, "in ", el("code", {}, dir)) : null),
 			el("ul", { class: "files guide-files" }, rows)),
@@ -2853,6 +2862,84 @@ function askDock(t, step, short, canComment) {
 			el("button", { class: "quiet", "aria-label": "Ask about the whole step instead", title: "Ask about the whole step instead", onclick: () => { g.ask.about = null; render(); focus(); } }, "✕")) : null,
 		el("div", { class: "ask-form" }, box,
 			el("button", { class: "primary ask-send", disabled: Boolean(g.asking), onclick: send }, "Ask", el("kbd", {}, "↵"))));
+}
+
+// -- SPEC 19.13: questions about the whole pull request, in sight on the PR page. Yours alone
+
+const ASK_IDEAS = ["What does this change?", "What could break?", "Where should I look first?"];
+
+async function loadAsks() {
+	const t = prTarget();
+	const key = prv.key;
+	const r = await api(`/api/review/asks?repo=${encodeURIComponent(t.repo)}&number=${t.number}`).catch(() => null);
+	if (prv.key !== key || r?.status !== 200) return;
+	Object.assign(prv.ask, { ai: r.data.ai, asks: r.data.asks });
+	render();
+}
+
+async function askPr(t, text) {
+	const a = prv.ask;
+	const key = `ask:pr:${prv.key}`;
+	const question = (text ?? drafts.get(key) ?? "").trim();
+	if (a.live) return;
+	if (!question) return toast("Write a question first");
+	const run = (a.live = { question, text: "", stage: "reading" });
+	a.pin = true;
+	if (text === undefined) drafts.delete(key);
+	render();
+	try {
+		let answer = null;
+		await streamPost("/api/review/ask", { repo: t.repo, number: t.number, question }, (event, data) => {
+			if (event === "stage") run.stage = data.stage;
+			else if (event === "message") run.text += data.delta;
+			else if (event === "done") answer = data.answer.trim();
+			repaint();
+		});
+		if (answer === null) throw new Error("The answer stopped before the end; ask again");
+		a.asks.push({ question, answer, at: new Date().toISOString() });
+	} catch (e) {
+		if (!drafts.get(key)?.trim()) drafts.set(key, question); // the question is not lost
+		toast(e.message);
+	} finally {
+		a.live = null;
+		render();
+	}
+}
+
+// the box, open: your questions and the answers, three questions to start with, and the next one
+function askCard(t, lead = null) {
+	const a = prv.ask;
+	if (!a.ai) return null;
+	const key = `ask:pr:${prv.key}`;
+	const turn = (x, streaming) => el("div", { class: `ask-turn${streaming ? " streaming" : ""}` },
+		el("div", { class: "ask-q" }, x.question),
+		streaming && !x.text ? el("p", { class: "ask-answer pending", role: "status" }, x.stage === "reading" ? "Reading the changes…" : "Writing…")
+			: md(streaming ? x.text : x.answer, "ask-answer"));
+	const any = a.asks.length > 0 || a.live;
+	let thread = null;
+	if (any) {
+		thread = el("div", { class: "ask-thread" }, a.asks.map((x) => turn(x, false)), a.live ? turn(a.live, true) : null);
+		// the thread stays where it was read; at its end it follows the answer as it comes in
+		thread.addEventListener("scroll", () => {
+			a.top = thread.scrollTop;
+			a.pin = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 24;
+		});
+		queueMicrotask(() => { thread.scrollTop = a.pin ? thread.scrollHeight : a.top; });
+	}
+	const box = draftBox(key, "Ask about this pull request", { rows: "1", "aria-label": "Your question about this pull request" });
+	box.addEventListener("keydown", (e) => {
+		if (e.key !== "Enter" || e.shiftKey || e.isComposing || !sendsOnEnter()) return;
+		e.preventDefault();
+		askPr(t);
+	});
+	return el("section", { class: "ask-card", "aria-label": "Ask the AI about this pull request" },
+		el("div", { class: "ask-head" },
+			el("b", {}, el("span", { class: "spark", "aria-hidden": "true" }, "✦"), "Ask the AI"),
+			el("span", { class: "hint" }, any ? "Only you see this" : lead ?? "About this pull request. Only you see this.")),
+		thread,
+		any ? null : el("div", { class: "ask-ideas" }, ASK_IDEAS.map((q) => el("button", { class: "ask-idea", onclick: () => askPr(t, q) }, q))),
+		el("div", { class: "ask-form" }, box,
+			el("button", { class: "primary ask-send", disabled: Boolean(a.live), onclick: () => askPr(t) }, "Ask")));
 }
 
 // -- resolving conflicts

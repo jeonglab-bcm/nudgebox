@@ -13,6 +13,7 @@ import { createApp, type App } from "../../src/app.ts";
 import { FakeGitHub } from "./fake-github.ts";
 import type { DiffResult, DiffSide, Differ } from "../../src/omnidiff.ts";
 import type { LlmConfig } from "../../src/llm.ts";
+import { createCodeIntel } from "../../src/code.ts";
 
 export const ORIGIN = "https://gh.bioinfolder.com";
 export const WEBHOOK_SECRET = "test-webhook-secret";
@@ -24,7 +25,7 @@ export type LlmAnswer = (p: LlmCall) => string | Promise<string>;
 export type Pushed = { endpoint: string; payload: { title: string; body: string; url?: string; badge?: number }; urgency?: string };
 
 /** `llm: false` starts the app with no LLM configured (SPEC 12: no Summarize). */
-export async function start(opts: { staleDays?: number; oldDays?: number; now?: () => Date; llm?: false; diff?: Differ; admins?: string[] } = {}) {
+export async function start(opts: { staleDays?: number; oldDays?: number; now?: () => Date; llm?: false; diff?: Differ; admins?: string[]; code?: false; codeIdleMs?: number } = {}) {
 	const dir = mkdtempSync(join(tmpdir(), "ghd-"));
 	const github = new FakeGitHub();
 	const pushed: Pushed[] = [];
@@ -55,7 +56,10 @@ export async function start(opts: { staleDays?: number; oldDays?: number; now?: 
 		return text;
 	};
 	const logs: string[] = [];
+	// SPEC 21: the real language servers, on the fake GitHub's tarballs; nothing starts until a test asks
+	const code = opts.code === false ? undefined : createCodeIntel({ archive: (repo, ref) => github.archive(repo, ref), dir, idleMs: opts.codeIdleMs });
 	const app: App = createApp({
+		code,
 		log: (m) => logs.push(m),
 		config: { orgs: ["jeonglab-bcm", "hyunhwan-bcm"], staleDays: opts.staleDays ?? 3, oldDays: opts.oldDays ?? 30, timezone: "America/Chicago" },
 		origin: ORIGIN,
@@ -169,7 +173,7 @@ export async function start(opts: { staleDays?: number; oldDays?: number; now?: 
 		server.close();
 		rmSync(dir, { recursive: true, force: true });
 	};
-	return { app, github, llm, differ, pushed, gone, base, dir, logs, req, link, inbox, issues, hide, summary, webhook, subscribe, seen, close };
+	return { app, github, llm, differ, code, pushed, gone, base, dir, logs, req, link, inbox, issues, hide, summary, webhook, subscribe, seen, close };
 }
 
 /** "owner/repo#n" ids per section, for compact assertions. */

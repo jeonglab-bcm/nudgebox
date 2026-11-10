@@ -15,6 +15,7 @@ import webpush from "web-push";
 import { createApp } from "./app.ts";
 import { readConfig } from "./config.ts";
 import { createLlm, listModels } from "./llm.ts";
+import { createCodeIntel } from "./code.ts";
 import { createOmnidiff } from "./omnidiff.ts";
 import { OctokitGitHub } from "./octokit-github.ts";
 import { publicOnly } from "./public.ts";
@@ -71,6 +72,7 @@ const app = createApp({
 	admins,
 	providers: { make: createLlm, models: listModels },
 	diff: createOmnidiff(process.env.OMNIDIFF_BIN ?? "omnidiff"), // SPEC 15; the image has it on PATH
+	code: createCodeIntel({ archive: (repo, ref) => github.archive(repo, ref), log }), // SPEC 21; the language servers come with npm
 });
 
 const host = process.env.LISTEN_HOST ?? "0.0.0.0";

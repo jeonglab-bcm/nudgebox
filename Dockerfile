@@ -1,5 +1,6 @@
 # gh.bioinfolder.com. Node 24 runs the TypeScript directly (type stripping), so there
-# is no build step; dev dependencies (tsx, typescript) stay out of the image.
+# is no build step; dev dependencies (tsx) stay out of the image. pyright and typescript
+# are in it: their language servers answer go to definition (SPEC 21).
 FROM node:24-slim
 WORKDIR /app
 COPY package.json package-lock.json ./

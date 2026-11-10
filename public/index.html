@@ -666,6 +666,41 @@ body.guiding .chrome { display: none; }
   .mark { margin: 4px 0; }
   .summary { padding: 10px 12px; }
 }
+/* go to definition (SPEC 21): the code panel, beside the page on a computer, over it on a phone */
+::highlight(code-name) { text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 3px; }
+#code-panel { --w: clamp(380px, 42vw, 640px); position: fixed; top: 0; right: 0; bottom: 0; width: var(--w); z-index: 5; display: flex; flex-direction: column; min-width: 0;
+  background: var(--bg); border-left: 1px solid var(--line); box-shadow: -8px 0 24px oklch(0% 0 0 / .08); padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+body.code-open { padding-right: clamp(380px, 42vw, 640px); }
+body.code-open .keys, body.code-open #tray { right: clamp(380px, 42vw, 640px); }
+.nav-head { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 14px; border-bottom: 1px solid var(--line); }
+.nav-name { flex: 1; min-width: 0; font: 600 14px var(--mono); overflow-wrap: anywhere; }
+.nav-close { font-size: 15px; }
+.nav-what { padding: 10px 14px 0; display: grid; gap: 6px; }
+.nav-sig { margin: 0; font: 12.5px/1.55 var(--mono); font-variant-ligatures: none; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 9.5em; overflow-y: auto; }
+.nav-doc { margin: 0; font-size: 13.5px; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 7.5em; overflow-y: auto; }
+.nav-outside { margin: 0; font-size: 13.5px; color: var(--muted); }
+.nav-modes { margin: 10px 14px 0; align-self: flex-start; background: var(--faint); border-radius: 8px; padding: 2px; font-size: 13px; }
+.nav-modes button.on { background: var(--bg); box-shadow: 0 1px 2px oklch(0% 0 0 / .12); }
+.nav-at { display: flex; align-items: center; gap: 4px; margin: 10px 14px 0; }
+.nav-where { font: 12px var(--mono); color: var(--muted); overflow-wrap: anywhere; margin-right: 6px; }
+.nav-at button { padding: 2px 8px; } .nav-at button.on { color: var(--fg); background: var(--faint); }
+.nav-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; margin-top: 8px; padding-bottom: 16px; border-top: 1px solid var(--line); }
+.nav-body > p { margin: 14px; color: var(--muted); font-size: 13.5px; }
+.nav-body .fold { margin: 0; }
+.code-line.target { background: color-mix(in oklch, var(--accent) 14%, transparent); box-shadow: inset 3px 0 0 var(--accent); }
+.code-line.target .ln { color: var(--accent); opacity: 1; font-weight: 600; }
+.uses section { padding: 10px 0 2px; }
+.use-file { margin: 0; padding: 0 14px 4px; font: 500 12px var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+button.use { display: grid; grid-template-columns: 3.2em minmax(0, 1fr); width: 100%; border: 0; background: none; padding: 3px 0; text-align: left; font: 12.5px/1.6 var(--mono); font-variant-ligatures: none; }
+button.use:hover, button.use:focus-visible { background: var(--faint); }
+.use .ln { text-align: right; padding-right: 10px; color: var(--muted); opacity: .7; }
+.use .code { white-space: pre-wrap; overflow-wrap: anywhere; padding-right: 12px; }
+@media (max-width: 720px) {
+  #code-panel { left: 0; width: auto; border-left: 0; box-shadow: none; }
+  body.code-open { padding-right: 0; overflow: hidden; }
+  .nav-head { padding-block: 10px; } .nav-head button { padding: 10px 12px; }
+  button.use { padding: 8px 0; font-size: 11.5px; grid-template-columns: 2.6em minmax(0, 1fr); }
+}
 </style>
 </head>
 <body>

@@ -21,6 +21,7 @@ import { issuePrompt, prPrompt, SUMMARY_FORMAT } from "./summary.ts";
 import type { Differ, DiffSide } from "./omnidiff.ts";
 import { hasMarkers, planMerge, type ReadFile } from "./conflicts.ts";
 import { EXPLAIN_FORMAT, explainPrompt } from "./explain.ts";
+import { CODE_KINDS, CodeError, type CodeIntel } from "./code.ts";
 import { carryPlan, checkPrompt, codeAt, commentable, dataSteps, isData, MAX_DRAFTS_PER_STEP, noiseReason, numberedChanges, parseJson, planPrompt, readCheck, readPlan, readReview, REVIEW_FORMAT, reviewPrompts, type CodeLine, type Draft, type FileChanges, type PlanStep } from "./review.ts";
 
 export interface Config {
@@ -63,6 +64,7 @@ export interface AppOptions {
 	admins?: string[]; // SPEC 20: lab users who may change the AI settings
 	providers?: Providers; // SPEC 20: sets up the provider the admin picks on the page
 	diff?: Differ; // SPEC 15: omnidiff; absent -> no diffs
+	code?: CodeIntel; // SPEC 21: language servers; absent -> no go to definition
 }
 
 /** SPEC 20: makes a provider's LLM, and lists its models. */
@@ -593,6 +595,23 @@ export function createApp(opts: AppOptions): App {
 		const { repos } = await viewOf(linked(lab));
 		if (!sides.every((s) => !s || repos.has(s.repo.toLowerCase()))) throw new HttpError(404, "not found");
 		return sides;
+	}
+
+	/** SPEC 21: what the name at a place in a commit's file is, where it is defined and where it is used. */
+	async function codeLookup(req: IncomingMessage, lab: string) {
+		if (!opts.code) throw new HttpError(503, "go to definition is not set up");
+		const b: FileRef & { row: number; col: number } = await json(req);
+		const pos = (n: unknown) => Number.isInteger(n) && (n as number) >= 0 && (n as number) < 10_000_000;
+		if (!isRef(b) || !pos(b.row) || !pos(b.col) || !/^[\w.-]{1,100}$/.test(b.ref)) throw new HttpError(400, "give repo, ref, path, row and col");
+		const { repos } = await viewOf(linked(lab));
+		if (!repos.has(b.repo.toLowerCase())) throw new HttpError(404, "not found");
+		try {
+			return await opts.code.lookup(b.repo, b.ref, b.path, b.row, b.col);
+		} catch (e) {
+			if (e instanceof CodeError) throw new HttpError(e.status, e.message);
+			if ((e as { status?: number }).status) throw fromGitHub(e);
+			throw new HttpError(502, `could not look this up: ${(e as Error).message}`);
+		}
 	}
 
 	async function diffFiles(req: IncomingMessage, lab: string) {
@@ -1218,7 +1237,7 @@ export function createApp(opts: AppOptions): App {
 			const f = fold(lab, "pr", store.prs().filter(visible(repos)));
 			// `version` lets an open page (e.g. the Home Screen app, which never reloads by
 			// itself) notice a newer deploy and reload.
-			return send(res, 200, { user: lab, login: u.login, version: scriptVersion, staleDays: config.staleDays, ...buildInbox(f.live, viewer), old: f.old, hidden: f.hidden, summarize: Boolean(ai()), admin: isAdmin(lab) });
+			return send(res, 200, { user: lab, login: u.login, version: scriptVersion, staleDays: config.staleDays, ...buildInbox(f.live, viewer), old: f.old, hidden: f.hidden, summarize: Boolean(ai()), admin: isAdmin(lab), code: opts.code ? CODE_KINDS : [] });
 		}
 		if (method === "GET" && path === "/api/issues") {
 			const { repos } = await viewOf(linked(lab));
@@ -1283,6 +1302,9 @@ export function createApp(opts: AppOptions): App {
 		}
 		if (method === "POST" && path === "/api/diff") {
 			return send(res, 200, await diffFiles(req, lab));
+		}
+		if (method === "POST" && path === "/api/code/lookup") { // SPEC 21
+			return send(res, 200, await codeLookup(req, lab));
 		}
 		if (method === "GET" && path === "/api/review") { // SPEC 19
 			return send(res, 200, await reviewGet(lab, url.searchParams.get("repo"), Number(url.searchParams.get("number"))));
@@ -1415,6 +1437,7 @@ export function createApp(opts: AppOptions): App {
 		close: async () => {
 			for (const a of [...streams.values()]) a.end();
 			await work;
+			await opts.code?.close();
 			store.close();
 		},
 	};

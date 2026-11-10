@@ -382,3 +382,17 @@ Ctrl+click, so that it works on a phone; a double click still selects the word.
 
 Not done here: the old side of a diff; "open this file's diff" from the panel; R,
 shell and the other languages; names in rendered Markdown and in the AI's answers.
+
+## 2026-11-10: Guided review: the waiting screen could stay for ever
+
+After the deploy of 2026-11-09 Dr. Jeong opened a 77-file PR on the phone and the page
+said "checking step 2 of 9" for ten minutes. The review had been ready after three. The
+page asked for the progress in a chain, each answer starting the next question; one
+failed request (a phone asleep) or a look at another tab broke the chain, and nothing
+started it again. Now the view itself starts the asking whenever it is not running, and
+a failed request is tried again.
+
+The wait itself came from the deploy: the kept reviews were in the old form, so every
+PR was prepared again when first opened. Now the server prepares them in the background
+after a start (PRs active in the last 14 days, one at a time, so a paid LLM is not
+asked about 45 PRs at once or about PRs nobody looks at).

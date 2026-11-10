@@ -93,6 +93,30 @@ test("19. while the AI works, the page says which step it is on, with a bar, and
 	}
 });
 
+test("19. the page keeps waiting for the review: a request that fails, or a look at another tab, does not stop it", async () => {
+	const lost = await open({ slowMs: 700 });
+	try {
+		await lost.page.waitForSelector(".guide-preparing");
+		// the phone sleeps, the network drops: the questions about the progress fail for a while
+		await lost.page.route("**/api/review?**", (r) => r.abort());
+		await new Promise((r) => setTimeout(r, 2500));
+		await lost.page.unroute("**/api/review?**");
+		await lost.page.waitForSelector(".guide-steps", { timeout: 20000 });
+	} finally {
+		await lost.close();
+	}
+	const away = await open({ slowMs: 700 });
+	try {
+		await away.page.waitForSelector(".guide-preparing");
+		await away.page.locator(".pr-tabs a", { hasText: "Commits" }).click();
+		await new Promise((r) => setTimeout(r, 2500));
+		await away.page.locator(".pr-tabs a", { hasText: "Guided review" }).click();
+		await away.page.waitForSelector(".guide-steps", { timeout: 20000 });
+	} finally {
+		await away.close();
+	}
+});
+
 test("19. the tab lists the steps; a step opens alone, and Escape or Back returns to the list", async () => {
 	const s = await open();
 	try {

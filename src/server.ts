@@ -105,6 +105,8 @@ async function maybeDigest() {
 }
 
 await syncNow();
+// SPEC 19: nobody waits for a guided review after a restart
+void app.warm().then(() => log("guided reviews: ready"), (e) => log(`guided reviews: ${(e as Error).message}`));
 const timers = [setInterval(syncNow, 10 * 60_000), setInterval(maybeDigest, 60_000)];
 void maybeDigest();
 

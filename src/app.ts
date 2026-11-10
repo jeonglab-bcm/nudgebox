@@ -22,7 +22,8 @@ import type { Differ, DiffSide } from "./omnidiff.ts";
 import { hasMarkers, planMerge, type ReadFile } from "./conflicts.ts";
 import { EXPLAIN_FORMAT, explainAskPrompt, explainPrompt } from "./explain.ts";
 import { CODE_KINDS, CodeError, type CodeIntel } from "./code.ts";
-import { fileKind } from "./filekind.ts";
+import { fileKind, type FileKind } from "./filekind.ts";
+import { links, type Link } from "./depgraph.ts";
 import { askPrPrompt, askPrompt, carryPlan, checkPrompt, codeAt, commentable, dataSteps, isData, MAX_DRAFTS_PER_STEP, MAX_QUESTION, noiseReason, numberedChanges, parseJson, planPrompt, readCheck, readPlan, readReview, REVIEW_FORMAT, reviewPrompts, type AskAbout, type CodeLine, type Draft, type FileChanges, type PlanStep } from "./review.ts";
 
 export interface Config {
@@ -584,6 +585,35 @@ export function createApp(opts: AppOptions): App {
 		const files = await github.prFiles(pr.repo, pr.number);
 		if (!files) throw new HttpError(404, "no such pull request");
 		return { ...files, files: files.files.map((f) => ({ ...f, kind: fileKind(f.path) })) };
+	}
+
+	/** SPEC 22: the PR's changed code and docs, and which of them uses which. Read once per head commit. */
+	type Graph = { head: string; nodes: { path: string; kind: FileKind }[]; links: Link[]; others: number };
+	const graphs = new Map<string, Promise<Graph>>();
+	const MAX_GRAPH_FILES = 400;
+	async function prGraph(lab: string, repo: string | null, number: number): Promise<Graph> {
+		const set = await prFilesFor(lab, repo, number);
+		const key = `${repo!.toLowerCase()}#${number}@${set.head}`;
+		let run = graphs.get(key);
+		if (!run) {
+			run = (async () => {
+				const nodes = set.files.filter((f) => f.status !== "removed" && f.kind !== "other").map((f) => ({ path: f.path, kind: f.kind }));
+				const texts: string[] = new Array(nodes.length).fill("");
+				let next = 0;
+				await Promise.all(Array.from({ length: Math.min(6, nodes.length) }, async () => {
+					while (next < Math.min(nodes.length, MAX_GRAPH_FILES)) {
+						const k = next++;
+						const got = await github.fileAt(repo!, set.head, nodes[k].path).catch(fromGitHub);
+						if (got instanceof Buffer && got.length <= MAX_TEXT && !isBinary(got)) texts[k] = got.toString("utf8");
+					}
+				}));
+				return { head: set.head, nodes, links: links(nodes.map((n, k) => ({ path: n.path, text: texts[k] }))), others: set.files.length - nodes.length };
+			})();
+			graphs.set(key, run);
+			run.catch(() => graphs.delete(key)); // a failure is not kept
+			if (graphs.size > 100) graphs.delete(graphs.keys().next().value!);
+		}
+		return run;
 	}
 
 	type FileRef = { repo: string; ref: string; path: string };
@@ -1402,6 +1432,9 @@ export function createApp(opts: AppOptions): App {
 		}
 		if (method === "GET" && path === "/api/prs/files") {
 			return send(res, 200, await prFilesFor(lab, url.searchParams.get("repo"), Number(url.searchParams.get("number"))));
+		}
+		if (method === "GET" && path === "/api/prs/graph") {
+			return send(res, 200, await prGraph(lab, url.searchParams.get("repo"), Number(url.searchParams.get("number"))));
 		}
 		// SPEC 16: the PR page, read as the person
 		if (method === "GET" && path === "/api/pr") {

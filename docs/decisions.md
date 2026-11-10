@@ -435,3 +435,25 @@ Dr. Jeong asked for a way to filter out JSON and other non-code, with Markdown k
 - On Guided review the switch folds whole steps, not files inside a step: a step is
   the AI's unit, and a step half shown would not match its summary.
 - No switch when it would hide nothing or everything.
+
+## 2026-11-09: The dependency graph is drawn, from the text alone
+
+Dr. Jeong asked to see the dependency graph (issue 40 had it as "shown and fed to the
+planner"). Built: shown. Tried on fossil#36: 21 code files, 38 links.
+
+- Links come from reading the changed files (`src/depgraph.ts`): imports, and a file's
+  name written in another. No language server: the graph is wanted the moment the page
+  opens, for Nextflow, shell and batch files too, and those have no server. No model:
+  it would cost money on every push and could invent a link.
+- Only links between files of the PR. The question on a review is how the changed
+  parts hang together, and the rest of the repository would be most of the drawing.
+- Documents are chips, not boxes. On fossil#36 two READMEs named 20 files each and
+  turned the drawing into a fan; and code that writes "see README.md" made circles. So
+  a document's links show on a tap, and code naming a document is no link.
+- A file sits just above its first user, not as high as it can: with every leaf in the
+  top row, the top row was 11 files wide and the arrows ran the whole height.
+- Its own endpoint, kept in memory per head commit. The stored guided review is not
+  touched, so no PR is prepared again (that costs model calls).
+- The planner is not fed the graph, and the files are not reordered by it (issue 50
+  waits for a word). Both change what the AI writes; the drawing changes nothing.
+- Folds, and stays folded: on a phone it is a screen high.

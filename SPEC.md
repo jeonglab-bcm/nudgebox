@@ -766,3 +766,41 @@ computer and a phone.
     fetched. A location outside the commit's folder is never shown, only counted.
 - Without the language servers (`code` not set up) nothing is clickable and the diffs
   are as before.
+
+## 22. Dependency graph
+
+A PR page draws which of its changed files use which (Dr. Jeong, 2026-11-09, issue
+40). It is on **Files changed**, above the list, and on **Guided review**, under the
+steps; on a computer and a phone.
+
+- **What is drawn.** The changed code files that are linked to another changed code
+  file, each as a box with its name, and an arrow from a file to every file that uses
+  it. **A file stands under the files it uses**, so reading from the top goes from the
+  parts to what is built from them. Two files of one name carry their folder.
+- **Two kinds of link.**
+  - **Import** (full arrow): Python `import` and `from … import` (also in Snakemake
+    files and notebooks), JavaScript and TypeScript `import`, `require` and
+    `import()`, Nextflow `include`.
+  - **Named** (dashed arrow): the file's name is written in the other file, as a
+    pipeline does with `python build_page.py` or a batch script with `main.nf`.
+  - One arrow per pair of files; an import counts before a name. Only links between
+    files of this PR: a library or an unchanged file is not in the drawing.
+- **Tap a file** and its arrows are marked, the other files fade, and a line under the
+  drawing gives its full path, **Uses** and **Used by**. On Files changed, **Open
+  file** opens its diff in the list; on Guided review the box carries its step's
+  number and the button says **Open step N**. A second tap lets go.
+- **Under the drawing.**
+  - **Not linked to the others**: code files with no link, as chips.
+  - **Documents**: the changed Markdown and other documents, each with how many
+    changed files it names. A tap shows which. Documents are not boxes: a README that
+    names every file would cover the drawing. A code file that names a document is no
+    link.
+- **Which files.** Code and documents as in section 15's switch; settings, data and
+  pictures are not in it, nor are removed files. The files are read as they are at the
+  PR's head.
+- The heading folds the drawing; folded stays folded, in this browser, for every PR.
+- A PR with no link between its code files has no drawing and no heading.
+- **How it is found.** By reading the changed files' text on the Nudgebox server: no
+  language server, no AI model, nothing from the repository is run. At most 400 files
+  are read, none over 1 MB. The answer is kept for the PR's head commit, so a push
+  reads again and a reload does not. Only for repos you can see (section 4).

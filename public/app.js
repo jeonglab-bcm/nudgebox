@@ -1497,6 +1497,7 @@ function unifiedView(r, labels, review) {
 // viewed ticks, line comments and threads; `labels` names the two panes
 function fileList(st, repo, github, opts = {}) {
 	return el("ul", { class: "files" }, st.data.files.flatMap((f) => {
+		if (opts.show && !opts.show(f)) return [];
 		const isOpen = st.open.has(f.path);
 		const viewed = opts.viewed?.[f.path] === "VIEWED";
 		const stop = (e) => e.stopPropagation();
@@ -2236,6 +2237,40 @@ function commitView(t) {
 
 // -- Files changed: omnidiff diffs plus GitHub's review tools
 
+// -- only code and docs (SPEC 15): a switch on Files changed and on the guided review -----
+const readsLikeCode = (f) => f.kind !== "other";
+let codeOnly = (() => { try { return localStorage.getItem("ghd-code-only") === "1"; } catch { return false; } })();
+function setCodeOnly(on) {
+	codeOnly = on;
+	try { on ? localStorage.setItem("ghd-code-only", "1") : localStorage.removeItem("ghd-code-only"); } catch {}
+	render();
+}
+
+/** The changed files the switch leaves, or all of them when it is off or would hide nothing or everything. */
+function kindFilter(all = files.data?.files ?? []) {
+	const kept = all.filter(readsLikeCode);
+	const offered = kept.length > 0 && kept.length < all.length;
+	const on = offered && codeOnly;
+	return { offered, on, total: all.length, kept: kept.length, show: on ? readsLikeCode : () => true, hidden: on ? all.filter((f) => !readsLikeCode(f)) : [] };
+}
+
+/** "All files 80 | Code and docs 22", and under it what is hidden, by kind of file. */
+function kindSwitch(k) {
+	if (!k.offered) return null;
+	const choice = (on, name, n) => el("button", { "aria-pressed": String(k.on === on), onclick: () => setCodeOnly(on) }, name, el("span", { class: "n" }, n));
+	const kinds = new Map();
+	for (const f of k.hidden) {
+		const name = f.path.slice(f.path.lastIndexOf("/") + 1);
+		const ext = name.lastIndexOf(".") > 0 ? name.slice(name.lastIndexOf(".")).toLowerCase() : name;
+		kinds.set(ext, (kinds.get(ext) ?? 0) + 1);
+	}
+	const by = [...kinds].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+	const some = by.slice(0, 6).map(([ext, n]) => `${n} ${ext}`).join(", ") + (by.length > 6 ? `, ${by.slice(6).reduce((a, x) => a + x[1], 0)} more` : "");
+	return el("div", { class: "kind-filter" },
+		el("div", { class: "kind-switch", role: "group", "aria-label": "Which files to show" }, choice(false, "All files", k.total), choice(true, "Code and docs", k.kept)),
+		k.on ? el("p", { class: "kind-hidden" }, `${plural(k.hidden.length, "file")} hidden: ${some}`, el("button", { class: "link", onclick: () => setCodeOnly(false) }, "Show all")) : null);
+}
+
 function filesChangedView(t, p) {
 	if (!files.data) return el("p", { class: "hint" }, files.error ?? "Loading the files…");
 	const total = files.data.files.length;
@@ -2248,7 +2283,9 @@ function filesChangedView(t, p) {
 			"Review changes", pending ? el("span", { class: "n" }, pending) : null) : null);
 	const form = prv.reviewOpen && p.state === "OPEN" ? reviewForm(p, own) : null;
 	const prUrl = p.url;
+	const kinds = kindFilter();
 	const list = fileList(files, t.repo, `${prUrl}/files`, {
+		show: kinds.show,
 		pick: (f) => pickOf(t, f, files.data),
 		pr: { repo: t.repo, number: t.number },
 		viewed: p.viewed,
@@ -2277,7 +2314,7 @@ function filesChangedView(t, p) {
 			onAdd: (side, line) => { prv.form = { subject: "line", path: f.path, side, line }; render(); main.querySelector(".comment-form textarea")?.focus(); },
 		}),
 	});
-	return el("div", { class: "files-changed" }, head, form, list);
+	return el("div", { class: "files-changed" }, head, form, kindSwitch(kinds), list);
 }
 
 function reviewForm(p, own) {
@@ -2613,6 +2650,7 @@ function guideList(t, p, d) {
 	g.fromList = false;
 	const sizes = d.steps.map((s) => s.files.map((x) => byPath.get(x)).filter(Boolean).reduce((a, f) => [a[0] + f.additions, a[1] + f.deletions], [0, 0]));
 	const most = Math.max(1, ...sizes.map(([a, b]) => a + b));
+	const kinds = kindFilter();
 	const rows = d.steps.map((s, k) => {
 		const fs = s.files.map((x) => byPath.get(x)).filter(Boolean);
 		const [adds, dels] = sizes[k];
@@ -2631,6 +2669,10 @@ function guideList(t, p, d) {
 				el("span", { class: "add", style: `width:${(100 * adds) / most}%` }), el("span", { class: "del", style: `width:${(100 * dels) / most}%` })) : null));
 	});
 
+	// with the switch on, a step that holds no code and no docs goes under one folded line
+	const noCode = (k) => kinds.on && !d.steps[k].files.some((x) => byPath.get(x) && readsLikeCode(byPath.get(x)));
+	noCode.n = d.steps.filter((_, k) => noCode(k)).length;
+
 	const pending = p.pendingReview?.comments ?? 0;
 	const own = p.author.toLowerCase() === prv.login.toLowerCase();
 	const canSubmit = p.state === "OPEN";
@@ -2647,7 +2689,11 @@ function guideList(t, p, d) {
 			el("p", { class: "guide-progress" }, `${done} of ${n} steps reviewed`, meter(done, n)),
 			next >= 0 ? el("button", { class: "primary", onclick: () => guideTo(next) }, done || changed ? `Continue with step ${next + 1}` : "Start review", el("kbd", {}, "↵")) : null),
 		all ? finish : null,
-		el("ol", { class: "guide-steps" }, rows),
+		kindSwitch(kinds),
+		el("ol", { class: "guide-steps" }, rows.filter((_, k) => !noCode(k))),
+		noCode.n ? el("details", { class: "guide-nocode" },
+			el("summary", {}, `${plural(noCode.n, "step")} without code or docs`),
+			el("ol", { class: "guide-steps" }, rows.filter((_, k) => noCode(k)))) : null,
 		all ? null : finish,
 		noise);
 }

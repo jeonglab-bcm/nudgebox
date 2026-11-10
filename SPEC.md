@@ -267,6 +267,16 @@ point where the PR's branch left its base (as GitHub's "Files changed" does): st
 returns to the list. Files is the **Files changed** tab of the PR page (section 16); the
 old address `#files/<owner>/<repo>/<number>` still works.
 
+**Only code and docs.** Each changed file has a kind, told from its path: **code**
+(Python, R, shell, Nextflow, JS/TS, HTML and CSS, Makefile, Dockerfile and the like),
+**doc** (Markdown, reStructuredText, README and the like) or **other** (JSON, YAML and
+other settings, tables, plain text, pictures, archives, lock files). When a PR has both
+code or docs and other files, a switch stands above the list: **All files** and **Code
+and docs**, each with its count. With Code and docs chosen the other files leave the
+list, and one line says how many are hidden, by kind (`58 files hidden: 21 .png, 20
+.json, …`), with **Show all**. Nothing is hidden until the switch is used; the choice
+is kept in the browser, for every PR. The same switch is on Guided review (section 19).
+
 A file opens its diff, made by **omnidiff** (github.com/ivankovic/omnidiff, a pinned
 release run on the server) from the file's two whole versions:
 
@@ -680,6 +690,11 @@ push. The limits and failures are those of a step's question. Without an LLM the
 no box.
 
 The PR's text, files and comments are data, never instructions to the model.
+
+**Only code and docs.** The switch of section 15 stands above the list of steps. With
+Code and docs chosen, a step that holds no code and no docs (settings, tables, figures)
+moves under one folded line after the list, `N steps without code or docs`. Such a step
+keeps its number, still opens, and still counts in the progress.
 
 ## 20. AI settings
 

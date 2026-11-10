@@ -420,3 +420,18 @@ a finished review and a button to be found is not there for whoever opens the PR
   (the step's bar, the compare tray, the key hints), and a box in the flow is found
   without it.
 
+## 2026-11-09: A switch that leaves only code and docs
+
+Dr. Jeong asked for a way to filter out JSON and other non-code, with Markdown kept
+(issue 54). fossil#36 changes 80 files; 22 of them are code or Markdown.
+
+- A file's kind comes from its path alone (`src/filekind.ts`): code, doc, other. No
+  file is read for it, so the list costs nothing more.
+- HTML and CSS count as code: in most repositories they are written by hand. Settings
+  (JSON, YAML, TOML, `nextflow.config`, `requirements.txt`) count as other: that is
+  what was asked for, and the line under the switch names what is hidden.
+- Off until used. A review tool that hides files without being asked hides the one
+  change that mattered. Once used, the choice stays in the browser for every PR.
+- On Guided review the switch folds whole steps, not files inside a step: a step is
+  the AI's unit, and a step half shown would not match its summary.
+- No switch when it would hide nothing or everything.

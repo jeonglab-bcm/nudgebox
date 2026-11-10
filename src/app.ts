@@ -22,6 +22,7 @@ import type { Differ, DiffSide } from "./omnidiff.ts";
 import { hasMarkers, planMerge, type ReadFile } from "./conflicts.ts";
 import { EXPLAIN_FORMAT, explainAskPrompt, explainPrompt } from "./explain.ts";
 import { CODE_KINDS, CodeError, type CodeIntel } from "./code.ts";
+import { fileKind } from "./filekind.ts";
 import { askPrPrompt, askPrompt, carryPlan, checkPrompt, codeAt, commentable, dataSteps, isData, MAX_DRAFTS_PER_STEP, MAX_QUESTION, noiseReason, numberedChanges, parseJson, planPrompt, readCheck, readPlan, readReview, REVIEW_FORMAT, reviewPrompts, type AskAbout, type CodeLine, type Draft, type FileChanges, type PlanStep } from "./review.ts";
 
 export interface Config {
@@ -582,7 +583,7 @@ export function createApp(opts: AppOptions): App {
 		if (!pr || !repos.has(pr.repo.toLowerCase())) throw new HttpError(404, "no such pull request");
 		const files = await github.prFiles(pr.repo, pr.number);
 		if (!files) throw new HttpError(404, "no such pull request");
-		return files;
+		return { ...files, files: files.files.map((f) => ({ ...f, kind: fileKind(f.path) })) };
 	}
 
 	type FileRef = { repo: string; ref: string; path: string };

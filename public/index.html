@@ -571,6 +571,16 @@ textarea:focus, .merge-confirm input:focus { outline: 2px solid var(--accent); o
 .dep-graph { display: grid; gap: 8px; padding: 10px 12px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); min-width: 0; margin: 0 0 12px; }
 .guide .dep-graph { margin: 0; }
 .dep-graph.folded { padding-bottom: 10px; }
+main:has(.files-changed.beside) { max-width: 1632px; }
+:root:has(.files-changed.beside) { --gutter: max(20px, calc((100% - 1632px) / 2 + 12px)); }
+#pr-page:has(.files-changed.beside) { max-width: none; }
+.files-split .file { scroll-margin-top: var(--top, 0px); }
+.files-split .file.open { position: sticky; top: var(--top, 0px); z-index: 2; background: var(--bg); box-shadow: 0 2px 6px oklch(0% 0 0 / .06); }
+.files-split { display: grid; grid-template-columns: clamp(260px, 24vw, 360px) minmax(0, 1fr); gap: 16px; align-items: start; }
+.files-side { position: sticky; top: calc(var(--top, 0px) + 8px); max-height: calc(100vh - var(--top, 0px) - 16px); overflow: auto; overscroll-behavior: contain; min-width: 0; border: 1px solid var(--line); border-radius: 10px; }
+.files-side .dep-graph { margin: 0; border: 0; }
+.files-main { min-width: 0; }
+.files-main .files { margin-top: 8px; }
 .dep-head { display: flex; align-items: baseline; gap: 10px; width: 100%; border: 0; background: none; padding: 2px 0; text-align: left; color: var(--fg); min-height: 32px; cursor: pointer; }
 .dep-title { font-weight: 650; }
 .dep-fold { margin-left: auto; color: var(--muted); }

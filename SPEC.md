@@ -809,6 +809,16 @@ and a phone.
   opens its diff in the list; on Guided review the file carries its step's number and
   the button says **Open step N**. Where the file's own files are listed in another
   place, **Go to its branch** goes there. A second tap lets go.
+- **Beside the files** (Dr. Jeong, 2026-11-10). On Files changed, on a screen at least
+  1100px wide, the tree is a column at the left and the files with their diffs are at
+  the right; the page uses the width of the screen, up to 1600px.
+  - The tree stays in view while the files scroll; a tree longer than the screen
+    scrolls on its own and keeps its place.
+  - **A tap on a file opens its diff at the right** and goes to it; there is no Open
+    file button. The row with the open file's name stays at the top while its diff is
+    read.
+  - With the graph folded there is one column again. On a narrower screen and on a
+    phone the tree is above the files, and on Guided review under the steps.
 - **Folding.** The mark beside a file with files under it folds them away and shows
   how many there are. A tree of more than 40 lines starts with only the top files'
   branches open. The heading folds the whole graph; folded stays folded, in this

@@ -492,3 +492,21 @@ asked for something like a tree. Both were right.
   already under it.
 - The endpoint and its answer are as before; the stored guided reviews are not
   touched, so no PR is prepared again.
+
+## 2026-11-10: The tree beside the code
+
+Dr. Jeong asked for the tree and the code side by side.
+
+- On Files changed, from 1100px: the tree in a column at the left that stays in view,
+  the files at the right. A tap on a file in the tree opens its diff there. It is the
+  layout of an editor, and of GitHub's own file tree; the tree above the list meant a
+  scroll up and down for every file.
+- The page is as wide as the screen there (up to 1600px), not 1120px: the tree takes
+  260 to 360px, and a diff with before and after beside each other needs the rest.
+- The open file's row sticks under the bar, as it already does on a phone: with the
+  tree as the way in, the name of what is being read must stay on the screen.
+- The page is built anew on every change, so the column's scroll place is put back
+  after each one; without it the tree jumped to its top on every tap.
+- Not on a phone: 390px has no room for two columns. Not on Guided review: its tree is
+  on the page of the steps, where no code is shown; a step's files are few.
+- Folding the graph gives the files the full width back; that is the switch.

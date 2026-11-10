@@ -98,10 +98,10 @@ test("22. a tap on a file shows what it uses and what uses it, and opens its dif
 		assert.match(await text(s.page, ".dep-pick"), /Used by fit\.py/);
 		// what it says stands right under the tapped line
 		assert.equal(await s.page.locator(".dep-tree > li").nth(4).getAttribute("class"), "dep-pick-row");
-
-		await s.page.locator(".dep-pick button", { hasText: "Open file" }).click();
+		// on a computer the tap has opened its diff beside the tree
 		await s.page.waitForSelector("li.file.open");
 		assert.deepEqual(await s.page.locator("li.file.open .path").allTextContents(), ["pipeline/model.py"]);
+		assert.equal(await s.page.locator(".dep-pick button", { hasText: "Open file" }).count(), 0);
 
 		// a second tap lets go; a document shows the files it names
 		await node(s.page, "pipeline/model.py").click();
@@ -110,6 +110,67 @@ test("22. a tap on a file shows what it uses and what uses it, and opens its dif
 		await s.page.locator(".dep-docs .dep-chip", { hasText: "README.md" }).click();
 		assert.deepEqual(await marked(s.page, "near"), ["run.sh", "pipeline/fit.py"]);
 		assert.match(await text(s.page, ".dep-pick"), /Names fit\.py, run\.sh/);
+	} finally {
+		await s.close();
+	}
+});
+
+test("22. on a computer the tree stands beside the files and stays in view; folded, the files have the full width", async () => {
+	const s = await open();
+	try {
+		await s.page.waitForSelector(".dep-tree");
+		const box = async (sel: string) => (await s.page.locator(sel).first().boundingBox())!;
+		const [side, main] = [await box(".files-changed.beside .files-side"), await box(".files-changed.beside .files-main")];
+		assert.ok(side.x + side.width <= main.x, "the tree is left of the files");
+		assert.ok(Math.abs(side.y - main.y) < 2, "both start at one height");
+		assert.ok(main.width >= 2 * side.width, `the files have most of the width (${side.width} and ${main.width})`);
+		assert.equal(await s.page.locator(".files-side").evaluate((x) => getComputedStyle(x).position), "sticky");
+		assert.equal(await s.page.locator(".files-main ul.files").count(), 1);
+		assert.equal(await s.page.locator(".files-main .kind-switch").count(), 1);
+		assert.match(await text(s.page, ".dep-how"), /Tap a file to open it/);
+		assert.ok(await s.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), "nothing scrolls sideways");
+
+		// a file that is only named under the tree opens as well
+		await s.page.locator(".dep-docs .dep-chip", { hasText: "README.md" }).click();
+		await s.page.waitForSelector("li.file.open");
+		assert.deepEqual(await s.page.locator("li.file.open .path").allTextContents(), ["README.md"]);
+
+		// its name is under the page's bar, not behind it
+		const bar = await box(".chrome");
+		assert.ok((await box("li.file.open")).y >= bar.y + bar.height - 1, "the opened file's row is in view");
+
+		await s.page.locator(".dep-head").click();
+		assert.equal(await s.page.locator(".files-changed.beside").count(), 0);
+		assert.ok((await box("ul.files")).width > main.width);
+	} finally {
+		await s.close();
+	}
+});
+
+test("22. beside the files a long tree scrolls on its own, and keeps its place when a file is opened", async () => {
+	const tall: Record<string, string> = { "main.py": "" };
+	for (let i = 0; i < 14; i++) {
+		tall["main.py"] += `import mod_${i}\n`;
+		tall[`mod_${i}.py`] = `import leaf_${i}\n`;
+		tall[`leaf_${i}.py`] = "x = 1\n";
+	}
+	const s = await open({ files: tall });
+	try {
+		await s.page.waitForSelector(".dep-tree");
+		const side = s.page.locator(".files-side");
+		const room = await side.evaluate((x) => ({ all: x.scrollHeight, seen: x.clientHeight, screen: window.innerHeight }));
+		assert.ok(room.seen <= room.screen && room.all > room.seen + 200, `the tree is longer than its column (${room.all} in ${room.seen})`);
+		await side.evaluate((x) => { x.scrollTop = 300; });
+		await node(s.page, "mod_6.py").click();
+		await s.page.waitForSelector("li.file.open");
+		assert.deepEqual(await s.page.locator("li.file.open .path").allTextContents(), ["mod_6.py"]);
+		await s.page.waitForTimeout(100);
+		const at = await side.evaluate((x) => x.scrollTop);
+		assert.ok(Math.abs(at - 300) < 60, `the tree stayed where it was (${at})`);
+		// the tree is still on the screen after the page went to the file
+		const box = (await side.boundingBox())!;
+		assert.ok(box.y >= 0 && box.y + box.height <= room.screen + 1, "the tree is in view");
+		assert.ok(await node(s.page, "mod_6.py").isVisible());
 	} finally {
 		await s.close();
 	}
@@ -209,8 +270,14 @@ test("22. on a phone the tree fits the screen and its names can be read", async 
 		assert.ok(fit.font >= 12, `names of ${fit.font}px`);
 		assert.ok(fit.tap >= 30, `a file a thumb can hit (${fit.tap}px)`);
 		assert.ok(fit.name >= 60, `the deepest name still shows (${fit.name}px)`);
+		// no room for two columns: the tree is above the files, and a button opens the tapped file
+		assert.equal(await s.page.locator(".files-changed.beside").count(), 0);
 		await node(s.page, "pipeline/a_rather_long_file_name_3.py").click();
 		assert.match(await text(s.page, ".dep-pick"), /Uses a_rather_long_file_name_2\.py/);
+		assert.equal(await s.page.locator("li.file.open").count(), 0);
+		await s.page.locator(".dep-pick button", { hasText: "Open file" }).click();
+		await s.page.waitForSelector("li.file.open");
+		assert.deepEqual(await s.page.locator("li.file.open .path").allTextContents(), ["pipeline/a_rather_long_file_name_3.py"]);
 	} finally {
 		await s.close();
 	}

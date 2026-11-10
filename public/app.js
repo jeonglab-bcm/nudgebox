@@ -2256,6 +2256,10 @@ async function loadDeps(t) {
 
 const baseName = (p) => p.slice(p.lastIndexOf("/") + 1);
 
+// wide enough for the tree beside the files (SPEC 22)
+const roomy = matchMedia("(min-width: 1100px)");
+roomy.addEventListener("change", () => render());
+
 /**
  * The tree: at the top the files that no other changed file uses, under each file the
  * files it uses. A file used in several places has a line in each, and its own branches
@@ -2324,7 +2328,8 @@ function depsRows(T, shut) {
 
 /**
  * The card with the tree. `o.badge(path)` is a short mark on a file (its step), and
- * `o.open(path)` gives { label, go } for the button of the picked file.
+ * `o.open(path)` gives { label, go } for the button of the picked file. With `o.tap(path)`
+ * a tap on a file calls it (and it renders): the tree stands beside what the tap opens.
  */
 function depsCard(t, o) {
 	loadDeps(t);
@@ -2353,7 +2358,9 @@ function depsCard(t, o) {
 		const same = deps.pick === p && deps.at === at;
 		deps.pick = same ? null : p;
 		deps.at = same ? null : at;
-		render();
+		deps.reveal = !same && !!o.tap;
+		if (!same && o.tap) o.tap(p); // beside the code: the tap opens the file there
+		else render();
 	};
 	// what the picked file touches: for code what it uses and what uses it, for a document the files it names
 	const usesOf = (p) => g.links.filter((l) => l.from === p).map((l) => l.to);
@@ -2421,14 +2428,20 @@ function depsCard(t, o) {
 	if (deps.goto) {
 		const id = deps.goto;
 		deps.goto = null;
-		requestAnimationFrame(() => [...document.querySelectorAll(".dep-row")].find((x) => x.dataset.row === id)?.scrollIntoView({ block: "center" }));
+		// beside the code the tree scrolls on its own, and the page stays where it is
+		requestAnimationFrame(() => [...document.querySelectorAll(".dep-row")].find((x) => x.dataset.row === id)?.scrollIntoView({ block: o.tap ? "nearest" : "center" }));
+	}
+
+	if (deps.reveal) { // in its own column the tree scrolls by itself: what the tap says must be in view
+		deps.reveal = false;
+		requestAnimationFrame(() => document.querySelector(".files-side .dep-pick")?.scrollIntoView({ block: "nearest" }));
 	}
 
 	const chip = (p, extra = null) => el("button", { class: `dep-chip${p === pick ? " picked" : ""}`, "aria-pressed": String(p === pick), title: p, onclick: () => setPick(p) }, shortName(p), extra);
 	const alone = g.nodes.filter((n) => n.kind === "code" && !T.drawn.includes(n.path));
 	const docs = g.nodes.filter((n) => n.kind === "doc");
 	return el("section", { class: "dep-graph" }, head,
-		el("p", { class: "hint dep-how" }, "Under each file: the files it uses. Dashed: run or read by its name, not imported. Tap a file to see what uses it."),
+		el("p", { class: "hint dep-how" }, `Under each file: the files it uses. Dashed: run or read by its name, not imported. ${o.tap ? "Tap a file to open it." : "Tap a file to see what uses it."}`),
 		tree,
 		pick && !here ? picked() : null,
 		alone.length ? el("p", { class: "dep-alone" }, el("span", { class: "hint" }, "Not linked to the others: "), alone.map((n) => chip(n.path))) : null,
@@ -2513,19 +2526,32 @@ function filesChangedView(t, p) {
 			onAdd: (side, line) => { prv.form = { subject: "line", path: f.path, side, line }; render(); main.querySelector(".comment-form textarea")?.focus(); },
 		}),
 	});
+	const openFile = (path) => {
+		const f = files.data.files.find((x) => x.path === path);
+		if (f) {
+			files.open.add(path);
+			if (!files.diffs.has(path)) { files.diffs.set(path, null); loadDiff(files, t.repo, f); }
+		}
+		render();
+		[...main.querySelectorAll("li.file")].find((li) => li.dataset.path === path)?.scrollIntoView({ block: "start" });
+	};
+	// with room for two columns the tree stands beside the files, and a tap on it opens the file
+	const beside = roomy.matches && depsOpen;
+	// the page is built anew on every change: the tree's column keeps its place
+	const was = main.querySelector(".files-side")?.scrollTop;
+	if (was) requestAnimationFrame(() => { const side = main.querySelector(".files-side"); if (side) side.scrollTop = was; });
 	const graph = depsCard(t, {
 		badge: () => null,
-		open: (path) => {
-			const f = files.data.files.find((x) => x.path === path);
-			return f && { label: "Open file", go: () => {
-				files.open.add(path);
-				if (!files.diffs.has(path)) { files.diffs.set(path, null); loadDiff(files, t.repo, f); }
-				render();
-				[...main.querySelectorAll("li.file")].find((li) => li.dataset.path === path)?.scrollIntoView({ block: "start" });
-			} };
-		},
+		tap: beside ? openFile : null,
+		open: (path) => (beside || !files.data.files.some((x) => x.path === path) ? null : { label: "Open file", go: () => openFile(path) }),
 	});
-	return el("div", { class: "files-changed" }, head, form, graph, kindSwitch(kinds), list);
+	if (!beside || !graph) return el("div", { class: "files-changed" }, head, form, graph, kindSwitch(kinds), list);
+	const bar = document.querySelector(".chrome");
+	const top = bar && getComputedStyle(bar).position === "sticky" ? Math.round(bar.getBoundingClientRect().height) : 0;
+	return el("div", { class: "files-changed beside" }, head, form,
+		el("div", { class: "files-split", style: `--top: ${top}px` },
+			el("aside", { class: "files-side" }, graph),
+			el("div", { class: "files-main" }, kindSwitch(kinds), list)));
 }
 
 function reviewForm(p, own) {

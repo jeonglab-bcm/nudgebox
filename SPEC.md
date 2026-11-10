@@ -771,8 +771,8 @@ computer and a phone.
 
 A PR page shows which of its changed files use which, as a tree (Dr. Jeong,
 2026-11-09, issue 40; a tree and real uses only, 2026-11-10). It is on **Files
-changed**, above the list, and on **Guided review**, under the steps; on a computer
-and a phone.
+changed** and on **Guided review**, on a computer and a phone: beside the code on a
+computer, above the files or the steps on a phone.
 
 - **The tree.** At the top stand the changed code files that no other changed file
   uses: what is run. **Under each file are the files it uses**, one step to the right,
@@ -818,7 +818,19 @@ and a phone.
     file button. The row with the open file's name stays at the top while its diff is
     read.
   - With the graph folded there is one column again. On a narrower screen and on a
-    phone the tree is above the files, and on Guided review under the steps.
+    phone the tree is above the files.
+  - With the code panel (section 21) open on a screen under 1500px the tree makes
+    room for it, and is back when the panel closes.
+- **In Guided review** (Dr. Jeong, 2026-11-10, issue 60: "I don't see the graph").
+  Each file in the tree carries the number of its step.
+  - On a screen at least 1100px wide the tree is a column at the left: **beside the
+    steps** on the page of the steps, and **beside the code in a step**, between the
+    two bars. In a step the files of that step are marked.
+  - **A tap on a file opens it in its step**: the page goes to that step if it is
+    another one, opens that file alone and goes to it.
+  - With the graph folded a step keeps the heading, above its files, to unfold it.
+  - On a narrower screen and on a phone the tree is **above the steps**, and **Open
+    step N** opens the file in its step. A step there is the code alone, with no tree.
 - **Folding.** The mark beside a file with files under it folds them away and shows
   how many there are. A tree of more than 40 lines starts with only the top files'
   branches open. The heading folds the whole graph; folded stays folded, in this
@@ -832,7 +844,9 @@ and a phone.
 - **Which files.** Code and documents as in section 15's switch; settings, data and
   pictures are not in it, nor are removed files. The files are read as they are at the
   PR's head.
-- A PR with no link between its code files has no graph and no heading.
+- A PR with no link between its code files has no tree. With two or more code files
+  one line says so in its place ("none of the N changed code files uses another");
+  with one code file or none, nothing is said.
 - **How it is found.** By reading the changed files' text on the Nudgebox server: no
   language server, no AI model, nothing from the repository is run. At most 400 files
   are read, none over 1 MB. The answer is kept for the PR's head commit, so a push

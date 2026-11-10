@@ -1990,6 +1990,11 @@ function renderPr() {
 		if (step !== null || typeof from === "number") window.scrollTo(0, 0);
 		if (step === null && typeof from === "number") main.querySelectorAll(".guide-row")[from]?.scrollIntoView({ block: "nearest" });
 	}
+	if (g?.want) { // SPEC 22: the tree sent the reader to one file of this step
+		const path = g.want;
+		g.want = null;
+		if (step !== null) fileRow(path)?.scrollIntoView({ block: "start" });
+	}
 	const on = nav.querySelector(".on"); // on a phone the tabs scroll sideways: keep this one in sight
 	const past = on ? on.getBoundingClientRect().right - nav.getBoundingClientRect().right : 0;
 	if (past > 0) nav.scrollLeft += past + 16;
@@ -2327,16 +2332,34 @@ function depsRows(T, shut) {
 }
 
 /**
- * The card with the tree. `o.badge(path)` is a short mark on a file (its step), and
+ * The card with the tree. `o.badge(path)` is a short mark on a file (its step), `o.cur(path)`
+ * says the file is of the step that is open, and
  * `o.open(path)` gives { label, go } for the button of the picked file. With `o.tap(path)`
  * a tap on a file calls it (and it renders): the tree stands beside what the tap opens.
  */
+/** How much of the top the app's header keeps, for what must stay in view under it. */
+function chromeTop() {
+	const bar = document.querySelector(".chrome");
+	return bar && getComputedStyle(bar).position === "sticky" ? Math.round(bar.getBoundingClientRect().height) : 0;
+}
+
+/** The page is built anew on every change: the tree's own column keeps its place. Call before the tree is built. */
+function keepSide() {
+	const was = main.querySelector(".files-side")?.scrollTop;
+	if (was) requestAnimationFrame(() => { const side = main.querySelector(".files-side"); if (side) side.scrollTop = was; });
+}
+
+const isTree = (card) => Boolean(card?.classList.contains("dep-graph") && !card.classList.contains("folded"));
+
 function depsCard(t, o) {
 	loadDeps(t);
 	const g = deps.data;
 	if (!g) return null;
 	const T = depsTree(g);
-	if (!T.links.length) return null;
+	if (!T.links.length) { // nothing to draw: say so, where there is code that could have used each other
+		const code = g.nodes.filter((n) => n.kind === "code").length;
+		return code > 1 ? el("p", { class: "hint dep-none" }, el("b", {}, "Dependency graph: "), `none of the ${code} changed code files uses another.`) : null;
+	}
 	const kind = T.kind;
 	// a big tree starts with only the tops' own branches open
 	if (!deps.shut) deps.shut = new Set(depsRows(T, new Set()).length > 40 ? T.drawn.filter((p) => T.home.get(p) !== null && T.uses.get(p).length) : []);
@@ -2406,7 +2429,7 @@ function depsCard(t, o) {
 		const file = (x) => {
 			const mark = o.badge(x.path);
 			const where = !x.again ? null : !ownAt.has(x.path) ? "…" : ownAt.get(x.path) < i ? "↑" : "↓";
-			return el("button", { class: `dep-node${x.how === "mention" ? " named" : ""}${x.path === pick ? " picked" : ""}${near.has(x.path) ? " near" : ""}`, "data-path": x.path,
+			return el("button", { class: `dep-node${x.how === "mention" ? " named" : ""}${x.path === pick ? " picked" : ""}${near.has(x.path) ? " near" : ""}${o.cur?.(x.path) ? " here" : ""}`, "data-path": x.path,
 				title: `${x.path}${x.how === "mention" ? "\nRun or read by its name, not imported" : ""}${where ? "\nIts own files are listed in another place" : ""}`,
 				"aria-pressed": String(x.path === pick), onclick: () => setPick(x.path, r.id) },
 				mark ? el("span", { class: "dep-step" }, mark) : null,
@@ -2537,17 +2560,14 @@ function filesChangedView(t, p) {
 	};
 	// with room for two columns the tree stands beside the files, and a tap on it opens the file
 	const beside = roomy.matches && depsOpen;
-	// the page is built anew on every change: the tree's column keeps its place
-	const was = main.querySelector(".files-side")?.scrollTop;
-	if (was) requestAnimationFrame(() => { const side = main.querySelector(".files-side"); if (side) side.scrollTop = was; });
+	keepSide();
 	const graph = depsCard(t, {
 		badge: () => null,
 		tap: beside ? openFile : null,
 		open: (path) => (beside || !files.data.files.some((x) => x.path === path) ? null : { label: "Open file", go: () => openFile(path) }),
 	});
-	if (!beside || !graph) return el("div", { class: "files-changed" }, head, form, graph, kindSwitch(kinds), list);
-	const bar = document.querySelector(".chrome");
-	const top = bar && getComputedStyle(bar).position === "sticky" ? Math.round(bar.getBoundingClientRect().height) : 0;
+	if (!beside || !isTree(graph)) return el("div", { class: "files-changed" }, head, form, graph, kindSwitch(kinds), list);
+	const top = chromeTop();
 	return el("div", { class: "files-changed beside" }, head, form,
 		el("div", { class: "files-split", style: `--top: ${top}px` },
 			el("aside", { class: "files-side" }, graph),
@@ -2921,22 +2941,57 @@ function guideList(t, p, d) {
 		canSubmit && !prv.reviewOpen ? el("button", { class: all ? "primary" : "", onclick: () => { prv.reviewOpen = true; render(); } }, "Submit review") : null,
 		canSubmit && prv.reviewOpen ? reviewForm(p, own) : null) : null;
 
-	return el("div", { class: "guide" }, head, askCard(t),
+	// SPEC 22: the tree is in sight before the steps; with room for two columns it stands beside them
+	const tree = guideTree(t, d);
+	const body = [
 		el("div", { class: "guide-top" },
 			el("p", { class: "guide-progress" }, `${done} of ${n} steps reviewed`, meter(done, n)),
 			next >= 0 ? el("button", { class: "primary", onclick: () => guideTo(next) }, done || changed ? `Continue with step ${next + 1}` : "Start review", el("kbd", {}, "↵")) : null),
 		all ? finish : null,
+		tree.beside ? null : tree.card,
 		kindSwitch(kinds),
 		el("ol", { class: "guide-steps" }, rows.filter((_, k) => !noCode(k))),
 		noCode.n ? el("details", { class: "guide-nocode" },
 			el("summary", {}, `${plural(noCode.n, "step")} without code or docs`),
 			el("ol", { class: "guide-steps" }, rows.filter((_, k) => noCode(k)))) : null,
-		depsCard(t, {
-			badge: (path) => { const k = d.steps.findIndex((x) => x.files.includes(path)); return k < 0 ? null : String(k + 1); },
-			open: (path) => { const k = d.steps.findIndex((x) => x.files.includes(path)); return k < 0 ? null : { label: `Open step ${k + 1}`, go: () => guideTo(k) }; },
-		}),
 		all ? null : finish,
-		noise);
+		noise];
+	if (!tree.beside) return el("div", { class: "guide" }, head, askCard(t), body);
+	return el("div", { class: "guide beside" }, head, askCard(t),
+		el("div", { class: "files-split", style: `--top: ${chromeTop()}px` },
+			el("aside", { class: "files-side" }, tree.card),
+			el("div", { class: "files-main guide-main" }, body)));
+}
+
+/**
+ * The dependency tree in Guided review (SPEC 22): a file carries its step's number, the
+ * files of the open step `k` are marked, and a file is opened in its step.
+ */
+function guideTree(t, d, k = null) {
+	const stepOf = (path) => d.steps.findIndex((x) => x.files.includes(path));
+	const wide = roomy.matches && depsOpen;
+	keepSide();
+	const card = depsCard(t, {
+		badge: (path) => (stepOf(path) < 0 ? null : String(stepOf(path) + 1)),
+		cur: k === null ? null : (path) => d.steps[k].files.includes(path),
+		tap: wide ? (path) => guideFile(stepOf(path), path) : null,
+		open: (path) => (wide || stepOf(path) < 0 ? null : { label: `Open step ${stepOf(path) + 1}`, go: () => guideFile(stepOf(path), path) }),
+	});
+	return { card, beside: wide && isTree(card) };
+}
+
+/** Opens a file's diff in step `k`, going to that step first. */
+function guideFile(k, path) {
+	const g = prv.guide;
+	if (k < 0) return render();
+	if (guideAt() !== k) {
+		g.want = path;
+		return guideTo(k);
+	}
+	g.open.add(path);
+	g.cur = path;
+	render();
+	fileRow(path)?.scrollIntoView({ block: "start" });
 }
 
 /** On entering a step: a small step opens whole, a big one at its first file to read, data stays folded. */
@@ -2957,6 +3012,12 @@ function guideStepView(t, p, d, k) {
 	const n = d.steps.length;
 	const done = d.steps.filter((x) => x.reviewed).length;
 	if (files.data && g.entered !== step.id) enterStep(step);
+	if (g.want && step.files.includes(g.want)) { // sent here for one file: that one is open, the page goes to it
+		g.open = new Set([g.want]);
+		g.cur = g.want;
+	}
+	// SPEC 22: with room for two columns the tree stands beside the code; a step on a phone is the code alone
+	const tree = roomy.matches ? guideTree(t, d, k) : null;
 	const dir = commonDir(step.files);
 	const short = (path) => path.slice(dir.length);
 	const current = openDraft(step);
@@ -3013,12 +3074,18 @@ function guideStepView(t, p, d, k) {
 		: step.drafts.length ? `The AI read ${read} and flagged ${plural(step.drafts.length, "line")}.${decided ? " All decided." : ""}`
 		: `The AI read ${read} and found nothing to flag.`;
 	const last = !d.steps.some((x, i) => i > k && !x.reviewed);
-	return el("div", { class: "guide" },
+	if (tree?.beside) requestAnimationFrame(() => { // the tree ends above the bar of keys, however high that is
+		const foot = main.querySelector(".guide-foot");
+		if (foot) main.querySelector(".files-split")?.style.setProperty("--bottom", `${foot.offsetHeight}px`);
+	});
+	const beside = (article) => (tree?.beside
+		? el("div", { class: "files-split", style: "--top: 46px; --bottom: 56px" }, el("aside", { class: "files-side" }, tree.card), article) : article);
+	return el("div", { class: `guide${tree?.beside ? " beside" : ""}` },
 		el("div", { class: "guide-bar" },
 			el("button", { class: "quiet", onclick: () => guideTo(null) }, "‹ Steps"),
 			el("p", { class: "guide-progress" }, `Step ${k + 1} of ${n}`, meter(done, n)),
 			el("span", { class: "hint" }, `${done} reviewed`)),
-		el("article", { class: "guide-step" },
+		beside(el("article", { class: "guide-step" },
 			el("h2", {}, step.title, stepFlags(step)),
 			step.summary ? el("p", { class: "guide-step-summary" }, step.summary) : null,
 			ai ? el("p", { class: "guide-ai" }, ai) : null,
@@ -3027,8 +3094,9 @@ function guideStepView(t, p, d, k) {
 				el("span", { class: "spark", "aria-hidden": "true" }, "✦"), el("span", { class: "ask-invite-text" }, "Ask the AI about this step…"),
 				step.asks.length ? el("span", { class: "n" }, plural(step.asks.length, "question")) : null) : null,
 			step.drafts.length ? el("div", { class: "drafts" }, step.drafts.map((x) => draftView(x, x === current, short))) : null,
+			tree?.card?.classList.contains("folded") ? tree.card : null,
 			el("p", { class: "guide-files-head" }, el("b", {}, `${step.seen.length} of ${step.files.length} viewed`), dir ? el("span", {}, "in ", el("code", {}, dir)) : null),
-			el("ul", { class: "files guide-files" }, rows)),
+			el("ul", { class: "files guide-files" }, rows))),
 		el("div", { class: `guide-foot${g.ask ? " asking" : ""}` },
 			g.ask ? askDock(t, step, short, canComment) : null,
 			el("div", { class: "guide-keys btns" },

@@ -281,6 +281,18 @@ release run on the server) from the file's two whole versions:
   their own views.
 - A note when omnidiff names the shape of the change: only whitespace, only comments,
   only moved code, a new file, a deleted file.
+- **Code is coloured by its language** (issue 44): keywords, strings, numbers, comments
+  and names each in their own colour, in the light and the dark theme. The language
+  comes from the file's name (`.py`, `.R`, `.ts`, `Makefile`, `Dockerfile`, …); the
+  languages are the ones the lab writes: Python, R, TypeScript and JavaScript, shell,
+  LaTeX, Nextflow, C and C++, Rust, MATLAB, Julia, Lua, JSON, YAML, TOML, Makefile,
+  Dockerfile, HTML and CSS, Markdown source, and the other common ones. The colours
+  sit **under** omnidiff's marks: a changed part keeps its mark and its colour, and
+  the text is never altered. The same colours are in the phone's one column, in the
+  code above a review thread, in the AI's draft comments (section 19) and in Compare.
+  A file of an unknown kind, and a file over 200,000 characters, stay plain. The
+  highlighter (highlight.js) is served by Nudgebox, not a third party, and loads when
+  the first diff opens.
 - **A new or a deleted file is shown plain**: its one version in one column with one
   line number, no marks and no colour on every line, as there is nothing to compare.
 - Text files over 1 MB are not diffed; the view says so and links to GitHub.
@@ -665,3 +677,47 @@ this one, later) can change it without editing files or restarting.
 - `config.yaml` (`llm: provider, baseUrl, model, deepModel, noThinking`) with
   `LLM_API_KEY` in `.env` is the server's own setting, used until an admin saves one on
   the page. The page says which one is in use.
+
+## 21. Go to definition
+
+In a diff, a click on a name (a function, a class, a variable) shows what it is, where
+it is defined and where it is used, without leaving the page (Dr. Jeong, 2026-11-09,
+issue 45). It works on Files changed, a commit, Compare and Guided review, on a
+computer and a phone.
+
+- **Which code.** The new side of a diff: the After pane, and the unchanged and added
+  lines of the one-column diff. The old side and deleted lines are not clickable.
+  **Python**, **TypeScript** and **JavaScript** files; other files are as before.
+- **The click.** One click (or tap) on a name. A name under the mouse is underlined.
+  Comments, strings, numbers and keywords do nothing. A double click selects the word
+  and a drag selects text, as ever.
+- **The code panel** opens beside the page on a computer and over the whole screen on a
+  phone. It shows:
+  - the name, its signature and its documentation, as the language server gives them;
+  - **Definition**: the file where the name is defined, whole, at that line, with the
+    line marked and its path and line number above it;
+  - **Used in N places**: every use in the repository, per file, each with its line
+    number and its line of code. A use opens its file at that line.
+  - A name that is defined outside the repository (the language itself, a library) has
+    no file to show: the panel says so and still lists its uses in the repository.
+  - A click on the definition itself opens the list of uses.
+- **Further.** Names in the panel's code can be clicked in the same way. **Back** in
+  the panel returns to the name before. Escape or ✕ closes the panel; on a phone the
+  browser's Back closes it too. The page under the panel does not move or reload.
+- **How it is answered.** By real language servers on the Nudgebox server: Pyright for
+  Python, and TypeScript's own server for TypeScript and JavaScript. Both come with
+  `npm ci`; nobody installs or sets up anything, in the lab's repos or on the server.
+  - For a question about a commit, Nudgebox gets that commit's files from GitHub once
+    (one archive), keeps them in a temporary folder, and starts the language server on
+    them. The first click on a commit takes about a second; later ones are immediate.
+  - After 10 minutes without a question the server is stopped and the folder is
+    removed. At most 3 commits are kept at a time; the least recently asked goes first.
+  - **Nothing from the repository is run.** Only code files of these languages,
+    `package.json` and `tsconfig`/`jsconfig` files are unpacked: no links, no
+    `node_modules`, no file over 2 MB, no settings file that could name a program. The
+    language servers start with an empty `PATH`. A repository over 20,000 such files or
+    300 MB gets "too large for go to definition".
+  - Only for repos you can see (section 4): the check is made before anything is
+    fetched. A location outside the commit's folder is never shown, only counted.
+- Without the language servers (`code` not set up) nothing is clickable and the diffs
+  are as before.

@@ -316,3 +316,69 @@ The rest of #43. An explanation was one answer with no way to ask further.
   Guided review the answer could go to the draft it was about. It can follow if wanted.
 - `render()` now keeps the cursor in a box being typed in on every page (it did only on
   the PR page), since Compare has this box too.
+
+## 2026-11-09: Syntax colours in diffs
+
+Dr. Jeong asked for syntax highlighting (issue 44). Diffs were one colour of text with
+omnidiff's marks; a long change in Python or R was hard to scan.
+
+**highlight.js** (BSD-3-Clause, one pinned release in `public/vendor/`), not
+tree-sitter or Shiki: it is one small file with no build step and no WebAssembly, it
+covers every language the lab writes, and it runs in the browser on the text the page
+already has, so the server and the kept diffs do not change. Tree-sitter grammars are
+more exact but are one WebAssembly file per language to build and ship; the colours
+here only help reading, they decide nothing.
+
+The languages were chosen from the lab's repos on 2026-11-09 (Python in 25, shell 14,
+TeX 8, R 7, Nextflow 6, then Makefile, JavaScript, TypeScript, Dockerfile, C++, Rust,
+MATLAB, Lua, Julia, C): the common set of highlight.js plus LaTeX, Groovy (for
+Nextflow), Dockerfile, MATLAB and Julia. The language comes from the file name only;
+guessing from the text is slow and often wrong.
+
+A whole file is coloured once (about 0.1 s for 200,000 characters) and kept, then cut
+into lines, so a string or a comment that runs over lines is right on every line. A
+token has a colour and no background, so the marks show through; the colours were
+checked for contrast on every mark, in both themes. Files over 200,000 characters stay
+plain so a huge data file does not stall a phone.
+
+Not done here: colours inside the code blocks of rendered Markdown and of the AI's
+answers.
+
+## 2026-11-09: Go to definition, with real language servers
+
+Dr. Jeong asked to move from file to file through a function, "LSP" (issue 45). The
+first plan was a small index of names built by Nudgebox itself. Dr. Jeong called that
+inventing a wheel, rightly: a name index cannot tell two functions of the same name
+apart, knows nothing of imports, and would need work per language for ever.
+
+So the answers come from the servers editors use: **Pyright** (Python) and
+**TypeScript's own server** (`tsc --lsp`, TypeScript and JavaScript). Both are npm
+packages, pinned in `package.json`, so the Docker image gets them with `npm ci` and
+there is nothing to install or configure anywhere; the image grows by about 60 MB.
+The languages are the lab's: Python is in 25 of its repos; TypeScript and JavaScript
+are Nudgebox's own and its sister tools'. R is next in the lab's list, but its language
+server needs an R installation in the image; it waits until someone asks.
+
+Measured on the lab's repos on 2026-11-09 against GitHub: the first click on a commit
+(download, unpack, server start, answer) took about 0.8 s (labbot, 84 files; nudgebox,
+65 files); later clicks about 6 ms.
+
+How the code gets there: one tarball of the commit from GitHub, not a `git clone` (no
+credentials on disk, no history, one request). A server lives per commit and
+is stopped after 10 minutes idle; at most 3 at a time, each limited to 1.5 GB of memory.
+
+A PR is somebody's code, so **nothing from it is run**: only source files are unpacked
+(no links, no `node_modules`, no `pyproject.toml` or `pyrightconfig.json`, which can
+point the server at a program or a path), the servers get an empty `PATH`, and a place
+outside the commit's folder is never sent to the page. A repo without a `tsconfig.json`
+gets a plain one written by Nudgebox, since TypeScript only finds every use inside a
+project. Pyright is asked only after it has said it found the repo's files; before
+that it knows the open file alone and "used in" would be short.
+
+On the page a click opens a **panel** and does not leave the diff: a reviewer wants to
+look something up and continue where they were. Only the new side is clickable: the
+servers know one commit, and it is the code that is going to be merged. One click, not
+Ctrl+click, so that it works on a phone; a double click still selects the word.
+
+Not done here: the old side of a diff; "open this file's diff" from the panel; R,
+shell and the other languages; names in rendered Markdown and in the AI's answers.

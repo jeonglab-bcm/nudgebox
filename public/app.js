@@ -883,17 +883,118 @@ function markLines(side, text, hunks) {
 	return { lines, marks };
 }
 
-// one line's code with omnidiff's marks as spans
-function codeParts(line, marks) {
+// -- syntax colours (SPEC 15): highlight.js, loaded when code is first drawn -------------
+const HL = "/vendor/highlight-11.12.0";
+const HL_MORE = ["latex", "groovy", "dockerfile", "matlab", "julia"]; // the lab's languages that the common build lacks
+const HL_MAX = 200_000; // characters: a longer file stays plain, so the page stays fast
+const HL_EXT = {
+	py: "python", pyi: "python", pyw: "python", smk: "python", r: "r", rmd: "markdown", qmd: "markdown", md: "markdown", markdown: "markdown",
+	ts: "typescript", tsx: "typescript", mts: "typescript", cts: "typescript", js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript",
+	sh: "bash", bash: "bash", zsh: "bash", sbatch: "bash", slurm: "bash", json: "json", ipynb: "json", yml: "yaml", yaml: "yaml", toml: "ini", ini: "ini", cfg: "ini",
+	c: "c", h: "c", cpp: "cpp", cc: "cpp", cxx: "cpp", hpp: "cpp", hh: "cpp", rs: "rust", go: "go", java: "java", kt: "kotlin", lua: "lua", pl: "perl", pm: "perl",
+	php: "php", rb: "ruby", swift: "swift", cs: "csharp", sql: "sql", css: "css", scss: "scss", less: "less", html: "xml", htm: "xml", xml: "xml", svg: "xml",
+	tex: "latex", sty: "latex", cls: "latex", nf: "groovy", groovy: "groovy", gradle: "groovy", jl: "julia", m: "matlab", mk: "makefile", diff: "diff", patch: "diff",
+	graphql: "graphql", dockerfile: "dockerfile",
+};
+const HL_FILE = { makefile: "makefile", gnumakefile: "makefile", snakefile: "python", "nextflow.config": "groovy", ".bashrc": "bash", ".zshrc": "bash", ".profile": "bash", ".bash_profile": "bash" };
+
+/** The language of a file by its name; null when Nudgebox does not know it. */
+function langOf(path) {
+	const name = path.split("/").pop().toLowerCase();
+	if (HL_FILE[name]) return HL_FILE[name];
+	if (/^dockerfile(\.|$)/.test(name)) return "dockerfile";
+	return (name.includes(".") && HL_EXT[name.split(".").pop()]) || null;
+}
+
+let hlLib = null;
+function loadHl() {
+	hlLib ??= Promise.all([import(`${HL}.min.mjs`), ...HL_MORE.map((l) => import(`${HL}-${l}.min.mjs`))]).then(([core, ...more]) => {
+		more.forEach((m, i) => core.default.registerLanguage(HL_MORE[i], m.default));
+		hlLib.ready = core.default;
+		render();
+		renderNav();
+	}).catch(() => {}); // without the highlighter the code is plain
+	return hlLib.ready;
+}
+
+// highlight.js writes HTML: spans with a class around escaped text. Only these pieces occur in it.
+const HL_PIECE = /<span class="([^"]*)">|<\/span>|&(?:amp|lt|gt|quot|#x27);|[^<&]+/g;
+
+/** Per line, the coloured ranges [start, end, class] in highlight.js's HTML. A range takes its innermost span. */
+function tokenLines(html) {
+	const lines = [[]];
+	const open = [];
+	let col = 0;
+	for (const m of html.matchAll(HL_PIECE)) {
+		if (m[1] !== undefined) open.push(m[1]);
+		else if (m[0] === "</span>") open.pop();
+		else {
+			const cls = open.findLast((c) => c.startsWith("hljs-"));
+			(m[0][0] === "&" ? ["x"] : m[0].split("\n")).forEach((piece, k) => { // an escaped character is one character of the file
+				if (k) lines.push([]), col = 0;
+				const row = lines.at(-1), last = row.at(-1);
+				if (cls && piece) {
+					if (last && last[1] === col && last[2] === cls) last[1] += piece.length;
+					else row.push([col, col + piece.length, cls]);
+				}
+				col += piece.length;
+			});
+		}
+	}
+	return lines;
+}
+
+const hlCache = new Map(); // language -> text -> its lines' ranges
+
+/** The coloured ranges of each line of `text`, a file or a piece of one; null when it stays plain. */
+function hlLines(text, path) {
+	const lang = path ? langOf(path) : null;
+	if (!lang || text.length > HL_MAX) return null;
+	const hljs = loadHl();
+	if (!hljs?.getLanguage(lang)) return null;
+	if (!hlCache.has(lang)) hlCache.set(lang, new Map());
+	const kept = hlCache.get(lang);
+	let lines = kept.get(text);
+	if (!lines) {
+		try {
+			lines = tokenLines(hljs.highlight(text, { language: lang, ignoreIllegals: true }).value);
+		} catch {
+			return null;
+		}
+		kept.set(text, lines);
+		if (kept.size > 40) kept.delete(kept.keys().next().value); // the oldest goes
+	}
+	return lines;
+}
+
+/** `line` from column `from` to `to`, as text and one span per coloured range. */
+function hlNodes(line, toks, from = 0, to = line.length) {
+	if (!toks?.length) return [line.slice(from, to)];
+	const out = [];
+	let at = from;
+	for (const [start, end, cls] of toks) {
+		if (end <= at) continue;
+		if (start >= to) break;
+		const a = Math.max(start, at), b = Math.min(end, to);
+		if (a > at) out.push(line.slice(at, a));
+		out.push(el("span", { class: cls }, line.slice(a, b)));
+		at = b;
+	}
+	if (at < to) out.push(line.slice(at, to));
+	return out;
+}
+
+// one line's code with omnidiff's marks as spans, and the syntax colours inside and around them
+function codeParts(line, marks, toks) {
 	const parts = [];
 	let at = 0;
 	for (const m of [...marks].sort((a, b) => a.start - b.start)) {
 		if (m.start < at) continue; // overlapping ranges: keep the first
-		if (m.start > at) parts.push(line.slice(at, m.start));
-		parts.push(el("span", { class: `m-${m.op}`, title: m.title }, line.slice(m.start, m.end)));
+		if (m.start > at) parts.push(...hlNodes(line, toks, at, m.start));
+		parts.push(el("span", { class: `m-${m.op}`, title: m.title }, hlNodes(line, toks, m.start, m.end)));
 		at = m.end;
 	}
-	if (at < line.length) parts.push(line.slice(at));
+	if (at < line.length) parts.push(...hlNodes(line, toks, at));
 	return parts;
 }
 
@@ -905,8 +1006,9 @@ function lineNo(n, sideKey, review) {
 		onclick: (e) => { e.stopPropagation(); review.onAdd(sideKey, n); } }, n);
 }
 
-function pane(side, ref, text, hunks, label, review) {
+function pane(side, ref, text, hunks, label, review, path, nav = null) {
 	const { lines, marks } = markLines(side, text, hunks);
+	const toks = hlLines(text, path);
 	const show = lines.map(() => false);
 	marks.forEach((m, row) => {
 		if (m.length) for (let r = Math.max(0, row - 3); r <= Math.min(lines.length - 1, row + 3); r++) show[r] = true;
@@ -929,19 +1031,213 @@ function pane(side, ref, text, hunks, label, review) {
 	lines.forEach((line, row) => {
 		if (!show[row]) return void hidden++;
 		fold();
-		const parts = codeParts(line, marks[row]);
+		const parts = codeParts(line, marks[row], toks?.[row]);
 		const n = row + 1;
 		const add = review && inRanges(review.commentable?.[sideKey === "LEFT" ? "left" : "right"], n)
 			? el("button", { class: "add-comment", "aria-label": `Comment on line ${n}`, title: "Comment on this line",
 				onclick: (e) => { e.stopPropagation(); review.onAdd(sideKey, n); } }, "+") : null;
-		out.push(el("div", { class: `code-line${marks[row].length ? " changed" : ""}` }, add, lineNo(n, sideKey, review), el("span", { class: "code" }, parts)));
+		out.push(el("div", { class: `code-line${marks[row].length ? " changed" : ""}`, "data-row": row }, add, lineNo(n, sideKey, review), el("span", { class: "code" }, parts)));
 		for (const th of threadsAt.get(n) ?? []) out.push(threadView(th, "files"));
 		if (form && form.line === n) out.push(commentForm(form));
 	});
 	fold();
-	return el("section", { class: `pane ${side}` },
+	return el("section", { class: `pane ${side}`, ...navAttrs(nav) },
 		el("h4", {}, label ?? (side === "before" ? "Before" : "After"), el("span", { class: "sha" }, ref.slice(0, 7))),
 		el("div", { class: "lines" }, out));
+}
+
+// -- go to definition (SPEC 21): a name in the new code opens the code panel ------------
+// Code that can be asked about sits under an element with data-code ({repo, ref, path}),
+// each of its lines under one with data-row.
+const extOf = (path) => (/\.([A-Za-z0-9]+)$/.exec(path)?.[1] ?? "").toLowerCase();
+const canNav = (path) => (data.pr?.code ?? []).includes(extOf(path));
+const navAttrs = (s) => (s && canNav(s.path) ? { "data-code": JSON.stringify({ repo: s.repo, ref: s.ref, path: s.path }) } : {});
+
+let nav = null; // the open code panel: { stack: what was looked up, the last on top; drawn: what its code shows }
+const navFiles = new Map(); // "repo@ref:path" -> its text, { error }, or null while it loads
+const navKey = (e, path) => `${e.repo}@${e.ref}:${path}`;
+const samePlace = (a, b) => a && b && a.path === b.path && a.row === b.row;
+
+/** The text node and offset of column `col` in a line of code. */
+function textAt(code, col) {
+	const walk = document.createTreeWalker(code, NodeFilter.SHOW_TEXT);
+	for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+		if (col < n.data.length) return [n, col];
+		col -= n.data.length;
+	}
+	return null;
+}
+
+/** The name under a point of a line of code: { name, col, range }; null on anything that is not a name. */
+function nameAt(code, x, y) {
+	const pos = document.caretPositionFromPoint?.(x, y), range = pos ? null : document.caretRangeFromPoint?.(x, y);
+	const node = pos?.offsetNode ?? range?.startContainer;
+	if (!node || node.nodeType !== 3 || !code.contains(node)) return null;
+	let col = pos?.offset ?? range.startOffset;
+	const walk = document.createTreeWalker(code, NodeFilter.SHOW_TEXT);
+	for (let n = walk.nextNode(); n && n !== node; n = walk.nextNode()) col += n.data.length;
+	const text = code.textContent;
+	for (const m of text.matchAll(/[A-Za-z_$][\w$]*/g)) {
+		if (m.index > col) break;
+		if (col > m.index + m[0].length) continue;
+		const from = textAt(code, m.index), to = textAt(code, m.index + m[0].length - 1);
+		if (!from || !to || /hljs-(string|comment|quote|number|keyword|literal|doctag|regexp)/.test(from[0].parentElement.className)) return null;
+		const r = document.createRange();
+		r.setStart(...from);
+		r.setEnd(to[0], to[1] + 1);
+		// the caret is the nearest one, so a point beside the name (the blank end of a line) is not on it
+		if (![...r.getClientRects()].some((b) => x >= b.left && x <= b.right && y >= b.top && y <= b.bottom)) return null;
+		return { name: m[0], col: m.index, range: r };
+	}
+	return null;
+}
+
+/** What a mouse or touch event points at: a name in code that can be asked about. */
+function navTarget(e) {
+	const code = e.target.closest?.(".code"), line = code?.closest("[data-row]"), host = line?.closest("[data-code]");
+	if (!host || e.target.closest("button, a")) return null;
+	const at = nameAt(code, e.clientX, e.clientY);
+	return at && { ...at, code, src: JSON.parse(host.dataset.code), row: Number(line.dataset.row) };
+}
+
+// a name under the mouse is underlined: it can be clicked
+let navHover = null;
+document.addEventListener("mousemove", (e) => {
+	if (!window.Highlight || !CSS.highlights) return;
+	const at = e.buttons ? null : navTarget(e);
+	if (navHover && navHover !== at?.code) navHover.style.cursor = "";
+	navHover = at?.code ?? null;
+	if (at) CSS.highlights.set("code-name", new Highlight(at.range)), (at.code.style.cursor = "pointer");
+	else CSS.highlights.delete("code-name");
+});
+
+// a click on a name; a double click selects the word as ever, so the panel waits to see which it is
+let navClick = 0;
+document.addEventListener("click", (e) => {
+	clearTimeout(navClick);
+	if (e.detail > 1 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || !getSelection().isCollapsed) return;
+	const at = navTarget(e);
+	if (at) navClick = setTimeout(() => lookUp(at.src, at.row, at.col, at.name), 220);
+});
+
+async function lookUp(src, row, col, name) {
+	const entry = { repo: src.repo, ref: src.ref, path: src.path, name, answer: null, error: null, mode: "code", show: null };
+	if (!nav) {
+		nav = { stack: [], drawn: null };
+		if (phone()) history.pushState({ code: true }, ""); // the panel is the whole screen: the phone's Back closes it
+	}
+	nav.stack.push(entry);
+	renderNav();
+	const { status, data: a } = await api("/api/code/lookup", { repo: src.repo, ref: src.ref, path: src.path, row, col });
+	if (status === 200) {
+		entry.answer = a;
+		// asked at the definition itself: its uses are the news
+		entry.show = a.definitions[0] ?? null;
+		if (!entry.show || (a.references.length && a.definitions.some((d) => d.path === src.path && d.row === row))) entry.mode = "uses";
+		if (entry.show) navFile(entry, entry.show.path);
+	} else entry.error = a.error || `Could not look this up (${status})`;
+	if (nav?.stack.includes(entry)) renderNav();
+}
+
+/** A file of the panel's commit, read once. */
+function navFile(entry, path) {
+	const key = navKey(entry, path);
+	if (navFiles.has(key)) return navFiles.get(key);
+	navFiles.set(key, null);
+	fetch(fileUrl({ repo: entry.repo, ref: entry.ref, path })).then(async (r) => {
+		navFiles.set(key, r.ok ? await r.text() : { error: `Could not read the file (${r.status})` });
+	}, () => navFiles.set(key, { error: "Could not read the file" })).then(() => {
+		if (navFiles.size > 30) navFiles.delete(navFiles.keys().next().value);
+		renderNav();
+	});
+	return null;
+}
+
+function closeNav(fromHistory = false) {
+	if (!nav) return;
+	nav = null;
+	CSS.highlights?.delete("code-name");
+	renderNav();
+	if (!fromHistory && history.state?.code) history.back();
+}
+window.addEventListener("popstate", () => { if (nav && !history.state?.code) closeNav(true); });
+document.addEventListener("keydown", (e) => {
+	if (e.key !== "Escape" || !nav || e.target.closest?.("input, textarea, select")) return;
+	e.stopImmediatePropagation(); // Escape closes the panel first, not the page under it
+	closeNav();
+}, true);
+
+const NAV_LINES = 3000; // a longer file shows this many lines around the place
+
+/** A file in the panel, whole, with one line marked; its names can be asked about in turn. */
+function navCode(entry, place) {
+	const text = navFile(entry, place.path);
+	if (text === null) return el("p", { class: "pending" }, "Loading…");
+	if (text.error) return el("p", { class: "note" }, text.error);
+	const lines = text.split("\n");
+	if (text.endsWith("\n")) lines.pop();
+	const toks = hlLines(text, place.path);
+	const from = lines.length > NAV_LINES ? Math.max(0, place.row - NAV_LINES / 2) : 0, to = Math.min(lines.length, from + NAV_LINES);
+	const cut = (n) => (n ? el("div", { class: "fold" }, `${n} more line${n > 1 ? "s" : ""}`) : null);
+	return el("div", { class: "lines", ...navAttrs({ repo: entry.repo, ref: entry.ref, path: place.path }) },
+		cut(from),
+		lines.slice(from, to).map((line, k) => el("div", { class: `code-line${from + k === place.row ? " target" : ""}`, "data-row": from + k },
+			el("span", { class: "ln" }, from + k + 1), el("span", { class: "code" }, hlNodes(line, toks?.[from + k])))),
+		cut(lines.length - to));
+}
+
+/** Where a name is used: per file, each line as a button that opens the file there. */
+function navUses(entry) {
+	const byFile = new Map();
+	for (const r of entry.answer.references) byFile.set(r.path, [...(byFile.get(r.path) ?? []), r]);
+	return el("div", { class: "uses" }, [...byFile].map(([path, uses]) => {
+		const toks = hlLines(uses.map((u) => u.text.trim()).join("\n"), path);
+		return el("section", {}, el("h5", { class: "use-file" }, path),
+			uses.map((u, k) => el("button", { class: "use", onclick: () => { entry.show = u; entry.mode = "code"; renderNav(); } },
+				el("span", { class: "ln" }, u.row + 1), el("span", { class: "code" }, hlNodes(u.text.trim(), toks?.[k])))));
+	}));
+}
+
+function renderNav() {
+	const old = $("#code-panel");
+	const e = nav?.stack.at(-1);
+	document.body.classList.toggle("code-open", Boolean(e));
+	if (!e) return void old?.remove();
+	const a = e.answer;
+	const defs = a?.definitions ?? [], uses = a?.references ?? [];
+	const atDef = e.mode === "code" && defs.some((d) => samePlace(d, e.show));
+	const sigToks = a?.signature ? hlLines(a.signature, e.path) : null;
+	const sig = a?.signature ? el("pre", { class: "nav-sig" }, a.signature.split("\n").flatMap((line, k) => [k ? "\n" : "", ...hlNodes(line, sigToks?.[k])])) : null;
+	const back = nav.stack.length > 1
+		? el("button", { class: "quiet nav-back", title: `Back to ${nav.stack.at(-2).name}`, onclick: () => { nav.stack.pop(); renderNav(); } }, "← Back") : null;
+	const body = e.error ? el("p", { class: "note" }, e.error)
+		: !a ? el("p", { class: "pending" }, `Looking up ${e.name}…`)
+		: e.mode === "uses" && uses.length ? navUses(e)
+		: e.show ? navCode(e, e.show)
+		: el("p", { class: "note" }, a.outside || a.signature ? "Nothing else in this repository uses it." : `Nothing is known about ${e.name} here.`);
+	const panel = el("aside", { id: "code-panel", role: "dialog", "aria-label": `Code: ${e.name}` },
+		el("header", { class: "nav-head" }, back, el("code", { class: "nav-name" }, e.name),
+			el("button", { class: "quiet nav-close", "aria-label": "Close", title: "Close (Esc)", onclick: () => closeNav() }, "✕")),
+		a ? el("div", { class: "nav-what" }, sig,
+			a.doc ? el("p", { class: "nav-doc" }, a.doc) : null,
+			!defs.length && a.outside ? el("p", { class: "nav-outside" }, "Defined outside this repository: in the language itself or in a library.") : null) : null,
+		a ? el("div", { class: "nav-modes seg", role: "group" },
+			el("button", { class: atDef ? "on" : "", "aria-pressed": String(atDef), disabled: !defs.length, onclick: () => { e.show = defs[0]; e.mode = "code"; renderNav(); } },
+				defs.length > 1 ? `Definition (1 of ${defs.length})` : "Definition"),
+			el("button", { class: e.mode === "uses" ? "on" : "", "aria-pressed": String(e.mode === "uses"), disabled: !uses.length, onclick: () => { e.mode = "uses"; renderNav(); } },
+				uses.length ? `Used in ${plural(uses.length, "place")}` : "Not used elsewhere")) : null,
+		a && e.mode === "code" && e.show ? el("p", { class: "nav-at" }, el("span", { class: "nav-where" }, `${e.show.path}:${e.show.row + 1}`),
+			defs.length > 1 && atDef ? defs.map((d, k) => el("button", { class: `quiet${samePlace(d, e.show) ? " on" : ""}`, onclick: () => { e.show = d; renderNav(); } }, k + 1)) : null) : null,
+		el("div", { class: "nav-body" }, body));
+	// the same place drawn again (the colours arrived) keeps its scroll; a new place comes into view
+	const drawn = `${nav.stack.length}:${e.mode}:${e.show && e.mode === "code" ? `${e.show.path}:${e.show.row}` : ""}:${body.classList.contains("lines")}`;
+	const top = old?.querySelector(".nav-body")?.scrollTop ?? 0;
+	if (old) old.replaceWith(panel);
+	else document.body.append(panel);
+	const box = panel.querySelector(".nav-body");
+	if (drawn === nav.drawn) box.scrollTop = top;
+	else panel.querySelector(".code-line.target")?.scrollIntoView({ block: "center" });
+	nav.drawn = drawn;
 }
 
 // SPEC 15: Markdown files render; the libraries load only when one is opened
@@ -1117,7 +1413,7 @@ function diffView(f, r, github, modes = files.mdMode, labels = {}, review = null
 	const choose = (mode) => (e) => { e.stopPropagation(); modes.set(f.path, mode); render(); };
 	const side = (name) => r[name] && (rendered
 		? mdPane(name, r[name].ref, r[name].text, r.result[name].hunks, lib, labels[name])
-		: pane(name, r[name].ref, r[name].text, r.result[name].hunks, labels[name], review));
+		: pane(name, r[name].ref, r[name].text, r.result[name].hunks, labels[name], review, r[name].path ?? f.path, name === "after" ? r.after : null)); // SPEC 21: the new code's names can be asked about
 	const canExplain = Boolean(data.pr?.summarize);
 	return el("div", { class: `diff${r.before && r.after ? "" : " one-side"}` }, // a new or deleted file: nothing to compare
 		md || canExplain ? el("div", { class: "diff-tools" },
@@ -1159,12 +1455,12 @@ function uLine(row, a, b, review) {
 	const old = row.i !== undefined ? row.i + 1 : null, now = row.j !== undefined ? row.j + 1 : null;
 	const del = row.t === "del";
 	const k = del ? row.i : row.j;
-	const [lines, marks] = del ? [a.lines, a.marks] : [b.lines, b.marks];
-	return el("div", { class: `u-line u-${row.t}` },
+	const { lines, marks, toks } = del ? a : b;
+	return el("div", { class: `u-line u-${row.t}`, "data-row": del ? null : row.j },
 		del ? lineNo(old, "LEFT", review) : el("span", { class: "ln old" }, old ?? ""),
 		del ? el("span", { class: "ln new" }) : lineNo(now, "RIGHT", review),
 		el("span", { class: "sign", "aria-hidden": "true" }, { del: "−", add: "+", ctx: "" }[row.t]),
-		el("span", { class: "code" }, codeParts(lines[k], marks[k])));
+		el("span", { class: "code" }, codeParts(lines[k], marks[k], toks?.[k])));
 }
 
 function uExtras(row, review) {
@@ -1178,7 +1474,7 @@ function uExtras(row, review) {
 }
 
 function unifiedView(r, labels, review) {
-	const side = (name) => (r[name] ? markLines(name, r[name].text, r.result[name].hunks) : { lines: [], marks: [] });
+	const side = (name) => (r[name] ? { ...markLines(name, r[name].text, r.result[name].hunks), toks: hlLines(r[name].text, r[name].path) } : { lines: [], marks: [] });
 	const a = side("before"), b = side("after");
 	const rows = unify(a, b);
 	const changed = rows.map((x) => x.t !== "ctx");
@@ -1194,7 +1490,7 @@ function unifiedView(r, labels, review) {
 	});
 	fold();
 	const head = (name, word) => (r[name] ? el("span", {}, labels[name] ?? word, " ", el("span", { class: "sha" }, r[name].ref.slice(0, 7))) : el("span", {}, name === "before" ? "New file" : "Deleted"));
-	return el("div", { class: "unified" }, el("h4", { class: "u-head" }, head("before", "Before"), " → ", head("after", "After")), el("div", { class: "u-lines" }, out));
+	return el("div", { class: "unified", ...navAttrs(r.after) }, el("h4", { class: "u-head" }, head("before", "Before"), " → ", head("after", "After")), el("div", { class: "u-lines" }, out));
 }
 
 // the rows of a file list, each opening its diff. `opts` (SPEC 16, the PR's Files changed):
@@ -1568,9 +1864,10 @@ const when = (iso) => el("time", { datetime: iso, title: new Date(iso).toLocaleS
 
 // -- threads and line comments
 
-function hunkView(h) {
+function hunkView(h, path) {
 	const lines = h.split("\n").filter((l) => !l.startsWith("@@")).slice(-6);
-	return el("pre", { class: "hunk" }, lines.map((l) => el("div", { class: l[0] === "+" ? "h-add" : l[0] === "-" ? "h-del" : "" }, l)));
+	const toks = hlLines(lines.map((l) => l.slice(1)).join("\n"), path); // the sign in front is not code
+	return el("pre", { class: "hunk" }, lines.map((l, k) => el("div", { class: l[0] === "+" ? "h-add" : l[0] === "-" ? "h-del" : "" }, l.slice(0, 1), hlNodes(l.slice(1), toks?.[k]))));
 }
 
 function threadView(th, where) {
@@ -1585,7 +1882,7 @@ function threadView(th, where) {
 			th.line ? el("span", { class: "thread-line" }, `line ${th.line}`) : null,
 			th.outdated ? el("span", { class: "flag" }, "Outdated") : null,
 			th.resolved ? el("span", { class: "flag" }, "Resolved") : null),
-		where === "conversation" && th.diffHunk ? hunkView(th.diffHunk) : null,
+		where === "conversation" && th.diffHunk ? hunkView(th.diffHunk, th.path) : null,
 		...th.comments.map((c) => el("div", { class: "thread-comment" },
 			el("div", { class: "c-head" }, el("b", {}, c.author), " ", when(c.at), c.pending ? el("span", { class: "flag pending" }, "Pending") : null),
 			md(c.body))),
@@ -2211,9 +2508,10 @@ function draftView(d, current, short) {
 	const where = `${short(d.path)}:${d.side === "LEFT" ? "−" : "+"}${d.line}`;
 	const editing = g.editing === d.id;
 	const cls = `draft ${d.state}${editing ? " editing" : ""}${current ? " current" : ""}`;
-	const code = d.code?.length ? el("div", { class: "draft-code" }, d.code.map((c) =>
+	const toks = d.code?.length ? hlLines(d.code.map((c) => c.text).join("\n"), d.path) : null;
+	const code = d.code?.length ? el("div", { class: "draft-code" }, d.code.map((c, k) =>
 		el("div", { class: `dc dc-${c.mark === "+" ? "add" : c.mark === "-" ? "del" : "ctx"}${c.hit ? " hit" : ""}` },
-			el("span", { class: "ln" }, c.n), el("span", { class: "sign", "aria-hidden": "true" }, c.mark === "-" ? "−" : c.mark.trim()), el("span", { class: "code" }, c.text)))) : null;
+			el("span", { class: "ln" }, c.n), el("span", { class: "sign", "aria-hidden": "true" }, c.mark === "-" ? "−" : c.mark.trim()), el("span", { class: "code" }, hlNodes(c.text, toks?.[k]))))) : null;
 	if (editing) {
 		return el("div", { class: cls },
 			el("div", { class: "draft-where" }, where),
@@ -2610,7 +2908,7 @@ function conflictFile(f, c) {
 		el("div", { class: "conflict-head" }, el("span", { class: "path" }, f.path), mark), tools, area);
 }
 
-window.addEventListener("hashchange", () => render());
+window.addEventListener("hashchange", () => { closeNav(true); render(); });
 $("#settings-btn").onclick = () => openSettings();
 $("#bell").onclick = () => openSettings("notifications");
 $("#reload").onclick = load;

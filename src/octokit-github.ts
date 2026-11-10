@@ -8,6 +8,7 @@
  *   authorization), so GitHub attributes them to that person and enforces their
  *   permissions.
  */
+import { Readable } from "node:stream";
 import { App, Octokit } from "octokit";
 import type {
 	ChangedFile, CheckRun, Checks, GitHubPort, Issue, ItemContent, MergeCommit, MergeInputs, MergeMethod, NewReviewComment, PrCommit, PrFiles, PrPage,
@@ -475,6 +476,19 @@ export class OctokitGitHub implements GitHubPort {
 			if (data.encoding === "base64" && data.content) return Buffer.from(data.content, "base64");
 			const { data: blob } = await o.request("GET /repos/{owner}/{repo}/git/blobs/{file_sha}", { owner, repo: name, file_sha: data.sha });
 			return Buffer.from(blob.content, "base64");
+		} catch (e) {
+			if ((e as { status?: number }).status === 404) return null;
+			throw e;
+		}
+	}
+
+	/** SPEC 21: the commit's files as GitHub's gzip tarball, streamed; null when not there. */
+	async archive(repo: string, ref: string): Promise<Readable | null> {
+		const [owner, name] = repo.split("/");
+		const o = await this.installationFor(owner);
+		try {
+			const { data } = await o.request("GET /repos/{owner}/{repo}/tarball/{ref}", { owner, repo: name, ref, request: { parseSuccessResponseBody: false } });
+			return Readable.fromWeb(data as unknown as import("node:stream/web").ReadableStream);
 		} catch (e) {
 			if ((e as { status?: number }).status === 404) return null;
 			throw e;

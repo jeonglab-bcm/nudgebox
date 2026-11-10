@@ -3,6 +3,7 @@
  * the lab's GitHub App) implements it; tests use tests/helpers/fake-github.ts.
  * There is deliberately no close / delete / force-push / edit here (SPEC 6).
  */
+import type { Readable } from "node:stream";
 
 export type Checks = "success" | "failure" | "pending" | "none";
 export type ReviewDecision = "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
@@ -193,6 +194,7 @@ export interface GitHubPort {
 	issueContent(repo: string, number: number): Promise<ItemContent>; // SPEC 12
 	prFiles(repo: string, number: number): Promise<PrFiles | null>; // SPEC 15; null when no such PR
 	fileAt(repo: string, ref: string, path: string): Promise<Buffer | "too large" | null>; // SPEC 15; null when not there
+	archive(repo: string, ref: string): Promise<Readable | null>; // SPEC 21: the commit as a gzip tarball; null when not there
 	// SPEC 16: the PR page, read as the person (their pending review and Viewed ticks)
 	prPage(token: string, repo: string, number: number): Promise<PrPage | null>;
 	repoOptions(token: string, repo: string): Promise<RepoOptions>;

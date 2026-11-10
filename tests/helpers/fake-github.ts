@@ -3,6 +3,8 @@
  * users, repo access, teams and PRs here, and read back what the app asked GitHub
  * to do. No network.
  */
+import { Readable } from "node:stream";
+import { gzipSync } from "node:zlib";
 import type { PrCommit, GitHubPort, Issue, ItemContent, MergeCommit, MergeInputs, MergeMethod, NewReviewComment, PrFiles, PrPage, PullRequest, RepoOptions, UserTokens } from "../../src/github.ts";
 
 export type Call = { op: string; token?: string; repo?: string; number?: number; body?: string; args?: any };
@@ -16,6 +18,7 @@ export class FakeGitHub implements GitHubPort {
 	content = new Map<string, ItemContent>(); // "owner/repo#n" -> text a summary reads (SPEC 12)
 	prFileSets = new Map<string, PrFiles>(); // "owner/repo#n" -> changed files (SPEC 15)
 	blobs = new Map<string, string | Buffer>(); // "owner/repo@ref:path" -> file content (SPEC 15)
+	links = new Map<string, string>(); // "owner/repo@ref:path" -> where a symbolic link in the repo points (SPEC 21)
 	pages = new Map<string, Partial<PrPage>>(); // "owner/repo#n" -> the PR page's own parts (SPEC 16)
 	options = new Map<string, RepoOptions>(); // repo -> assignable people, labels, milestones (SPEC 16)
 	mergeSets = new Map<string, MergeInputs>(); // "owner/repo#n" -> what resolving conflicts reads (SPEC 16)
@@ -131,6 +134,48 @@ export class FakeGitHub implements GitHubPort {
 	async fileAt(repo: string, ref: string, path: string): Promise<Buffer | null> {
 		const b = this.blobs.get(`${repo}@${ref}:${path}`);
 		return b === undefined ? null : Buffer.from(b);
+	}
+
+	/** SPEC 21: the commit as GitHub's tarball: a comment entry, then every file under one top folder. */
+	async archive(repo: string, ref: string): Promise<Readable | null> {
+		this.calls.push({ op: "archive", repo, args: ref });
+		const at = `${repo}@${ref}:`;
+		const top = `${repo.replace("/", "-")}-${ref.slice(0, 7)}`;
+		const parts: Buffer[] = [];
+		const entry = (name: string, type: string, body: Buffer, link = "") => {
+			if (Buffer.byteLength(name) > 100) { // a long name goes in a pax header, as GitHub's tarballs have it
+				const record = (n: number) => `${n} path=${name}\n`;
+				let n = record(0).length;
+				while (Buffer.byteLength(record(n)) !== n) n = Buffer.byteLength(record(n));
+				entry("PaxHeader", "x", Buffer.from(record(n)));
+				name = name.slice(0, 100);
+			}
+			const h = Buffer.alloc(512);
+			h.write(name, 0, 100);
+			h.write("0000644\0", 100);
+			h.write("0000000\0", 108);
+			h.write("0000000\0", 116);
+			h.write(body.length.toString(8).padStart(11, "0") + "\0", 124);
+			h.write("00000000000\0", 136);
+			h.write("        ", 148);
+			h.write(type, 156);
+			h.write(link, 157, 100);
+			h.write("ustar\0" + "00", 257);
+			h.write(h.reduce((a, b) => a + b, 0).toString(8).padStart(6, "0") + "\0 ", 148);
+			parts.push(h, body, Buffer.alloc((512 - (body.length % 512)) % 512));
+		};
+		entry("pax_global_header", "g", Buffer.from(`52 comment=${"0".repeat(40)}\n`));
+		let found = false;
+		for (const [key, content] of this.blobs) {
+			if (!key.startsWith(at)) continue;
+			found = true;
+			entry(`${top}/${key.slice(at.length)}`, "0", Buffer.from(content));
+		}
+		for (const [key, target] of this.links) if (key.startsWith(at)) entry(`${top}/${key.slice(at.length)}`, "2", Buffer.alloc(0), target);
+		if (!found) return null;
+		parts.push(Buffer.alloc(1024));
+		const gz = gzipSync(Buffer.concat(parts));
+		return Readable.from([gz.subarray(0, 700), gz.subarray(700)]); // in pieces, as from the network
 	}
 
 	async issueContent(repo: string, number: number): Promise<ItemContent> {

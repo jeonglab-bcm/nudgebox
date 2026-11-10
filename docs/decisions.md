@@ -275,6 +275,48 @@ with it, Escape sometimes did not close the box.
 Not done here, and still a proposal: a picture of how the changed files depend on each
 other (issue #40), for reviews that are less text.
 
+
+## 2026-11-09: Guided review: ask the AI about a step
+
+Dr. Jeong: "can you make us ask follow-up questions, so that I can ask further" (issue
+#43). A step now has **Ask** (key `a`): a box over the bar at the bottom with the
+questions and answers of the step, where the next question is asked with the ones
+before it.
+
+- **What the model gets.** The same changes it reviewed the step from, read again from
+  GitHub when asked, with the notes and drafts of the step and the earlier questions.
+  When a step is too big for one prompt, the file the question is about is given whole
+  and the others are cut, since one answer cannot be made in parts.
+- **Yours only.** Questions are kept per person and never go to GitHub. An answer
+  becomes a comment only through **Use as comment**, which opens the usual comment box
+  with the answer in it to edit.
+- **Kept with the step as its files are.** After a push an unchanged step keeps its
+  questions and a changed step starts with none: an old answer under new code would
+  mislead.
+- **The everyday model**, not the one for Deep review: a question should be answered in
+  seconds.
+
+Not done here: the same box under an **Explain** answer on Files changed (the rest of
+#43), which follows on its own.
+
+## 2026-11-09: Explain: questions under an explanation
+
+The rest of #43. An explanation was one answer with no way to ask further.
+
+- **A box under the explanation, not a panel.** Explain sits above one file's diff, so
+  the questions stay there too, between the explanation and the diff. No dock as in
+  Guided review: there is no bar of buttons to sit on, and several files can be open.
+- **The explanation is shared; the questions are not.** An explanation is kept per file
+  version pair for everyone. Questions are kept per person under the same pair, as in
+  Guided review, so nobody reads what another person asked.
+- **Only after Explain.** The model answers from the changes, the explanation and the
+  earlier questions. Asking with no explanation would need a second way to start, for
+  one click saved.
+- **No "Use as comment" here.** On Files changed the comment boxes are on the lines; in
+  Guided review the answer could go to the draft it was about. It can follow if wanted.
+- `render()` now keeps the cursor in a box being typed in on every page (it did only on
+  the PR page), since Compare has this box too.
+
 ## 2026-11-09: Syntax colours in diffs
 
 Dr. Jeong asked for syntax highlighting (issue 44). Diffs were one colour of text with

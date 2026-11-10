@@ -43,6 +43,10 @@ export class Store {
 			CREATE TABLE IF NOT EXISTS review_learnings (repo TEXT NOT NULL, body TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (repo, body));
 			-- SPEC 20: settings the admin saves on the page (the AI provider; its key sealed)
 			CREATE TABLE IF NOT EXISTS settings (name TEXT PRIMARY KEY, json TEXT NOT NULL);
+			-- SPEC 19, Ask: what a person asked the AI about a step of a guided review, and the answer
+			CREATE TABLE IF NOT EXISTS asks (id INTEGER PRIMARY KEY AUTOINCREMENT, lab_user TEXT NOT NULL, scope TEXT NOT NULL, thread TEXT NOT NULL,
+				question TEXT NOT NULL, answer TEXT NOT NULL, about TEXT, at TEXT NOT NULL);
+			CREATE INDEX IF NOT EXISTS asks_by ON asks (lab_user, scope);
 		`);
 	}
 
@@ -260,6 +264,20 @@ export class Store {
 	/** The newest drafts people dropped in `repo`. */
 	learnings(repo: string, limit = 20): string[] {
 		return (this.db.prepare("SELECT body FROM review_learnings WHERE repo = ? ORDER BY at DESC LIMIT ?").all(repo.toLowerCase(), limit) as { body: string }[]).map((r) => r.body);
+	}
+
+	// -- questions to the AI (SPEC 19, Ask) -------------------------------------------
+
+	/** What `labUser` asked in `scope` (one PR's guided review) and was answered, oldest first; `thread` is the step. */
+	asks(labUser: string, scope: string): { thread: string; question: string; answer: string; about: unknown; at: string }[] {
+		const rows = this.db.prepare("SELECT thread, question, answer, about, at FROM asks WHERE lab_user = ? AND scope = ? ORDER BY id").all(labUser, scope) as
+			{ thread: string; question: string; answer: string; about: string | null; at: string }[];
+		return rows.map((r) => ({ ...r, about: r.about === null ? null : JSON.parse(r.about) }));
+	}
+
+	addAsk(labUser: string, scope: string, thread: string, turn: { question: string; answer: string; about: unknown }, now: string) {
+		this.db.prepare("INSERT INTO asks (lab_user, scope, thread, question, answer, about, at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+			.run(labUser, scope, thread, turn.question, turn.answer, turn.about === null ? null : JSON.stringify(turn.about), now);
 	}
 
 	// -- settings (SPEC 20) -------------------------------------------------------

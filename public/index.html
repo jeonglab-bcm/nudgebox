@@ -257,6 +257,10 @@ button.link { border: 0; background: none; padding: 0; font: inherit; text-decor
 .explain code { font: 12.5px var(--mono); padding: 1px 5px; border-radius: 4px; background: var(--bg); }
 .explain.streaming { border-left-style: dashed; }
 .explain .pending { color: var(--muted); }
+/* SPEC 17: your questions under the explanation, and the box for the next one */
+.explain-ask { display: grid; gap: 12px; margin: 0 0 14px; max-width: 78ch; min-width: 0; }
+.explain-ask .ask-form textarea { padding: 7px 10px; min-height: 36px; field-sizing: content; max-height: 9em; }
+.explain-ask .ask-send { padding: 7px 14px; }
 /* the diff on a phone (SPEC 15): one unified column, old and new line numbers */
 .u-lines { font: 11.5px/1.55 var(--mono); font-variant-ligatures: none; }
 .u-line { display: grid; grid-template-columns: 2.4em 2.4em 1.1em minmax(0, 1fr); align-items: start; }
@@ -629,6 +633,33 @@ body.guiding .chrome { display: none; }
 .guide-files .file .path .flag { margin-left: 8px; }
 .file-note { display: block; margin-top: 2px; font: 12.5px/1.4 var(--sans); color: var(--muted); overflow-wrap: break-word; }
 .guide-keys { position: sticky; bottom: 0; z-index: 3; background: var(--bg); margin: 0 -16px; padding: 10px 16px max(10px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line); justify-content: flex-end; flex-wrap: nowrap; }
+/* SPEC 19, Ask: questions to the AI about the step, in a box over the buttons at the bottom */
+.guide-foot { position: sticky; bottom: 0; z-index: 3; margin: 0 -16px; background: var(--bg); }
+.guide-foot .guide-keys { position: static; margin: 0; }
+.ask-open .n, .ask-open.on { color: var(--fg); } .ask-open.on { background: var(--faint); }
+.ask-open .n { margin-left: 6px; font: 600 11px var(--mono); background: var(--faint); border-radius: 999px; padding: 1px 6px; }
+.ask-about .spark, .ask-head .spark { color: var(--accent); margin-right: 5px; }
+.ask-dock { display: grid; gap: 8px; padding: 8px 16px 10px; border-top: 1px solid var(--line); box-shadow: 0 -10px 24px -18px rgb(0 0 0 / .45); }
+.ask-dock > * { width: 100%; max-width: 860px; margin: 0 auto; min-width: 0; }
+.ask-head { display: flex; align-items: center; gap: 10px; }
+.ask-head b { font: 600 14px var(--display); } .ask-head .hint { color: var(--muted); font-size: 12.5px; }
+.ask-close { margin-left: auto; padding: 4px 9px !important; }
+.ask-thread { max-height: min(38vh, 340px); overflow-y: auto; overscroll-behavior: contain; display: grid; gap: 12px; align-content: start; padding-right: 4px; }
+.ask-thread > .hint { margin: 0; color: var(--muted); font-size: 13.5px; }
+.ask-turn { display: grid; gap: 6px; min-width: 0; }
+.ask-q { justify-self: end; max-width: 85%; padding: 6px 12px; border-radius: 12px 12px 3px 12px; background: var(--faint); white-space: pre-wrap; overflow-wrap: anywhere; }
+.ask-tag { display: block; font: 500 11.5px var(--mono); color: var(--muted); }
+.ask-answer { margin: 0; padding: 0 0 0 12px; border-left: 2px solid var(--accent); font-size: 14.5px; line-height: 1.55; overflow-wrap: anywhere; min-width: 0; }
+.ask-answer > :first-child { margin-top: 0; } .ask-answer > :last-child { margin-bottom: 0; }
+.ask-answer.pending { color: var(--muted); }
+.ask-answer pre { overflow-x: auto; }
+.ask-tools { display: flex; } .ask-use { font-size: 12.5px; padding: 3px 8px !important; margin-left: 6px; }
+.ask-chip { display: flex; align-items: center; gap: 4px; font: 500 12px var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+.ask-chip button { padding: 2px 7px !important; }
+.ask-form { display: flex; align-items: flex-end; gap: 8px; }
+.ask-form textarea { flex: 1; min-width: 0; font: inherit; color: inherit; resize: none; }
+.ask-send { border: 1px solid var(--fg); border-radius: 6px; padding: 8px 14px; font-size: 14px; font-weight: 600; white-space: nowrap; }
+.ask-send:disabled { opacity: .5; }
 .guide kbd { margin-left: 6px; }
 .guide .primary kbd { background: transparent; color: inherit; border-color: color-mix(in oklch, var(--bg) 40%, transparent); }
 @media not ((hover: hover) and (pointer: fine)) { .guide kbd { display: none; } }
@@ -638,6 +669,12 @@ body.guiding .chrome { display: none; }
   .guide-step h2 { font-size: 19px; }
   .guide-keys .wide { display: none; }
   .guide-keys button { flex: 1 1 auto; padding: 10px 8px !important; white-space: nowrap; } .guide-keys .primary { flex: 2 1 auto; }
+  /* the question box has the bottom of a phone to itself: the keyboard takes the rest */
+  .guide-foot.asking .guide-keys { display: none; }
+  .ask-dock { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+  .ask-thread { max-height: min(46vh, 420px); max-height: min(46dvh, 420px); }
+  .ask-form textarea { font-size: 16px; } /* smaller text makes an iPhone zoom in */
+  .ask-head .hint { display: none; }
 }
 /* a new or deleted file has nothing to compare with: plain code, no marks on every line */
 .one-side .code-line.changed, .one-side .u-add, .one-side .u-del { background: none; }

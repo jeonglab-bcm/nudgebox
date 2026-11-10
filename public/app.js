@@ -318,7 +318,11 @@ function fold(id, title, entries) {
 }
 
 function render() {
+	// keep the focus and the caret in a box being typed in, on every page
+	const focused = document.activeElement?.dataset?.draft;
+	const caret = focused ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
 	renderPage();
+	if (document.activeElement?.dataset?.draft !== focused) refocus(focused, caret);
 	renderTray();
 }
 
@@ -1319,7 +1323,7 @@ async function explain(r, pr) {
 		await streamPost("/api/explain", { before: sideRef(r.before), after: sideRef(r.after), ...(pr ? { pr } : {}) }, (event, data) => {
 			if (event === "stage") explaining.set(k, data.stage);
 			else if (event === "message") explained.set(k, explained.get(k) + data.delta);
-			else if (event === "done") explained.set(k, data.explanation), explaining.delete(k);
+			else if (event === "done") explained.set(k, data.explanation), explainAsks.set(k, data.asks ?? []), explaining.delete(k);
 			repaint();
 		});
 		if (explaining.has(k)) throw new Error("The explanation stopped before the end; try again");
@@ -1340,6 +1344,60 @@ function explainBox(r) {
 	const live = stage ? " streaming" : "";
 	return el("div", { class: `explain${live}`, role: "status" },
 		text ? el("p", {}, inline(text)) : el("p", { class: "pending" }, stage === "reading" ? "Reading the changes…" : "Writing…"));
+}
+
+// Questions under an explanation: yours only, answered from the same changes and kept with it.
+const explainAsks = new Map(); // diff key -> [{question, answer}]
+const explainAsking = new Map(); // diff key -> {question, text, stage} while the model answers
+
+async function explainAsk(r, pr) {
+	const k = diffKey(r);
+	const key = `explain-ask:${k}`;
+	const question = (drafts.get(key) ?? "").trim();
+	if (explainAsking.has(k)) return;
+	if (!question) return toast("Write a question first");
+	const run = { question, text: "", stage: "reading" };
+	explainAsking.set(k, run);
+	drafts.delete(key);
+	render();
+	try {
+		let answer = null;
+		await streamPost("/api/explain/ask", { before: sideRef(r.before), after: sideRef(r.after), ...(pr ? { pr } : {}), question }, (event, data) => {
+			if (event === "stage") run.stage = data.stage;
+			else if (event === "message") run.text += data.delta;
+			else if (event === "done") answer = data.answer.trim();
+			repaint();
+		});
+		if (answer === null) throw new Error("The answer stopped before the end; ask again");
+		explainAsks.set(k, [...(explainAsks.get(k) ?? []), { question, answer }]);
+	} catch (e) {
+		if (!drafts.get(key)?.trim()) drafts.set(key, question); // the question is not lost
+		toast(e.message);
+	} finally {
+		explainAsking.delete(k);
+		render();
+	}
+}
+
+function explainAskBox(r, pr) {
+	const k = diffKey(r);
+	if (!explained.get(k) || explaining.has(k)) return null; // only under a whole explanation
+	const live = explainAsking.get(k);
+	const send = () => explainAsk(r, pr);
+	const turn = (x, streaming) => el("div", { class: `ask-turn${streaming ? " streaming" : ""}` },
+		el("div", { class: "ask-q" }, x.question),
+		streaming && !x.text ? el("p", { class: "ask-answer pending", role: "status" }, x.stage === "reading" ? "Reading the changes…" : "Writing…")
+			: md(streaming ? x.text : x.answer, "ask-answer"));
+	const box = draftBox(`explain-ask:${k}`, phone() ? "Ask about these changes" : "Ask about these changes (only you see it)", { rows: "1", "aria-label": "Your question about these changes" });
+	box.addEventListener("keydown", (e) => {
+		if (e.key !== "Enter" || e.shiftKey || e.isComposing || !sendsOnEnter()) return;
+		e.preventDefault();
+		send();
+	});
+	return el("div", { class: "explain-ask", onclick: (e) => e.stopPropagation() },
+		(explainAsks.get(k) ?? []).map((x) => turn(x, false)), live ? turn(live, true) : null,
+		el("div", { class: "ask-form" }, box,
+			el("button", { class: "primary ask-send", disabled: Boolean(live), onclick: send }, "Ask")));
 }
 
 function diffView(f, r, github, modes = files.mdMode, labels = {}, review = null, pr = null) {
@@ -1364,7 +1422,7 @@ function diffView(f, r, github, modes = files.mdMode, labels = {}, review = null
 				el("button", { "aria-pressed": String(!rendered), class: rendered ? "" : "on", onclick: choose("plain") }, "Plain diff")) : null,
 			canExplain ? el("button", { class: "explain-btn", disabled: explaining.has(diffKey(r)), title: "Explain this file's changes (AI)",
 				onclick: (e) => { e.stopPropagation(); explain(r, pr); } }, el("span", { class: "spark", "aria-hidden": "true" }, "✦"), "Explain") : null) : null,
-		explainBox(r),
+		explainBox(r), explainAskBox(r, pr),
 		note ? el("p", { class: "note" }, note) : null,
 		rendered && review && (review.threads.length || review.commentable) ? el("p", { class: "note" }, "Line comments are on the Plain diff.") : null,
 		rendered && !lib ? el("p", { class: "pending" }, "Rendering…")
@@ -1767,9 +1825,9 @@ async function prPost(action, body = {}, done) {
 
 function prEscape() {
 	const t = prTarget();
-	if (prv.picker || prv.mergeMenu || prv.confirming || prv.form || prv.reviewOpen || prv.guide?.editing) {
+	if (prv.picker || prv.mergeMenu || prv.confirming || prv.form || prv.reviewOpen || prv.guide?.editing || prv.guide?.ask) {
 		Object.assign(prv, { picker: null, mergeMenu: false, confirming: false, form: null, reviewOpen: false });
-		if (prv.guide) prv.guide.editing = null;
+		if (prv.guide) prv.guide.editing = prv.guide.ask = null;
 		return render();
 	}
 	if (t.tab === "commits" && t.sha) return void (location.hash = prHash(t, "commits"));
@@ -2262,10 +2320,12 @@ function elapsed(iso) {
 }
 
 // `open`: the files of the step that show their diff; `cur`: the file the keys v and c act
-// on; `entered`: the step `open` was set up for; `fromList`: Back leads to the list
+// on; `entered`: the step `open` was set up for; `fromList`: Back leads to the list;
+// `ask`: the question box is open ({ about }); `asking`: the question the AI is answering
 const freshGuide = () => ({
 	data: null, failed: null, editing: null, loading: false, preparing: false, progress: null,
 	open: new Set(), cur: null, entered: null, shown: undefined, fromList: false,
+	ask: null, asking: null, askPin: true, askTop: 0,
 });
 
 const guideHash = (t, k = null) => prHash(t, k === null ? "guide" : `guide/${k + 1}`);
@@ -2291,7 +2351,7 @@ function guideTo(k) {
 	const g = prv.guide;
 	const from = guideAt();
 	if (k !== null && (k < 0 || k >= g.data.steps.length)) k = null;
-	g.editing = null;
+	g.editing = g.ask = null;
 	prv.form = null;
 	if (from === null && k !== null) {
 		g.fromList = true;
@@ -2422,6 +2482,7 @@ function guideKey(k) {
 	if (k === "e" && d) return editDraft(d), true;
 	if (k === "x" && d) return dropDraft(d), true;
 	if (k === "c") return commentOn(g.cur ?? step.files[0]), true;
+	if (k === "a" && g.data.ai) return openAsk(), true;
 	return false;
 }
 
@@ -2466,6 +2527,8 @@ function draftView(d, current, short) {
 		d.state === "open" ? code : null,
 		el("p", { class: "draft-body" }, d.body),
 		d.state === "open" ? el("div", { class: "btns" },
+			el("button", { class: "quiet ask-about", title: "Ask the AI about this comment", onclick: () => openAsk({ path: d.path, draft: d.id, side: d.side, line: d.line }) },
+				el("span", { class: "spark", "aria-hidden": "true" }, "✦"), "Ask"),
 			el("button", { class: "quiet", onclick: busy(() => dropDraft(d)) }, "Drop", el("kbd", {}, "x")),
 			el("button", { onclick: () => editDraft(d) }, "Edit", el("kbd", {}, "e")),
 			el("button", { onclick: busy(() => keepDraft(d)) }, "Keep", el("kbd", {}, "k"))) : null);
@@ -2612,6 +2675,8 @@ function guideStepView(t, p, d, k) {
 			el("span", { class: "tools" },
 				canComment ? el("button", { class: "quiet file-comment", "aria-label": "Comment on file", title: "Comment on file", onclick: (e) => { stop(e); g.cur = path; commentOn(path); } },
 					el("span", { class: "long" }, "Comment"), el("span", { class: "short", "aria-hidden": "true" }, "💬")) : null,
+				d.ai ? el("button", { class: "quiet file-comment file-ask", "aria-label": "Ask the AI about this file", title: "Ask the AI about this file", onclick: (e) => { stop(e); openAsk({ path }); } },
+					el("span", { class: "long" }, "Ask"), el("span", { class: "short", "aria-hidden": "true" }, "✦")) : null,
 				viewed));
 		const toggle = () => {
 			if (isOpen) g.open.delete(path);
@@ -2650,12 +2715,126 @@ function guideStepView(t, p, d, k) {
 			step.drafts.length ? el("div", { class: "drafts" }, step.drafts.map((x) => draftView(x, x === current, short))) : null,
 			el("p", { class: "guide-files-head" }, el("b", {}, `${step.seen.length} of ${step.files.length} viewed`), dir ? el("span", {}, "in ", el("code", {}, dir)) : null),
 			el("ul", { class: "files guide-files" }, rows)),
-		el("div", { class: "guide-keys btns" },
-			el("button", { class: "quiet", onclick: () => guideTo(k - 1) }, "Back", el("kbd", {}, "b")),
-			canComment ? el("button", { class: "quiet wide", onclick: () => commentOn(g.cur ?? step.files[0]) }, "Comment", el("kbd", {}, "c")) : null,
-			el("button", { class: "quiet", onclick: () => guideTo(k + 1) }, "Skip", el("kbd", {}, "s")),
-			g.cur && !step.reviewed ? el("button", { onclick: busy(() => viewFile(step, g.cur, true)) }, "Viewed", el("kbd", {}, "v")) : null,
-			el("button", { class: "primary", onclick: busy(lookGood) }, !step.reviewed ? "Looks good" : last ? "Done" : "Next step", el("kbd", {}, "y"))));
+		el("div", { class: `guide-foot${g.ask ? " asking" : ""}` },
+			g.ask ? askDock(t, step, short, canComment) : null,
+			el("div", { class: "guide-keys btns" },
+				el("button", { class: "quiet", onclick: () => guideTo(k - 1) }, "Back", el("kbd", {}, "b")),
+				canComment ? el("button", { class: "quiet wide", onclick: () => commentOn(g.cur ?? step.files[0]) }, "Comment", el("kbd", {}, "c")) : null,
+				d.ai ? el("button", { class: `quiet ask-open${g.ask ? " on" : ""}`, "aria-expanded": String(Boolean(g.ask)), title: "Ask the AI about this step",
+					onclick: () => (g.ask ? ((g.ask = null), render()) : openAsk()) }, "Ask", step.asks.length ? el("span", { class: "n" }, step.asks.length) : null, el("kbd", {}, "a")) : null,
+				el("button", { class: "quiet", onclick: () => guideTo(k + 1) }, "Skip", el("kbd", {}, "s")),
+				g.cur && !step.reviewed ? el("button", { onclick: busy(() => viewFile(step, g.cur, true)) }, "Viewed", el("kbd", {}, "v")) : null,
+				el("button", { class: "primary", onclick: busy(lookGood) }, !step.reviewed ? "Looks good" : last ? "Done" : "Next step", el("kbd", {}, "y")))));
+}
+
+// -- SPEC 19, Ask: questions about a step. Yours alone: nothing here goes to GitHub
+
+const askTag = (a, short) => (a.draft ? `${short(a.path)}:${a.side === "LEFT" ? "−" : "+"}${a.line}` : short(a.path));
+// with a keyboard Enter sends the question; on a phone it is a new line, and the button sends
+const sendsOnEnter = () => matchMedia("(hover: hover) and (pointer: fine)").matches;
+
+/** Open the question box with the cursor in it: about a file or a draft, or (null) the whole step. */
+function openAsk(about) {
+	const g = prv.guide;
+	g.ask = { about: about === undefined ? g.ask?.about ?? null : about };
+	g.askPin = true;
+	render();
+	main.querySelector(".ask-dock textarea")?.focus();
+}
+
+async function ask(t, step) {
+	const g = prv.guide;
+	const key = `ask:${step.id}`;
+	const question = (drafts.get(key) ?? "").trim();
+	if (g.asking) return;
+	if (!question) return toast("Write a question first");
+	const about = g.ask?.about ?? null;
+	const run = (g.asking = { step: step.id, question, about, text: "", stage: "reading" });
+	g.askPin = true;
+	drafts.delete(key);
+	render();
+	try {
+		let answer = null;
+		const body = { repo: t.repo, number: t.number, step: step.id, question, ...(about ? { about: about.draft ? { draft: about.draft } : { path: about.path } } : {}) };
+		await streamPost("/api/review/ask", body, (event, data) => {
+			if (event === "stage") run.stage = data.stage;
+			else if (event === "message") run.text += data.delta;
+			else if (event === "done") answer = data.answer.trim();
+			repaint();
+		});
+		if (answer === null) throw new Error("The answer stopped before the end; ask again");
+		step.asks.push({ question, answer, about, at: new Date().toISOString() });
+	} catch (e) {
+		if (!drafts.get(key)?.trim()) drafts.set(key, question); // the question is not lost
+		toast(e.message);
+	} finally {
+		g.asking = null;
+		render();
+	}
+}
+
+/** The answer becomes a comment to edit: on the line of the draft it was about, else on the file. */
+function useAnswer(step, turn) {
+	const g = prv.guide;
+	const a = turn.about;
+	const path = a && step.files.includes(a.path) ? a.path : g.cur ?? step.files[0];
+	const f = files.data?.files.find((x) => x.path === path);
+	const diffed = files.diffs.get(path)?.result;
+	const onLine = a?.draft && a.path === path && diffed && !diffed.binary && inRanges(f?.commentable?.[a.side === "LEFT" ? "left" : "right"], a.line);
+	const had = (drafts.get("form") ?? "").trim();
+	drafts.set("form", had ? `${had}\n\n${turn.answer}` : turn.answer);
+	if (onLine) {
+		g.open.add(path);
+		if (isMd(path)) files.mdMode.set(path, "plain"); // a line's comment box is under the line of the source
+		prv.form = { subject: "line", path, side: a.side, line: a.line };
+	} else prv.form = { subject: "file", path };
+	g.cur = path;
+	g.ask = null;
+	render();
+	const box = main.querySelector(".guide-step .comment-form textarea");
+	box?.scrollIntoView({ block: "center" });
+	box?.focus({ preventScroll: true });
+}
+
+// the questions and answers of this step, and the box for the next one, over the buttons at the bottom
+function askDock(t, step, short, canComment) {
+	const g = prv.guide;
+	const key = `ask:${step.id}`;
+	const live = g.asking?.step === step.id ? g.asking : null;
+	const about = g.ask.about;
+	const send = () => ask(t, step);
+	const focus = () => main.querySelector(".ask-dock textarea")?.focus();
+	const turn = (x, streaming) => el("div", { class: `ask-turn${streaming ? " streaming" : ""}` },
+		el("div", { class: "ask-q" }, x.about ? el("span", { class: "ask-tag" }, askTag(x.about, short)) : null, x.question),
+		streaming && !x.text ? el("p", { class: "ask-answer pending", role: "status" }, x.stage === "reading" ? "Reading the changes…" : "Writing…")
+			: md(streaming ? x.text : x.answer, "ask-answer"),
+		!streaming && canComment ? el("div", { class: "ask-tools" },
+			el("button", { class: "quiet ask-use", title: "Start a comment with this answer; you edit it before it is added", onclick: () => useAnswer(step, x) }, "Use as comment")) : null);
+	const thread = el("div", { class: "ask-thread" },
+		step.asks.length || live ? null : el("p", { class: "hint" }, "Ask what a change does, why it is there, or what it could break. The AI answers from the changes of this step."),
+		step.asks.map((x) => turn(x, false)), live ? turn(live, true) : null);
+	// the thread stays where it was read; at its end it follows the answer as it comes in
+	thread.addEventListener("scroll", () => {
+		g.askTop = thread.scrollTop;
+		g.askPin = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 24;
+	});
+	queueMicrotask(() => { thread.scrollTop = g.askPin ? thread.scrollHeight : g.askTop; });
+	const box = draftBox(key, about ? "Your question about it" : "Your question about this step", { rows: "2", "aria-label": "Your question" });
+	box.addEventListener("keydown", (e) => {
+		if (e.key !== "Enter" || e.shiftKey || e.isComposing || !sendsOnEnter()) return;
+		e.preventDefault();
+		send();
+	});
+	return el("section", { class: "ask-dock", "aria-label": "Ask the AI about this step" },
+		el("div", { class: "ask-head" },
+			el("b", {}, el("span", { class: "spark", "aria-hidden": "true" }, "✦"), "Ask the AI"),
+			el("span", { class: "hint" }, "Only you see this"),
+			el("button", { class: "quiet ask-close", "aria-label": "Close", title: "Close", onclick: () => { g.ask = null; render(); } }, "✕")),
+		thread,
+		about ? el("div", { class: "ask-chip" }, about.draft ? `About the AI draft on ${askTag(about, short)}` : `About ${askTag(about, short)}`,
+			el("button", { class: "quiet", "aria-label": "Ask about the whole step instead", title: "Ask about the whole step instead", onclick: () => { g.ask.about = null; render(); focus(); } }, "✕")) : null,
+		el("div", { class: "ask-form" }, box,
+			el("button", { class: "primary ask-send", disabled: Boolean(g.asking), onclick: send }, "Ask", el("kbd", {}, "↵"))));
 }
 
 // -- resolving conflicts

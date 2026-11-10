@@ -457,3 +457,38 @@ planner"). Built: shown. Tried on fossil#36: 21 code files, 38 links.
 - The planner is not fed the graph, and the files are not reordered by it (issue 50
   waits for a word). Both change what the AI writes; the drawing changes nothing.
 - Folds, and stays folded: on a phone it is a screen high.
+
+## 2026-11-10: The dependency graph is a tree, of real uses only
+
+Dr. Jeong, on the graph of the day before: it "doesn't show me a real dependency", and
+asked for something like a tree. Both were right.
+
+- **The links were wrong.** A file's name in a comment or a docstring made a link. On
+  dejavu#27 to #29 about 85 of 139 links were of that kind ("see `loader.py`", "called
+  by `run.py`"). On fossil#36 `build_results.py` wrote `main.nf` into a metadata
+  string, which closed a circle with the pipeline that runs it.
+- Comments and docstrings are now blanked before the search (`live()` in
+  `src/depgraph.ts`). Strings of the code are kept: `subprocess.run(["python",
+  "worker.py"])` and `script: "bash step.sh"` are real uses and are only there as
+  strings. It is a reader of comment marks per language, not a parser: enough to tell
+  code from prose, and it runs on any file the moment the page opens.
+- Two files that name each other: the import counts; otherwise the runner (Nextflow,
+  Snakemake, shell, batch, Makefile, WDL) uses the other. A script that carries its
+  pipeline's name is describing itself, not calling the pipeline.
+- After: dejavu#29 has 6 links by name, each a real call; fossil#36 has 37 links and
+  no circle.
+- **A tree, not a drawing.** The drawing had the used files at the top and arrows
+  crossing; nobody reads a review from the leaves up. The tree starts at what is run
+  (`run_skyriver.sbatch`, then `main.nf`, then its scripts, then their modules), which
+  is the order the question "what does this PR do" is asked in.
+- A graph is not a tree: a module is used in many places. It is shown in each, and its
+  own files once, with ↑ ↓ at the others. Repeating the whole branch each time made
+  fossil#36 several screens long.
+- Files with nothing under them share a line. One line per file made the tree 1800px
+  high on a phone; now fossil#36 is about one and a half screens.
+- "By name" is a dashed outline, not a word on every line: under `main.nf` every line
+  carried the word.
+- A tap marks the files that use the tapped one, not the ones it uses: those are
+  already under it.
+- The endpoint and its answer are as before; the stored guided reviews are not
+  touched, so no PR is prepared again.

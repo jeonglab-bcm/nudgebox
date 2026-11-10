@@ -1,5 +1,5 @@
 /**
- * SPEC 22. The dependency graph of a PR's changed files, drawn on Files changed and on
+ * SPEC 22. The dependency graph of a PR's changed files, a tree on Files changed and on
  * Guided review. The lab LLM is faked. Lab user hyunhwanj is GitHub "hwan".
  */
 import { test, after } from "node:test";
@@ -56,25 +56,27 @@ async function open(o: { tab?: string; files?: Record<string, string>; phone?: b
 
 const text = async (page: Page, sel: string) => ((await page.locator(sel).first().textContent()) ?? "").replace(/\s+/g, " ").trim();
 const node = (page: Page, path: string) => page.locator(`.dep-graph .dep-node[data-path="${path}"]`);
-const top = async (page: Page, path: string) => (await node(page, path).boundingBox())!.y;
-const dimmed = (page: Page) => page.locator(".dep-graph .dep-node.dim").evaluateAll((xs) => xs.map((x) => x.getAttribute("data-path")).sort());
+/** The tree as lines: "depth file + file [caret]"; a file is "[~]name [mark]", ~ for one used by its name (dashed). */
+const lines = (page: Page) => page.locator(".dep-tree .dep-row").evaluateAll((xs) => xs.map((x) =>
+	[x.getAttribute("data-depth"),
+		[...x.querySelectorAll(".dep-node")].map((n) => `${n.classList.contains("named") ? "~" : ""}${n.querySelector(".dep-name")!.textContent}${n.querySelector(".dep-again") ? ` ${n.querySelector(".dep-again")!.textContent}` : ""}`).join(" + "),
+		x.querySelector(".dep-caret")?.textContent]
+		.filter(Boolean).join(" ")));
+const marked = (page: Page, cls: string) => page.locator(`.dep-tree .dep-node.${cls}`).evaluateAll((xs) => xs.map((x) => x.getAttribute("data-path")));
 
-test("22. Files changed draws the changed code: a file under the files it uses, an arrow per use", async () => {
+test("22. Files changed shows the changed code as a tree: under each file the files it uses", async () => {
 	const s = await open();
 	try {
-		await s.page.waitForSelector(".dep-graph svg");
+		await s.page.waitForSelector(".dep-tree");
 		assert.equal(await text(s.page, ".dep-head .dep-title"), "Dependency graph");
 		assert.equal(await text(s.page, ".dep-head .hint"), "4 files, 4 links");
-		assert.deepEqual(await s.page.locator(".dep-graph svg .dep-node").evaluateAll((xs) => xs.map((x) => x.getAttribute("data-path")).sort()),
-			["pipeline/common.py", "pipeline/fit.py", "pipeline/model.py", "run.sh"]);
-		assert.deepEqual(await s.page.locator(".dep-graph svg .dep-node text").allTextContents().then((xs) => xs.sort()), ["common.py", "fit.py", "model.py", "run.sh"]);
-		// read from the top: what is used stands above what uses it
-		assert.ok((await top(s.page, "pipeline/common.py")) < (await top(s.page, "pipeline/model.py")));
-		assert.ok((await top(s.page, "pipeline/model.py")) < (await top(s.page, "pipeline/fit.py")));
-		assert.ok((await top(s.page, "pipeline/fit.py")) < (await top(s.page, "run.sh")));
-		assert.equal(await s.page.locator(".dep-graph svg path.dep-link").count(), 4);
-		assert.equal(await s.page.locator(".dep-graph svg path.dep-link.mention").count(), 1); // run.sh names fit.py
-		// code that is linked to nothing, and the documents, are named under the drawing
+		// run.sh runs fit.py, which imports common.py and model.py; model.py imports common.py
+		assert.deepEqual(await lines(s.page), ["0 run.sh ▾", "1 ~fit.py ▾", "2 common.py", "2 model.py ▾", "3 common.py"]);
+		// a branch is drawn to the right of its file
+		const left = async (path: string) => (await node(s.page, path).first().boundingBox())!.x;
+		assert.ok((await left("run.sh")) < (await left("pipeline/fit.py")));
+		assert.ok((await left("pipeline/fit.py")) < (await left("pipeline/model.py")));
+		// code that is linked to nothing, and the documents, are named under the tree
 		assert.equal(await text(s.page, ".dep-alone"), "Not linked to the others: alone.py");
 		assert.equal(await text(s.page, ".dep-docs"), "Documents: README.md names 2");
 		assert.doesNotMatch(await text(s.page, ".dep-graph"), /run\.json/);
@@ -86,13 +88,16 @@ test("22. Files changed draws the changed code: a file under the files it uses, 
 test("22. a tap on a file shows what it uses and what uses it, and opens its diff", async () => {
 	const s = await open();
 	try {
-		await s.page.waitForSelector(".dep-graph svg");
+		await s.page.waitForSelector(".dep-tree");
 		await node(s.page, "pipeline/model.py").click();
-		assert.deepEqual(await dimmed(s.page), ["run.sh"]);
+		assert.deepEqual(await marked(s.page, "picked"), ["pipeline/model.py"]);
+		// its branch shows what it uses; the mark is on what uses it
+		assert.deepEqual(await marked(s.page, "near"), ["pipeline/fit.py"]);
 		assert.equal(await text(s.page, ".dep-pick .dep-pick-path"), "pipeline/model.py");
 		assert.match(await text(s.page, ".dep-pick"), /Uses common\.py/);
 		assert.match(await text(s.page, ".dep-pick"), /Used by fit\.py/);
-		assert.equal(await s.page.locator(".dep-graph svg path.dep-link.on").count(), 2);
+		// what it says stands right under the tapped line
+		assert.equal(await s.page.locator(".dep-tree > li").nth(4).getAttribute("class"), "dep-pick-row");
 
 		await s.page.locator(".dep-pick button", { hasText: "Open file" }).click();
 		await s.page.waitForSelector("li.file.open");
@@ -101,10 +106,53 @@ test("22. a tap on a file shows what it uses and what uses it, and opens its dif
 		// a second tap lets go; a document shows the files it names
 		await node(s.page, "pipeline/model.py").click();
 		assert.equal(await s.page.locator(".dep-pick").count(), 0);
-		assert.deepEqual(await dimmed(s.page), []);
+		assert.deepEqual(await marked(s.page, "picked"), []);
 		await s.page.locator(".dep-docs .dep-chip", { hasText: "README.md" }).click();
-		assert.deepEqual(await dimmed(s.page), ["pipeline/common.py", "pipeline/model.py"]);
+		assert.deepEqual(await marked(s.page, "near"), ["run.sh", "pipeline/fit.py"]);
 		assert.match(await text(s.page, ".dep-pick"), /Names fit\.py, run\.sh/);
+	} finally {
+		await s.close();
+	}
+});
+
+test("22. a file used in two places has its own files listed once; a branch folds", async () => {
+	const s = await open({ files: {
+		"main.py": "import a\nimport b\n",
+		"a.py": "import b\n",
+		"b.py": "import c\n",
+		"c.py": "x = 1\n",
+		"other.py": "import c\n",
+	} });
+	try {
+		await s.page.waitForSelector(".dep-tree");
+		// main.py has the most under it and goes first; b.py's own line is the one nearest to the top
+		assert.deepEqual(await lines(s.page), ["0 main.py ▾", "1 a.py ▾", "2 b.py ↓", "1 b.py ▾", "2 c.py", "0 other.py ▾", "1 c.py"]);
+		// where it is only named, a tap offers the way to its own line
+		await node(s.page, "b.py").first().click();
+		assert.equal(await s.page.locator(".dep-tree > li").nth(3).getAttribute("class"), "dep-pick-row");
+		await s.page.locator(".dep-pick button", { hasText: "Go to its branch" }).click();
+		assert.equal(await s.page.locator(".dep-tree > li").nth(4).getAttribute("class"), "dep-pick-row");
+		assert.match(await text(s.page, ".dep-pick"), /Uses c\.py\s*Used by main\.py, a\.py/);
+		assert.equal(await s.page.locator(".dep-pick button", { hasText: "Go to its branch" }).count(), 0);
+		await node(s.page, "b.py").nth(1).click();
+		assert.equal(await s.page.locator(".dep-pick").count(), 0);
+
+		await s.page.locator('.dep-caret[aria-label="Fold b.py"]').click();
+		assert.deepEqual(await lines(s.page), ["0 main.py ▾", "1 a.py ▾", "2 b.py ↓", "1 b.py ▸ 1", "0 other.py ▾", "1 c.py"]);
+		await s.page.locator('.dep-caret[aria-label="Fold main.py"]').click();
+		assert.deepEqual(await lines(s.page), ["0 main.py ▸ 2", "0 other.py ▾", "1 c.py"]);
+		await s.page.locator('.dep-caret[aria-label="Unfold main.py"]').click();
+		assert.equal((await lines(s.page)).length, 6);
+	} finally {
+		await s.close();
+	}
+});
+
+test("22. files that only use each other still show, each once", async () => {
+	const s = await open({ files: { "x.py": "import y\n", "y.py": "import x\n" } });
+	try {
+		await s.page.waitForSelector(".dep-tree");
+		assert.deepEqual(await lines(s.page), ["0 x.py ▾", "1 y.py ▾", "2 x.py ↑"]);
 	} finally {
 		await s.close();
 	}
@@ -113,8 +161,8 @@ test("22. a tap on a file shows what it uses and what uses it, and opens its dif
 test("22. Guided review: each file carries the number of its step, and opens that step", async () => {
 	const s = await open({ tab: "guide" });
 	try {
-		await s.page.waitForSelector(".dep-graph svg");
-		const steps = await s.page.locator(".dep-graph svg .dep-node").evaluateAll((xs) => Object.fromEntries(xs.map((x) => [x.getAttribute("data-path"), x.querySelector(".dep-step")?.textContent])));
+		await s.page.waitForSelector(".dep-tree");
+		const steps = await s.page.locator(".dep-tree .dep-node").evaluateAll((xs) => Object.fromEntries(xs.map((x) => [x.getAttribute("data-path"), x.querySelector(".dep-step")?.textContent])));
 		assert.deepEqual(steps, { "pipeline/common.py": "1", "pipeline/model.py": "1", "pipeline/fit.py": "2", "run.sh": "2" });
 		await node(s.page, "pipeline/fit.py").click();
 		await s.page.locator(".dep-pick button", { hasText: "Open step 2" }).click();
@@ -128,36 +176,41 @@ test("22. Guided review: each file carries the number of its step, and opens tha
 test("22. the graph folds, and stays folded", async () => {
 	const s = await open();
 	try {
-		await s.page.waitForSelector(".dep-graph svg");
+		await s.page.waitForSelector(".dep-tree");
 		assert.equal(await s.page.locator(".dep-head").getAttribute("aria-expanded"), "true");
 		await s.page.locator(".dep-head").click();
-		assert.equal(await s.page.locator(".dep-graph svg").count(), 0);
+		assert.equal(await s.page.locator(".dep-tree").count(), 0);
 		await s.page.reload();
 		await s.page.waitForSelector(".dep-head");
 		assert.equal(await s.page.locator(".dep-head").getAttribute("aria-expanded"), "false");
-		assert.equal(await s.page.locator(".dep-graph svg").count(), 0);
+		assert.equal(await s.page.locator(".dep-tree").count(), 0);
 		await s.page.locator(".dep-head").click();
-		await s.page.waitForSelector(".dep-graph svg");
+		await s.page.waitForSelector(".dep-tree");
 	} finally {
 		await s.close();
 	}
 });
 
-test("22. on a phone the graph fits the screen and its names can be read", async () => {
-	const s = await open({ phone: true });
+test("22. on a phone the tree fits the screen and its names can be read", async () => {
+	const deep: Record<string, string> = { "pipeline/a_rather_long_file_name_0.py": "x = 1\n" };
+	for (let i = 1; i < 9; i++) deep[`pipeline/a_rather_long_file_name_${i}.py`] = `import a_rather_long_file_name_${i - 1}\n`;
+	const s = await open({ phone: true, files: deep });
 	try {
-		await s.page.waitForSelector(".dep-graph svg");
+		await s.page.waitForSelector(".dep-tree");
+		assert.equal(await s.page.locator(".dep-row").count(), 9);
 		const fit = await s.page.evaluate(() => ({
 			page: document.documentElement.scrollWidth <= window.innerWidth,
-			svg: document.querySelector(".dep-graph svg")!.getBoundingClientRect().right <= window.innerWidth,
-			font: parseFloat(getComputedStyle(document.querySelector(".dep-node text")!).fontSize),
-			tap: document.querySelector(".dep-node rect")!.getBoundingClientRect().height,
+			rows: [...document.querySelectorAll(".dep-row")].every((r) => r.getBoundingClientRect().right <= window.innerWidth && [...r.children].every((c) => c.getBoundingClientRect().right <= window.innerWidth)),
+			font: parseFloat(getComputedStyle(document.querySelector(".dep-node")!).fontSize),
+			tap: Math.min(...[...document.querySelectorAll(".dep-node")].map((n) => n.getBoundingClientRect().height)),
+			name: Math.min(...[...document.querySelectorAll(".dep-name")].map((n) => n.getBoundingClientRect().width)),
 		}));
-		assert.ok(fit.page && fit.svg, "nothing scrolls sideways");
+		assert.ok(fit.page && fit.rows, "nothing scrolls sideways or is cut off");
 		assert.ok(fit.font >= 12, `names of ${fit.font}px`);
 		assert.ok(fit.tap >= 30, `a file a thumb can hit (${fit.tap}px)`);
-		await node(s.page, "pipeline/fit.py").click();
-		assert.match(await text(s.page, ".dep-pick"), /Uses common\.py, model\.py/);
+		assert.ok(fit.name >= 60, `the deepest name still shows (${fit.name}px)`);
+		await node(s.page, "pipeline/a_rather_long_file_name_3.py").click();
+		assert.match(await text(s.page, ".dep-pick"), /Uses a_rather_long_file_name_2\.py/);
 	} finally {
 		await s.close();
 	}

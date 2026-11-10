@@ -119,6 +119,47 @@ test("22. one link per pair of files; an import counts over a mention", () => {
 	}), ["a/run.py -> a/helper.py"]);
 });
 
+test("22. a name in a comment or a docstring is no use; a name in the code is", () => {
+	assert.deepEqual(arrows({
+		"a/driver.py": "\"\"\"Runs the dry run.\n\nSee helper.py and tool.py for the rest.\n\"\"\"\nimport subprocess\n# tool.py does the work\nsubprocess.run([\"python\", \"worker.py\"])  # not tool.py\nHELP = \"\"\"\nusage: python extra.py\n\"\"\"\n",
+		"a/helper.py": "",
+		"a/tool.py": "",
+		"a/worker.py": "def f():\n    '''Called by driver.py.'''\n    return 1\n",
+		"a/extra.py": "",
+		"main.nf": "// old: legacy.sh\n/* also legacy.sh */\nprocess A { script: \"bash step.sh\" }\n",
+		"step.sh": "#!/bin/bash\n# was legacy.sh\npython a/extra.py  # see a/tool.py\necho \"#not a comment: a/helper.py\"\n",
+		"legacy.sh": "",
+		"site/index.html": "<!-- built by step.sh -->\n<script src=\"app.js\"></script>\n",
+		"site/app.js": "// see index.html\nimport './util.js'; /* legacy.sh */\n// import './gone.js';\n",
+		"site/util.js": "",
+		"site/gone.js": "",
+	}), [
+		"a/driver.py -> a/extra.py (mention)",
+		"a/driver.py -> a/worker.py (mention)",
+		"main.nf -> step.sh (mention)",
+		"site/app.js -> site/util.js",
+		"site/index.html -> site/app.js (mention)",
+		"step.sh -> a/extra.py (mention)",
+		"step.sh -> a/helper.py (mention)",
+	]);
+});
+
+test("22. two files that name each other: the import counts, then the pipeline or script that runs the other", () => {
+	assert.deepEqual(arrows({
+		"main.nf": "process B { script: \"python build.py\" }\n",
+		"build.py": "meta = {\"pipeline\": \"main.nf\"}\n",
+		"a.py": "import b\n",
+		"b.py": "NAME = \"a.py\"\n",
+		"x.py": "run(\"y.py\")\n",
+		"y.py": "run(\"x.py\")\n",
+	}), [
+		"a.py -> b.py",
+		"main.nf -> build.py (mention)",
+		"x.py -> y.py (mention)",
+		"y.py -> x.py (mention)",
+	]);
+});
+
 async function setup() {
 	const t = await start();
 	t.github.grant("hwan", LAB, MINE);

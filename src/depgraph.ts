@@ -2,7 +2,8 @@
  * SPEC 22. Which changed file of a PR uses which: read from the text of the files, with no
  * language server and no model. Python and JS/TS imports and Nextflow includes are resolved
  * to a file; any other use is a file naming another one (`python bin/fit.py`, `source env.sh`,
- * a link in a document). Only links between the files given are found.
+ * a link in a document). Only links between the files given are found. Code is searched
+ * without its comments and docstrings: a file that is only written about is not used.
  */
 import { fileKind } from "./filekind.ts";
 
@@ -50,6 +51,82 @@ function notebookCode(text: string): string {
 		return "";
 	}
 }
+
+// -- what runs: code without its comments -------------------------------------------
+type Marks = { hash?: "any" | "word"; slash?: boolean; triple?: boolean; docstrings?: boolean; backtick?: boolean };
+const PY: Marks = { hash: "any", triple: true, docstrings: true };
+const HASH_ANY = new Set("r jl rb pl".split(" "));
+const HASH_WORD = new Set("sh bash zsh fish sbatch slurm pbs mk wdl".split(" "));
+const SLASH = new Set([...JS, ..."c h cc cpp cxx hpp java go rs kt swift scala groovy css scss less".split(" ")]);
+
+function marksOf(path: string): Marks | null {
+	const [ext, name] = [extOf(path), baseOf(path)];
+	if (ext === "py" || ext === "pyi" || ext === "ipynb" || ext === "smk" || name === "Snakefile") return PY;
+	if (ext === "nf") return { slash: true, triple: true };
+	if (SLASH.has(ext)) return { slash: true, backtick: JS.has(ext) };
+	if (HASH_ANY.has(ext)) return { hash: "any" };
+	if (HASH_WORD.has(ext) || /^(Makefile|GNUmakefile|Dockerfile)/.test(name)) return { hash: "word" };
+	return null;
+}
+
+/**
+ * The text with its comments blanked (and, in Python, its docstrings), line for line. A
+ * string keeps its text: `run("fit.py")` is a use. Quotes are followed only as far as it
+ * takes to tell `#` in a string from a comment.
+ */
+function live(path: string, text: string): string {
+	if (fileKind(path) !== "code") return text;
+	const blankOut = (x: string) => x.replace(/[^\n]/g, " ");
+	if (/^html?$/.test(extOf(path))) return text.replace(/<!--[\s\S]*?-->/g, blankOut);
+	const o = marksOf(path);
+	if (!o) return text;
+	const n = text.length;
+	const out: string[] = [];
+	let kept = 0; // text[kept..i) is not yet written
+	const wipe = (a: number, b: number) => {
+		out.push(text.slice(kept, a), blankOut(text.slice(a, b)));
+		kept = b;
+	};
+	const eol = (i: number) => {
+		const e = text.indexOf("\n", i);
+		return e < 0 ? n : e;
+	};
+	for (let i = 0; i < n; ) {
+		const c = text[i];
+		if (c === "#" && o.hash && (o.hash === "any" || i === 0 || /\s/.test(text[i - 1]))) {
+			const e = eol(i);
+			wipe(i, e);
+			i = e;
+		} else if (c === "/" && o.slash && text[i + 1] === "/" && text[i - 1] !== ":") {
+			const e = eol(i);
+			wipe(i, e);
+			i = e;
+		} else if (c === "/" && o.slash && text[i + 1] === "*") {
+			const e = text.indexOf("*/", i + 2);
+			const end = e < 0 ? n : e + 2;
+			wipe(i, end);
+			i = end;
+		} else if (c === '"' || c === "'" || (c === "`" && o.backtick)) {
+			if (o.triple && text.startsWith(c.repeat(3), i)) {
+				const e = text.indexOf(c.repeat(3), i + 3);
+				const end = e < 0 ? n : e + 3;
+				// a string that is a statement of its own says something, it does nothing
+				if (o.docstrings && /^[ \t]*[rRuUbBfF]{0,2}$/.test(text.slice(text.lastIndexOf("\n", i - 1) + 1, i))) wipe(i, end);
+				i = end;
+			} else {
+				let k = i + 1;
+				while (k < n && text[k] !== c && (c === "`" || text[k] !== "\n")) k += text[k] === "\\" ? 2 : 1;
+				i = Math.min(k + 1, n);
+			}
+		} else i++;
+	}
+	out.push(text.slice(kept));
+	return out.join("");
+}
+
+// files that run others: when two files name each other, this one is the user
+const RUNNER = new Set("nf smk sh bash zsh fish sbatch slurm pbs mk wdl".split(" "));
+const runs = (p: string) => RUNNER.has(extOf(p)) || /^(Snakefile|Makefile|GNUmakefile)$/.test(baseOf(p));
 
 export function links(files: GraphFile[]): Link[] {
 	const paths = files.map((f) => f.path);
@@ -159,12 +236,18 @@ export function links(files: GraphFile[]): Link[] {
 
 	for (const f of files) {
 		const ext = extOf(f.path);
-		const text = ext === "ipynb" ? notebookCode(f.text) : f.text;
-		if (!text) continue;
+		const text = live(f.path, ext === "ipynb" ? notebookCode(f.text) : f.text);
+		if (!text.trim()) continue;
 		if (ext === "py" || ext === "pyi" || ext === "ipynb" || ext === "smk" || baseOf(f.path) === "Snakefile") python(f.path, text);
 		if (JS.has(ext)) js(f.path, text);
 		if (ext === "nf") nextflow(f.path, text);
 		mentions(f.path, text);
+	}
+	// two files that name each other are one use, not a circle: the import, or the file that runs the other
+	for (const l of [...found.values()]) {
+		const back = found.get(`${l.to}\n${l.from}`);
+		if (!back || l.how !== "mention") continue;
+		if (back.how === "import" || (runs(back.from) && !runs(l.from))) found.delete(`${l.from}\n${l.to}`);
 	}
 	return [...found.values()].sort((a, b) => order.get(a.from)! - order.get(b.from)! || order.get(a.to)! - order.get(b.to)!);
 }

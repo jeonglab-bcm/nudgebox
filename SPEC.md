@@ -769,37 +769,60 @@ computer and a phone.
 
 ## 22. Dependency graph
 
-A PR page draws which of its changed files use which (Dr. Jeong, 2026-11-09, issue
-40). It is on **Files changed**, above the list, and on **Guided review**, under the
-steps; on a computer and a phone.
+A PR page shows which of its changed files use which, as a tree (Dr. Jeong,
+2026-11-09, issue 40; a tree and real uses only, 2026-11-10). It is on **Files
+changed**, above the list, and on **Guided review**, under the steps; on a computer
+and a phone.
 
-- **What is drawn.** The changed code files that are linked to another changed code
-  file, each as a box with its name, and an arrow from a file to every file that uses
-  it. **A file stands under the files it uses**, so reading from the top goes from the
-  parts to what is built from them. Two files of one name carry their folder.
+- **The tree.** At the top stand the changed code files that no other changed file
+  uses: what is run. **Under each file are the files it uses**, one step to the right,
+  joined by a line. The top with the most under it comes first. Only code that is
+  linked to other changed code is in the tree. Two files of one name carry their
+  folder.
+  - Under a file, the files that have nothing under them there share one line; a file
+    with files of its own has its own line.
+  - **A file used in several places** is shown in each. Its own files are listed
+    once, at the place nearest to a top; in the other places it carries **↑** or **↓**
+    (that place is above or below), or **…** when that place is folded away.
+  - Files that only use each other, in a circle: one of them stands at the top.
 - **Two kinds of link.**
-  - **Import** (full arrow): Python `import` and `from … import` (also in Snakemake
+  - **Import** (full outline): Python `import` and `from … import` (also in Snakemake
     files and notebooks), JavaScript and TypeScript `import`, `require` and
     `import()`, Nextflow `include`.
-  - **Named** (dashed arrow): the file's name is written in the other file, as a
-    pipeline does with `python build_page.py` or a batch script with `main.nf`.
-  - One arrow per pair of files; an import counts before a name. Only links between
-    files of this PR: a library or an unchanged file is not in the drawing.
-- **Tap a file** and its arrows are marked, the other files fade, and a line under the
-  drawing gives its full path, **Uses** and **Used by**. On Files changed, **Open
-  file** opens its diff in the list; on Guided review the box carries its step's
-  number and the button says **Open step N**. A second tap lets go.
-- **Under the drawing.**
+  - **By name** (dashed outline): the file's name is written in the other file's
+    code, as a pipeline does with `python build_page.py` or a batch script with
+    `main.nf`.
+  - One link per pair of files; an import counts before a name. Only links between
+    files of this PR: a library or an unchanged file is not in the tree.
+- **Only real uses.**
+  - **Comments and docstrings are not searched.** A file that is only written about
+    is not used. This holds for Python, R, Julia, Ruby, Perl, shell and batch scripts,
+    Makefiles, Dockerfiles, WDL, Nextflow, JavaScript, TypeScript, C-like languages,
+    CSS and HTML. A name in a string of the code still counts: that is how a script is
+    run.
+  - **Two files that name each other** give one link, not a circle: the import
+    counts; without one, the pipeline or script (Nextflow, Snakemake, shell, batch,
+    Makefile, WDL) uses the other file. Two files that import each other, or two
+    scripts that name each other, keep both links.
+- **Tap a file** and it is marked, with the files that use it, and right under its
+  line stands its full path, **Uses** and **Used by**. On Files changed, **Open file**
+  opens its diff in the list; on Guided review the file carries its step's number and
+  the button says **Open step N**. Where the file's own files are listed in another
+  place, **Go to its branch** goes there. A second tap lets go.
+- **Folding.** The mark beside a file with files under it folds them away and shows
+  how many there are. A tree of more than 40 lines starts with only the top files'
+  branches open. The heading folds the whole graph; folded stays folded, in this
+  browser, for every PR.
+- **Under the tree.**
   - **Not linked to the others**: code files with no link, as chips.
   - **Documents**: the changed Markdown and other documents, each with how many
-    changed files it names. A tap shows which. Documents are not boxes: a README that
-    names every file would cover the drawing. A code file that names a document is no
+    changed files it names. A tap shows which. Documents are not in the tree: a README
+    that names every file would be most of it. A code file that names a document is no
     link.
 - **Which files.** Code and documents as in section 15's switch; settings, data and
   pictures are not in it, nor are removed files. The files are read as they are at the
   PR's head.
-- The heading folds the drawing; folded stays folded, in this browser, for every PR.
-- A PR with no link between its code files has no drawing and no heading.
+- A PR with no link between its code files has no graph and no heading.
 - **How it is found.** By reading the changed files' text on the Nudgebox server: no
   language server, no AI model, nothing from the repository is run. At most 400 files
   are read, none over 1 MB. The answer is kept for the PR's head commit, so a push

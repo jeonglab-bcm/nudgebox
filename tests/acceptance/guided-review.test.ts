@@ -2,8 +2,10 @@
  * SPEC 19. Guided review, server side: a PR prepared as noise (hidden), steps in reading
  * order, each with a summary, a note per file and verified draft comments, and data to
  * skim; per person, viewed files, reviewed steps and kept or dropped drafts; after a
- * push, only what changed is read again. The lab LLM is faked and answers by its instructions:
- * "You plan" (steps), "You review" (one step's drafts), "You check" (one draft).
+ * push, only what changed is read again; questions about a step, answered by the model
+ * and kept per person. The lab LLM is faked and answers by its instructions:
+ * "You plan" (steps), "You review" (one step's drafts), "You check" (one draft),
+ * "You answer" (a question about a step).
  * Lab users: hyunhwanj (GitHub "hwan"), kellyl ("kelly").
  */
 import { test } from "node:test";
@@ -31,12 +33,16 @@ type Plan = { summary?: string; steps: { title: string; summary: string; files: 
 type Draft = { path: string; side: "LEFT" | "RIGHT"; line: number; body: string };
 type Note = { path: string; note: string };
 
+/** The question in a prompt that asks one (SPEC 19.12): the text after the last "The reviewer asks:". */
+const asked = (p: Prompt) => p.user.split("The reviewer asks:").pop()!.trim();
+
 /** The fake model: `plan` answers the planning call; `drafts` and `notes` answer each step by its files; "WRONG" drafts fail the check. */
 function model(plan: Plan, drafts: (user: string) => Draft[] = () => [], notes: (user: string) => Note[] = () => []) {
 	return (p: Prompt) => {
 		if (p.system.startsWith("You plan")) return typeof plan === "string" ? plan : JSON.stringify(plan);
 		if (p.system.startsWith("You review")) return JSON.stringify({ summary: "This step changes the limit.", notes: notes(p.user), drafts: drafts(p.user) });
 		if (p.system.startsWith("You check")) return JSON.stringify({ real: !p.user.includes("WRONG"), reason: "checked" });
+		if (p.system.startsWith("You answer")) return `Answer to: ${asked(p)}`;
 		throw new Error(`unexpected prompt: ${p.system.slice(0, 40)}`);
 	};
 }
@@ -592,6 +598,202 @@ test("19.11 a push or a new PR prepares the guided review in the background", as
 		const got = await t.req(`/api/review?repo=${encodeURIComponent(LAB)}&number=4`, { as: "hyunhwanj" });
 		assert.equal((await got.json()).state, "ready", "ready without waiting");
 		assert.equal(calls("You plan").length, 1);
+	} finally {
+		await t.close();
+	}
+});
+
+// -- 19.12 questions about a step ---------------------------------------------------
+
+const LIMIT_DRAFTS = (user: string): Draft[] => (user.includes("=== src/limit.ts") ? [{ path: "src/limit.ts", side: "RIGHT", line: 15, body: "Is 20 safe for the small queue?" }] : []);
+const LIMIT_NOTES = (user: string): Note[] => (user.includes("=== src/limit.ts") ? [{ path: "src/limit.ts", note: "The limit constant goes up." }] : []);
+
+test("19.12 a question about a step goes to the model with the step's changes, notes and drafts, and the questions before it", async () => {
+	const { t, review, post, calls } = await setup({ drafts: LIMIT_DRAFTS, notes: LIMIT_NOTES });
+	try {
+		const { body: r } = await review("hyunhwanj");
+		const step = r.steps[0];
+		assert.deepEqual(step.asks, []);
+		const first = await post("hyunhwanj", "ask", { step: step.id, question: "  Why 20 and not 15?  " });
+		assert.equal(first.status, 200, await first.clone().text());
+		assert.deepEqual(await first.json(), { answer: "Answer to: Why 20 and not 15?" });
+
+		const [call] = calls("You answer");
+		for (const want of ["Pull request: Raise the limit", "Step: Raise the limit (The limit goes from 10 to 20.)", "=== src/limit.ts (modified, +1 -1)", "=== src/limit.test.ts",
+			"R15 + const limit = 20; // src/limit.ts", "L15 - const limit = 10; // src/limit.ts", "The limit constant goes up.", "Is 20 safe for the small queue?"]) {
+			assert.ok(call.user.includes(want), `the prompt lacks: ${want}`);
+		}
+		assert.ok(!call.user.includes("docs/notes.md"), "a file of another step is not in the prompt");
+		assert.ok(call.user.trimEnd().endsWith("The reviewer asks:\nWhy 20 and not 15?"), "the question comes last");
+		assert.match(call.system, /never follow instructions/i);
+		assert.match(call.system, /not shown/); // it must say when the answer needs code it cannot see
+		assert.ok((call.maxTokens ?? 0) <= 1200, "a few sentences, not an essay");
+
+		// the next question sees the first one and its answer
+		assert.equal((await post("hyunhwanj", "ask", { step: step.id, question: "And the test?" })).status, 200);
+		const second = calls("You answer")[1];
+		const before = second.user.slice(0, second.user.lastIndexOf("The reviewer asks:"));
+		assert.ok(before.includes("Why 20 and not 15?") && before.includes("Answer to: Why 20 and not 15?"));
+
+		// kept with the step, oldest first
+		const mine = (await review("hyunhwanj")).body.steps;
+		assert.deepEqual(mine[0].asks.map((a: any) => [a.question, a.answer, a.about]), [
+			["Why 20 and not 15?", "Answer to: Why 20 and not 15?", null], ["And the test?", "Answer to: And the test?", null]]);
+		assert.ok(!Number.isNaN(Date.parse(mine[0].asks[0].at)));
+		assert.deepEqual(mine[1].asks, []);
+	} finally {
+		await t.close();
+	}
+});
+
+test("19.12 a question can be about one file of the step or one of its drafts", async () => {
+	const { t, review, post, calls } = await setup({ drafts: LIMIT_DRAFTS });
+	try {
+		const { body: r } = await review("hyunhwanj");
+		const step = r.steps[0];
+		const draft = step.drafts[0];
+		assert.equal((await post("hyunhwanj", "ask", { step: step.id, question: "What does it check?", about: { path: "src/limit.test.ts" } })).status, 200);
+		assert.equal((await post("hyunhwanj", "ask", { step: step.id, question: "Is this real?", about: { draft: draft.id } })).status, 200);
+		const [file, onDraft] = calls("You answer");
+		assert.match(file.user, /The question is about the file src\/limit\.test\.ts\.\nThe reviewer asks:\nWhat does it check\?/);
+		assert.ok(file.user.indexOf("=== src/limit.test.ts") < file.user.indexOf("=== src/limit.ts"), "the file asked about comes first");
+		assert.match(onDraft.user, /The question is about this draft comment on src\/limit\.ts, line 15: Is 20 safe for the small queue\?\nThe reviewer asks:\nIs this real\?/);
+
+		const asks = (await review("hyunhwanj")).body.steps[0].asks;
+		assert.deepEqual(asks.map((a: any) => a.about), [{ path: "src/limit.test.ts" }, { path: "src/limit.ts", draft: draft.id, side: "RIGHT", line: 15 }]);
+
+		// only what is in the step
+		assert.equal((await post("hyunhwanj", "ask", { step: step.id, question: "q", about: { path: "docs/notes.md" } })).status, 404);
+		assert.equal((await post("hyunhwanj", "ask", { step: step.id, question: "q", about: { draft: "no-such-draft" } })).status, 404);
+		assert.equal(calls("You answer").length, 2);
+	} finally {
+		await t.close();
+	}
+});
+
+test("19.12 questions and answers are yours only, and nothing goes to GitHub", async () => {
+	const { t, review, post, calls } = await setup();
+	try {
+		const { body: r } = await review("hyunhwanj");
+		const step = r.steps[0];
+		const writes = () => t.github.calls.filter((c) => c.token).length; // what is done with a person's token
+		const was = writes();
+		await post("hyunhwanj", "ask", { step: step.id, question: "Mine?" });
+		assert.deepEqual((await review("kellyl")).body.steps[0].asks, []);
+		await post("kellyl", "ask", { step: step.id, question: "Hers?" });
+		assert.ok(!calls("You answer")[1].user.includes("Mine?"), "another person's question is not in the prompt");
+		assert.deepEqual((await review("hyunhwanj")).body.steps[0].asks.map((a: any) => a.question), ["Mine?"]);
+		assert.deepEqual((await review("kellyl")).body.steps[0].asks.map((a: any) => a.question), ["Hers?"]);
+		assert.equal(t.github.calls.filter((c) => /comment|review/i.test(c.op) && c.op !== "prContent").length, 0, "no comment or review is made on GitHub");
+		assert.equal(writes(), was);
+	} finally {
+		await t.close();
+	}
+});
+
+test("19.12 when the LLM fails or says nothing, the error is shown and the question is not kept", async () => {
+	const { t, review, post } = await setup();
+	try {
+		const { body: r } = await review("hyunhwanj");
+		const step = r.steps[0];
+		t.llm.failNext = true;
+		const failed = await post("hyunhwanj", "ask", { step: step.id, question: "Why?" });
+		assert.equal(failed.status, 502);
+		assert.match((await failed.json()).error, /LLM failed: upstream unavailable/);
+		const answer = t.llm.answer!;
+		t.llm.answer = (p) => (p.system.startsWith("You answer") ? "  \n" : answer(p));
+		const empty = await post("hyunhwanj", "ask", { step: step.id, question: "Why?" });
+		assert.equal(empty.status, 502);
+		assert.match((await empty.json()).error, /no answer/);
+		assert.deepEqual((await review("hyunhwanj")).body.steps[0].asks, []);
+		t.llm.answer = answer;
+		assert.equal((await post("hyunhwanj", "ask", { step: step.id, question: "Why?" })).status, 200);
+		assert.equal((await review("hyunhwanj")).body.steps[0].asks.length, 1);
+	} finally {
+		await t.close();
+	}
+});
+
+test("19.12 an answer streams as the model writes it", async () => {
+	const { t, review } = await setup();
+	try {
+		const { body: r } = await review("hyunhwanj");
+		const res = await t.req("/api/review/ask", { as: "hyunhwanj", method: "POST", headers: { accept: "text/event-stream" },
+			body: JSON.stringify({ repo: LAB, number: 4, step: r.steps[0].id, question: "Why 20?" }) });
+		assert.match(res.headers.get("content-type")!, /event-stream/);
+		const events = (await res.text()).split("\n\n").filter(Boolean).map((b) => ({ event: b.match(/^event: (.+)$/m)?.[1] ?? "message", data: JSON.parse(b.match(/^data: (.+)$/m)![1]) }));
+		const pieces = events.filter((e) => e.event === "message").map((e) => e.data.delta);
+		assert.ok(pieces.length > 1, "the answer comes in pieces");
+		assert.equal(pieces.join(""), "Answer to: Why 20?");
+		assert.deepEqual(events.at(-1), { event: "done", data: { answer: "Answer to: Why 20?", cached: false } });
+	} finally {
+		await t.close();
+	}
+});
+
+test("19.12 a question is refused when it is empty or too long, for a step that is not there, a PR you cannot see, or with no AI", async () => {
+	const { t, review, post, calls } = await setup();
+	try {
+		const { body: r } = await review("hyunhwanj");
+		const step = r.steps[0].id;
+		assert.equal((await post("hyunhwanj", "ask", { step, question: "   " })).status, 400);
+		assert.equal((await post("hyunhwanj", "ask", { step, question: "x".repeat(2001) })).status, 400);
+		assert.equal((await post("hyunhwanj", "ask", { step: "no-such-step", question: "Why?" })).status, 404);
+		assert.equal((await t.req("/api/review/ask", { as: "kellyl", method: "POST", body: JSON.stringify({ repo: MINE, number: 2, step, question: "Why?" }) })).status, 404);
+		assert.equal(calls("You answer").length, 0);
+	} finally {
+		await t.close();
+	}
+	const off = await setup({ llm: false });
+	try {
+		const { body: r } = await off.review("hyunhwanj");
+		const res = await off.post("hyunhwanj", "ask", { step: r.steps[0].id, question: "Why?" });
+		assert.equal(res.status, 503);
+	} finally {
+		await off.t.close();
+	}
+});
+
+test("19.12 a step too big for one prompt: the file asked about is whole, and the others are cut to fit", async () => {
+	const big = (mark: string) => `${"x".repeat(30_000)} ${mark}\n`;
+	const { t, review, post, calls } = await setup({
+		more: { "src/big1.ts": big("END-ONE"), "src/big2.ts": big("END-TWO") },
+		plan: { summary: "S.", steps: [{ title: "Two big files", summary: "s.", files: ["src/big1.ts", "src/big2.ts"] }, { title: "Rest", summary: "s.", files: ["src/limit.ts", "src/limit.test.ts", "docs/notes.md"] }] },
+	});
+	try {
+		const { body: r } = await review("hyunhwanj");
+		const step = r.steps[0].id;
+		await post("hyunhwanj", "ask", { step, question: "What ends the second?", about: { path: "src/big2.ts" } });
+		await post("hyunhwanj", "ask", { step, question: "And both?" });
+		const [about, both] = calls("You answer");
+		assert.ok(about.user.length <= 48_000 && both.user.length <= 48_000);
+		assert.ok(about.user.includes("END-TWO") && !about.user.includes("END-ONE") && about.user.includes("=== src/big1.ts"));
+		assert.ok(about.user.includes("[... cut]"));
+		// with no file asked about, each gets its share
+		assert.ok(!both.user.includes("END-ONE") && !both.user.includes("END-TWO"));
+		assert.equal(both.user.split("[... cut]").length - 1, 2);
+		assert.ok(both.user.trimEnd().endsWith("The reviewer asks:\nAnd both?"));
+	} finally {
+		await t.close();
+	}
+});
+
+test("19.12 after a push, the questions of a step that did not change stay; a changed step starts with none", async () => {
+	const { t, review, post, calls, push } = await setup();
+	try {
+		const { body: r } = await review("hyunhwanj");
+		await post("hyunhwanj", "ask", { step: r.steps[0].id, question: "About the limit?" });
+		await post("hyunhwanj", "ask", { step: r.steps[1].id, question: "About the notes?" });
+		push("h2", { "src/limit.test.ts": lines((i) => (i === 14 ? "const limit = 25;" : `line ${i + 1}`)) });
+		await t.app.sync();
+		const { body: after } = await review("hyunhwanj");
+		assert.equal(after.head, "h2");
+		assert.deepEqual(after.steps.map((s: any) => s.asks.map((a: any) => a.question)), [[], ["About the notes?"]]);
+		// and the model is not given answers about lines that are gone
+		await post("hyunhwanj", "ask", { step: after.steps[0].id, question: "Now?" });
+		const last = calls("You answer").at(-1)!;
+		assert.ok(!last.user.includes("About the limit?"));
+		assert.ok(last.user.includes("const limit = 25;"));
 	} finally {
 		await t.close();
 	}

@@ -1,6 +1,6 @@
 /**
  * SPEC 19. Guided review on the PR page, in a real browser: the steps as a list, then one
- * step alone, one key per decision. The lab LLM is faked (see
+ * step alone, one key per decision, and questions to the AI about a step. The lab LLM is faked (see
  * tests/acceptance/guided-review.test.ts). Lab user hyunhwanj is GitHub "hwan".
  */
 import { test, after } from "node:test";
@@ -33,6 +33,7 @@ const NOTES = [{ path: "src/limit.ts", note: "The limit constant goes up." }, { 
 const model = (p: Prompt) =>
 	p.system.startsWith("You plan") ? JSON.stringify(plan)
 	: p.system.startsWith("You review") ? JSON.stringify(p.user.includes("=== src/limit.ts") ? { summary: "s.", notes: NOTES, drafts: DRAFTS } : { summary: "s.", notes: [], drafts: [] })
+	: p.system.startsWith("You answer") ? `Because \`limit\` is the cap. (${p.user.split("The reviewer asks:").pop()!.trim()})`
 	: JSON.stringify({ real: true });
 
 /** Opens the guided review of labbot#4: at its list of steps, or at step `step`. */
@@ -298,9 +299,184 @@ test("19. on a phone a step fits the screen: its own bar on top, the decisions a
 		const keys = await s.page.locator(".guide-keys").boundingBox();
 		assert.equal(Math.round(bar!.y), 0);
 		assert.ok(Math.abs(keys!.y + keys!.height - 844) <= 1, "the buttons stay at the bottom");
-		assert.deepEqual((await s.page.locator(".guide-keys button:visible").allTextContents()).map((x) => x.replace(/[a-z]$/, "")), ["Back", "Skip", "Viewed", "Looks good"]);
+		assert.deepEqual((await s.page.locator(".guide-keys button:visible").allTextContents()).map((x) => x.replace(/[a-z]$/, "")), ["Back", "Ask", "Skip", "Viewed", "Looks good"]);
 		await s.page.getByRole("button", { name: /Looks good/ }).tap();
 		await onStep(s.page, 2);
+	} finally {
+		await s.close();
+	}
+});
+
+// -- 19.12 questions about a step ---------------------------------------------------
+
+const answers = (s: { t: { llm: { calls: Prompt[] } } }) => s.t.llm.calls.filter((c) => c.system.startsWith("You answer"));
+const turns = (page: Page) => page.locator(".ask-turn");
+const asked = async (page: Page, n: number) => {
+	await until(async () => (await turns(page).count()) === n && (await page.locator(".ask-turn.streaming").count()) === 0, 8000);
+};
+
+test("19. in a step, a asks the AI: the answer streams in under the question, and the next question sees it", async () => {
+	const s = await open({ step: 1 });
+	try {
+		await onStep(s.page, 1);
+		assert.equal(await s.page.locator(".ask-dock").count(), 0);
+		assert.match(await text(s.page, ".guide-keys .ask-open"), /^Ask ?a$/);
+		await s.page.keyboard.press("a");
+		const box = s.page.locator(".ask-dock textarea");
+		await box.waitFor();
+		assert.ok(await box.evaluate((b) => b === document.activeElement), "the cursor is in the question box");
+		assert.equal(await s.page.inputValue(".ask-dock textarea"), "", "the key that opens the box is not typed into it");
+
+		// Enter sends; the answer comes in pieces
+		s.t.llm.delayMs = 40;
+		await s.page.keyboard.type("Why 20?");
+		await s.page.keyboard.press("Enter");
+		await s.page.waitForSelector(".ask-turn.streaming");
+		assert.match(await text(s.page, ".ask-turn .ask-q"), /Why 20\?/);
+		assert.equal(await s.page.inputValue(".ask-dock textarea"), "");
+		assert.ok(await s.page.locator(".ask-send").isDisabled(), "one question at a time");
+		await asked(s.page, 1);
+		s.t.llm.delayMs = 0;
+		assert.match(await text(s.page, ".ask-turn .ask-answer"), /Because limit is the cap\. \(Why 20\?\)/);
+		assert.equal(await text(s.page, ".ask-turn .ask-answer code"), "limit"); // the answer's Markdown is drawn
+		assert.ok(answers(s)[0].user.includes("=== src/limit.ts") && answers(s)[0].user.includes("=== src/client.ts"));
+
+		// Shift+Enter is a new line; the button sends too
+		await box.focus();
+		await s.page.keyboard.type("And");
+		await s.page.keyboard.press("Shift+Enter");
+		await s.page.keyboard.type("the client?");
+		assert.equal(await turns(s.page).count(), 1);
+		await s.page.locator(".ask-send").click();
+		await asked(s.page, 2);
+		const before = answers(s)[1].user.slice(0, answers(s)[1].user.lastIndexOf("The reviewer asks:"));
+		assert.ok(before.includes("Why 20?") && before.includes("is the cap. (Why 20?)"), "the second question is asked with the first and its answer");
+		assert.match(await text(s.page, ".guide-keys .ask-open"), /^Ask ?2 ?a$/);
+
+		// Escape leaves the box, then closes it; the step stays
+		await box.focus();
+		await s.page.keyboard.press("Escape");
+		await s.page.keyboard.press("Escape");
+		await until(async () => (await s.page.locator(".ask-dock").count()) === 0);
+		assert.equal(await hash(s.page), `${GUIDE}/1`);
+		assert.equal(s.calls("addReviewComment").length, 0, "nothing goes to GitHub");
+
+		// kept: there again after a reload, and only on this step
+		await s.page.reload();
+		await onStep(s.page, 1);
+		await s.page.locator(".guide-keys .ask-open").click();
+		await asked(s.page, 2);
+		assert.deepEqual((await s.page.locator(".ask-turn .ask-q").allTextContents()).map((x) => x.replace(/\s+/g, " ").trim()), ["Why 20?", "And the client?"]);
+		await s.page.locator(".ask-close").click();
+		await s.page.keyboard.press("s");
+		await onStep(s.page, 2);
+		assert.match(await text(s.page, ".guide-keys .ask-open"), /^Ask ?a$/);
+	} finally {
+		await s.close();
+	}
+});
+
+test("19. Ask on an AI draft or on a file asks about it, and Use as comment makes the answer a comment to edit", async () => {
+	const s = await open({ step: 1 });
+	try {
+		await onStep(s.page, 1);
+		await s.page.waitForSelector(".guide-step .file-diff .panes");
+
+		// about a draft
+		await s.page.locator(".draft").first().locator(".ask-about").click();
+		await s.page.waitForSelector(".ask-dock");
+		assert.match(await text(s.page, ".ask-chip"), /About the AI draft on limit\.ts:\+15/);
+		await s.page.locator(".ask-dock textarea").fill("Is this real?");
+		await s.page.keyboard.press("Enter");
+		await asked(s.page, 1);
+		assert.match(answers(s)[0].user, /The question is about this draft comment on src\/limit\.ts, line 15: First: is 20 safe\?/);
+		assert.match(await text(s.page, ".ask-turn .ask-q"), /limit\.ts:\+15.*Is this real\?/);
+
+		// about a file; the ✕ on the chip makes it a question about the whole step again
+		await s.page.locator(".ask-chip button").click();
+		assert.equal(await s.page.locator(".ask-chip").count(), 0);
+		await s.page.locator('.guide-files .file[data-path="src/client.ts"] .file-ask').click();
+		assert.match(await text(s.page, ".ask-chip"), /About client\.ts/);
+		await s.page.locator(".ask-dock textarea").fill("What does the client send?");
+		await s.page.locator(".ask-send").click();
+		await asked(s.page, 2);
+		assert.match(answers(s)[1].user, /The question is about the file src\/client\.ts\.\nThe reviewer asks:/);
+
+		// the answer about the file becomes a comment on that file, to edit before it is added
+		await turns(s.page).nth(1).locator(".ask-use").click();
+		const form = s.page.locator('.guide-file:has(.file[data-path="src/client.ts"]) .comment-form');
+		await form.waitFor();
+		assert.equal(await s.page.locator(".ask-dock").count(), 0, "the ask box gives way to the comment");
+		assert.match((await form.locator(".hint").textContent()) ?? "", /Comment on src\/client\.ts/);
+		assert.equal(await form.locator("textarea").inputValue(), "Because `limit` is the cap. (What does the client send?)");
+		assert.ok(await form.locator("textarea").evaluate((b) => b === document.activeElement));
+		assert.equal(s.calls("addReviewComment").length, 0, "not sent until you say so");
+		await form.locator("textarea").fill("The client must send 20.");
+		await form.getByRole("button", { name: "Add review comment" }).click();
+		await until(async () => s.calls("addReviewComment").length === 1);
+		assert.deepEqual(s.calls("addReviewComment")[0].args, { mode: "review", path: "src/client.ts", subject: "file", body: "The client must send 20." });
+
+		// the answer about the draft becomes a comment on the draft's line
+		await s.page.keyboard.press("a");
+		await asked(s.page, 2);
+		await turns(s.page).nth(0).locator(".ask-use").click();
+		const line = s.page.locator(".guide-step .file-diff .comment-form");
+		await line.waitFor();
+		assert.match((await line.locator(".hint").textContent()) ?? "", /Comment on line \+15/);
+		assert.equal(await line.locator("textarea").inputValue(), "Because `limit` is the cap. (Is this real?)");
+	} finally {
+		await s.close();
+	}
+});
+
+test("19. when the AI cannot answer, the page says so and the question is still in the box", async () => {
+	const s = await open({ step: 1 });
+	try {
+		await onStep(s.page, 1);
+		await s.page.keyboard.press("a");
+		await s.page.locator(".ask-dock textarea").fill("Why 20?");
+		s.t.llm.failNext = true;
+		await s.page.keyboard.press("Enter");
+		await until(async () => /LLM failed/.test(await text(s.page, "#toast")));
+		assert.equal(await turns(s.page).count(), 0);
+		assert.equal(await s.page.inputValue(".ask-dock textarea"), "Why 20?");
+		assert.deepEqual((await s.state()).steps[0].asks, []);
+	} finally {
+		await s.close();
+	}
+});
+
+test("19. on a phone, Ask opens over the buttons at the bottom and fits the screen", async () => {
+	const s = await open({ step: 1, phone: true });
+	try {
+		await s.page.waitForSelector(".guide-files .file-diff .unified");
+		await s.page.evaluate(() => window.scrollTo(0, 400));
+		await s.page.locator(".guide-keys .ask-open").tap();
+		const box = s.page.locator(".ask-dock textarea");
+		await box.waitFor();
+		await box.fill("Why 20?");
+		await s.page.locator(".ask-send").tap();
+		await asked(s.page, 1);
+		const m = await s.page.evaluate(() => {
+			// no helper function in here: tsx would wrap it in a name the page does not know
+			const [dock, bar, answer] = [".ask-dock", ".guide-bar", ".ask-turn .ask-answer"].map((sel) => document.querySelector(sel)!.getBoundingClientRect());
+			return { page: document.documentElement.scrollWidth, screen: innerWidth, top: dock.top, bottom: dock.bottom, left: dock.left, right: dock.right, bar: bar.bottom,
+				answerTop: answer.top, answerBottom: answer.bottom, font: parseFloat(getComputedStyle(document.querySelector(".ask-dock textarea")!).fontSize) };
+		});
+		assert.ok(m.page <= m.screen, `the page is ${m.page}px wide on a ${m.screen}px screen`);
+		assert.ok(m.left >= 0 && m.right <= 390 && m.bottom <= 844, "the ask box is on the screen");
+		assert.ok(m.top >= m.bar + 200, `the ask box leaves the code room: it starts at ${m.top}px`);
+		assert.ok(m.answerTop >= m.top && m.answerBottom <= m.bottom, "the answer is in sight");
+		assert.ok(m.font >= 16, "a box with smaller text makes an iPhone zoom in");
+		// Enter is a new line on a phone: only the button sends
+		await box.focus();
+		await s.page.keyboard.type("And");
+		await s.page.keyboard.press("Enter");
+		assert.equal(await turns(s.page).count(), 1);
+		await s.page.locator(".ask-close").tap();
+		await until(async () => (await s.page.locator(".ask-dock").count()) === 0);
+		const keys = await s.page.locator(".guide-keys").boundingBox();
+		assert.ok(Math.abs(keys!.y + keys!.height - 844) <= 1, "the buttons are back at the bottom");
 	} finally {
 		await s.close();
 	}

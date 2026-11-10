@@ -21,7 +21,7 @@ import { issuePrompt, prPrompt, SUMMARY_FORMAT } from "./summary.ts";
 import type { Differ, DiffSide } from "./omnidiff.ts";
 import { hasMarkers, planMerge, type ReadFile } from "./conflicts.ts";
 import { EXPLAIN_FORMAT, explainPrompt } from "./explain.ts";
-import { carryPlan, checkPrompt, codeAt, commentable, dataSteps, isData, MAX_DRAFTS_PER_STEP, noiseReason, numberedChanges, parseJson, planPrompt, readCheck, readPlan, readReview, REVIEW_FORMAT, reviewPrompts, type CodeLine, type Draft, type FileChanges, type PlanStep } from "./review.ts";
+import { askPrompt, carryPlan, checkPrompt, codeAt, commentable, dataSteps, isData, MAX_DRAFTS_PER_STEP, MAX_QUESTION, noiseReason, numberedChanges, parseJson, planPrompt, readCheck, readPlan, readReview, REVIEW_FORMAT, reviewPrompts, type AskAbout, type CodeLine, type Draft, type FileChanges, type PlanStep } from "./review.ts";
 
 export interface Config {
 	orgs: string[]; // accounts the GitHub App is installed on
@@ -674,8 +674,12 @@ export function createApp(opts: AppOptions): App {
 	 * everyone asking meanwhile watches the same run (SPEC 12, 17).
 	 */
 	function modelRun(key: string, version: string, prompt: () => Promise<Prompt>): SummaryRun {
+		return startRun(`${key}@${version}`, prompt, (text) => store.saveSummary(key, version, text, opts.now().toISOString()));
+	}
+
+	/** One model call per `id` at a time; `keep` gets the whole answer when it succeeds. */
+	function startRun(id: string, prompt: () => Promise<Prompt>, keep: (text: string) => void): SummaryRun {
 		const llm = ai()!;
-		const id = `${key}@${version}`;
 		let run = summarizing.get(id);
 		if (run) return run;
 		const r: SummaryRun = { text: "", stage: "reading", watchers: new Set(), done: Promise.resolve("") };
@@ -693,7 +697,7 @@ export function createApp(opts: AppOptions): App {
 			} catch (e) {
 				throw new HttpError(502, `LLM failed: ${(e as Error).message}`);
 			}
-			store.saveSummary(key, version, text, opts.now().toISOString());
+			keep(text);
 			return text;
 		})().finally(() => summarizing.delete(id));
 		r.done.catch(() => {}); // watchers get the error; an unwatched run must not crash the process
@@ -780,28 +784,32 @@ export function createApp(opts: AppOptions): App {
 	 * a push it builds on the review of the push before: the plan is kept, and a step
 	 * whose files did not change keeps its drafts, so only what changed is read again.
 	 */
+	type Read = PrepFile & { why: string | null; file: ChangedFile };
+
+	/** One changed file of a PR as the model reads it: its changed lines, numbered (null: binary or too large), and its version. */
+	async function readChange(repo: string, set: { base: string; head: string }, f: ChangedFile): Promise<Read> {
+		const before = f.status === "added" ? null : { repo, ref: set.base, path: f.previous ?? f.path };
+		const after = f.status === "removed" ? null : { repo, ref: set.head, path: f.path };
+		let d: any = null;
+		if (opts.diff) d = await diffOf([before, after]).catch(() => null);
+		const text = (x: { text?: unknown } | null | undefined) => (x === null ? null : typeof x?.text === "string" ? x.text : undefined);
+		const [bt, at] = [text(d?.before), text(d?.after)];
+		const readable = d && !d.skipped && bt !== undefined && at !== undefined;
+		return {
+			path: f.path, status: f.status, additions: f.additions, deletions: f.deletions, file: f,
+			text: readable ? numberedChanges(bt, at, d.result) : null,
+			fp: `${f.path}|${short16(String(bt ?? d?.before?.size ?? ""))}|${short16(String(at ?? d?.after?.size ?? ""))}|${f.status}`,
+			why: noiseReason(f.path, d?.result?.summary),
+		};
+	}
+
 	async function prepare(pr: PullRequest, report: (p: Partial<Progress>) => void = () => {}): Promise<Prep> {
 		const set = await github.prFiles(pr.repo, pr.number);
 		if (!set) throw new Error("the pull request is gone");
-		type Read = PrepFile & { why: string | null; file: ChangedFile };
 		const files: Read[] = new Array(set.files.length);
 		let read = 0;
 		report({ phase: "reading", done: 0, total: set.files.length });
-		const readOne = async (f: ChangedFile): Promise<Read> => {
-			const before = f.status === "added" ? null : { repo: pr.repo, ref: set.base, path: f.previous ?? f.path };
-			const after = f.status === "removed" ? null : { repo: pr.repo, ref: set.head, path: f.path };
-			let d: any = null;
-			if (opts.diff) d = await diffOf([before, after]).catch(() => null);
-			const text = (x: { text?: unknown } | null | undefined) => (x === null ? null : typeof x?.text === "string" ? x.text : undefined);
-			const [bt, at] = [text(d?.before), text(d?.after)];
-			const readable = d && !d.skipped && bt !== undefined && at !== undefined;
-			return {
-				path: f.path, status: f.status, additions: f.additions, deletions: f.deletions, file: f,
-				text: readable ? numberedChanges(bt, at, d.result) : null,
-				fp: `${f.path}|${short16(String(bt ?? d?.before?.size ?? ""))}|${short16(String(at ?? d?.after?.size ?? ""))}|${f.status}`,
-				why: noiseReason(f.path, d?.result?.summary),
-			};
-		};
+		const readOne = (f: ChangedFile) => readChange(pr.repo, set, f);
 		let next = 0; // a few files at a time: a big PR is a hundred round trips to GitHub
 		await Promise.all(Array.from({ length: Math.min(6, set.files.length) }, async () => {
 			while (next < set.files.length) {
@@ -899,6 +907,7 @@ export function createApp(opts: AppOptions): App {
 		const fps = new Set(marks.map((m) => m.fp));
 		const paths = new Set(marks.map((m) => m.path));
 		const states = store.draftStates(lab, prKey(pr));
+		const asks = store.asks(lab, askScope(pr));
 		const steps = prep.steps.map((s) => {
 			const reviewed = s.fps.every((f) => fps.has(f.fp));
 			const stale = s.fps.filter((f) => paths.has(f.path) && !fps.has(f.fp)).map((f) => f.path); // viewed, but in an older version
@@ -908,6 +917,8 @@ export function createApp(opts: AppOptions): App {
 				stale, changed: !reviewed && stale.length > 0,
 				skim: s.skim === true, notes: s.notes ?? {},
 				drafts: s.drafts.map((d) => ({ ...d, state: states.get(d.id) ?? "open" })),
+				// what you asked the AI about this step, as its files are now (SPEC 19, Ask)
+				asks: asks.filter((a) => a.thread === s.id).map(({ question, answer, about, at }) => ({ question, answer, about, at })),
 			};
 		});
 		return {
@@ -968,6 +979,51 @@ export function createApp(opts: AppOptions): App {
 			return { ok: true };
 		}
 		throw new HttpError(404, "not found");
+	}
+
+	const askScope = (pr: PullRequest) => `review:${prKey(pr)}`;
+
+	/**
+	 * SPEC 19, Ask: a question about one step of a guided review, answered by the model from
+	 * what it saw when it reviewed the step and the questions before. Kept for the person who
+	 * asked, with the step; never sent to GitHub. One question per person and step at a time.
+	 */
+	async function askFor(req: IncomingMessage, lab: string): Promise<SummaryRun> {
+		if (!ai()) throw new HttpError(503, "AI answers are not set up");
+		const b = await json(req);
+		const pr = await reviewTarget(lab, b.repo, b.number);
+		const prep = store.reviewPrep(prepKey(pr)) as Prep | undefined;
+		if (!prep) throw new HttpError(409, "the guided review is not ready yet");
+		const step = prep.steps.find((x) => x.id === b.step);
+		if (!step) throw new HttpError(404, "no such step");
+		const question = typeof b.question === "string" ? b.question.trim() : "";
+		if (!question) bad("the question is empty");
+		if (question.length > MAX_QUESTION) bad(`the question is too long (at most ${MAX_QUESTION} characters)`);
+		let about: AskAbout | null = null;
+		if (b.about?.draft !== undefined) {
+			const d = step.drafts.find((x) => x.id === b.about.draft);
+			if (!d) throw new HttpError(404, "no such draft in this step");
+			about = { path: d.path, draft: d.id, side: d.side, line: d.line };
+		} else if (b.about?.path !== undefined) {
+			if (!step.files.includes(b.about.path)) throw new HttpError(404, "no such file in this step");
+			about = { path: b.about.path };
+		}
+		const id = `ask:${lab}:${askScope(pr)}:${step.id}`;
+		if (summarizing.has(id)) throw new HttpError(409, "wait for the answer to your last question");
+		const earlier = store.asks(lab, askScope(pr)).filter((a) => a.thread === step.id);
+		return startRun(id, async () => {
+			const set = await github.prFiles(pr.repo, pr.number).catch((e) => { throw new HttpError(502, `could not read it from GitHub: ${(e as Error).message}`); });
+			if (!set) throw new HttpError(404, "the pull request is gone");
+			const changed = new Map(set.files.map((f) => [f.path, f]));
+			const files = await Promise.all(step.files.map(async (path): Promise<FileChanges> => {
+				const f = changed.get(path);
+				return f ? readChange(pr.repo, set, f) : { path, status: "modified", additions: 0, deletions: 0, text: null };
+			}));
+			return askPrompt(pr, step, files, earlier, { question, about }, opts.now().toISOString().slice(0, 10));
+		}, (answer) => {
+			if (!answer.trim()) throw new HttpError(502, "the model gave no answer; ask again");
+			store.addAsk(lab, askScope(pr), step.id, { question, answer: answer.trim(), about }, opts.now().toISOString());
+		});
 	}
 
 	/** Summarize as one JSON answer. */
@@ -1284,6 +1340,11 @@ export function createApp(opts: AppOptions): App {
 		}
 		if (method === "GET" && path === "/api/review") { // SPEC 19
 			return send(res, 200, await reviewGet(lab, url.searchParams.get("repo"), Number(url.searchParams.get("number"))));
+		}
+		if (method === "POST" && path === "/api/review/ask") { // SPEC 19, Ask
+			const run = await askFor(req, lab);
+			if ((req.headers.accept ?? "").includes("text/event-stream")) return streamRun(res, { run }, "answer");
+			return send(res, 200, { answer: (await run.done).trim() });
 		}
 		if (method === "POST" && path.startsWith("/api/review/")) {
 			return send(res, 200, await reviewPost(req, lab, path.slice("/api/review/".length)));

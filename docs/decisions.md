@@ -510,3 +510,26 @@ Dr. Jeong asked for the tree and the code side by side.
 - Not on a phone: 390px has no room for two columns. Not on Guided review: its tree is
   on the page of the steps, where no code is shown; a step's files are few.
 - Folding the graph gives the files the full width back; that is the switch.
+
+## 2026-11-10: The tree where the review is done
+
+Dr. Jeong, an hour after the tree went live: "I don't see the graph where?" The
+request log showed why. The review was done in Guided review, step by step, and there
+the tree stood under all the steps and not at all in a step. The side-by-side layout
+had been built for Files changed only, on the guess that a step's files are few. The
+guess was about the wrong thing: the tree is not there to find a file among a step's
+few, but to see where the file being read stands in the whole PR.
+
+- Guided review on a computer: the tree is the left column on the page of the steps
+  and in every step. A tap opens the file in its step, also from another step.
+- In a step the files of that step carry a filled number: "you are here".
+- Sent to one file, the step opens that file alone. A small step otherwise opens all
+  its files, and their diffs load one after the other and push the wanted one down.
+- On a phone the tree moved from under the steps to above them. Under them it was
+  three screens down on a PR with 29 steps. A step on a phone stays the code alone.
+- A PR whose code files do not use each other said nothing, which reads as "the graph
+  is broken". It now says so in one line, when there are at least two code files.
+- With the code panel open under 1500px the tree gives way: three columns do not fit.
+- Still open: a closed or merged PR has no changed files in Nudgebox at all, so no
+  tree either.
+

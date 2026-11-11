@@ -219,16 +219,68 @@ test("22. files that only use each other still show, each once", async () => {
 	}
 });
 
-test("22. Guided review: each file carries the number of its step, and opens that step", async () => {
+test("22. Guided review on a computer: the tree stands beside the steps and beside the code of a step", async () => {
 	const s = await open({ tab: "guide" });
 	try {
-		await s.page.waitForSelector(".dep-tree");
+		await s.page.waitForSelector(".guide.beside .files-side .dep-tree");
+		const box = async (sel: string) => (await s.page.locator(sel).first().boundingBox())!;
+		const bar = () => text(s.page, ".guide-bar");
 		const steps = await s.page.locator(".dep-tree .dep-node").evaluateAll((xs) => Object.fromEntries(xs.map((x) => [x.getAttribute("data-path"), x.querySelector(".dep-step")?.textContent])));
 		assert.deepEqual(steps, { "pipeline/common.py": "1", "pipeline/model.py": "1", "pipeline/fit.py": "2", "run.sh": "2" });
-		await node(s.page, "pipeline/fit.py").click();
+		let [tree, right] = [await box(".files-side"), await box(".guide-steps")];
+		assert.ok(tree.x + tree.width <= right.x, "the tree is left of the steps");
+		assert.ok(tree.y <= right.y, "and starts no lower than they do");
+
+		// a tap opens the file in its step, and only that file
+		await node(s.page, "pipeline/fit.py").first().click();
+		await s.page.waitForSelector('.guide-files .file.open[data-path="pipeline/fit.py"]');
+		assert.match(await bar(), /Step 2 of 3/);
+		assert.deepEqual(await s.page.locator(".guide-files .file.open").evaluateAll((xs) => xs.map((x) => x.getAttribute("data-path"))), ["pipeline/fit.py"]);
+		// the tree is still there, beside the code, between the two bars, with this step's files marked
+		[tree, right] = [await box(".files-side"), await box(".guide-step")];
+		assert.ok(tree.x + tree.width <= right.x, "the tree is left of the code");
+		const [top, foot] = [await box(".guide-bar"), await box(".guide-foot")];
+		assert.ok(tree.y >= top.y + top.height && tree.y + tree.height <= foot.y + 1, "the tree is not under a bar");
+		assert.deepEqual([...new Set(await marked(s.page, "here"))].sort(), ["pipeline/fit.py", "run.sh"]);
+		assert.equal(await s.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "nothing sticks out at the side");
+
+		// a file of another step: the tap goes there
+		await node(s.page, "pipeline/model.py").first().click();
+		await s.page.waitForSelector('.guide-files .file.open[data-path="pipeline/model.py"]');
+		assert.match(await bar(), /Step 1 of 3/);
+		assert.deepEqual([...new Set(await marked(s.page, "here"))].sort(), ["pipeline/common.py", "pipeline/model.py"]);
+		// a file of this step: the step stays and the file opens
+		await node(s.page, "pipeline/common.py").first().click();
+		await s.page.waitForSelector('.guide-files .file.open[data-path="pipeline/common.py"]');
+		assert.match(await bar(), /Step 1 of 3/);
+
+		// folded, the code has the full width again and the heading stays in reach
+		await s.page.locator(".dep-head").click();
+		assert.equal(await s.page.locator(".guide.beside").count(), 0);
+		assert.equal(await s.page.locator(".guide-step .dep-graph.folded .dep-head").count(), 1);
+		await s.page.locator(".dep-head").click();
+		await s.page.waitForSelector(".guide.beside .files-side .dep-tree");
+
+		// with the code panel open there is no room for three columns on this screen
+		await s.page.evaluate(() => document.body.classList.add("code-open"));
+		assert.equal(await s.page.locator(".files-side").isVisible(), false);
+	} finally {
+		await s.close();
+	}
+});
+
+test("22. Guided review on a phone: the tree stands above the steps, and opens a file's step", async () => {
+	const s = await open({ tab: "guide", phone: true });
+	try {
+		await s.page.waitForSelector(".dep-tree");
+		assert.equal(await s.page.locator(".guide.beside").count(), 0);
+		const [tree, list] = [(await s.page.locator(".dep-graph").boundingBox())!, (await s.page.locator(".guide-steps").first().boundingBox())!];
+		assert.ok(tree.y + tree.height <= list.y, "the tree is above the steps");
+		await node(s.page, "pipeline/fit.py").first().click();
 		await s.page.locator(".dep-pick button", { hasText: "Open step 2" }).click();
 		await s.page.waitForSelector(".guide-step");
 		assert.match(await text(s.page, ".guide-bar"), /Step 2 of 3/);
+		assert.equal(await s.page.locator(".dep-graph").count(), 0, "a step on a phone is the code alone");
 	} finally {
 		await s.close();
 	}
@@ -283,12 +335,24 @@ test("22. on a phone the tree fits the screen and its names can be read", async 
 	}
 });
 
-test("22. no graph when no changed file uses another", async () => {
+test("22. code files that do not use each other: one line says so, and there is no tree", async () => {
 	const s = await open({ files: { "pipeline/a.py": "x = 1\n", "pipeline/b.py": "y = 2\n", "README.md": "Nothing here.\n" } });
+	try {
+		await s.page.waitForSelector(".dep-none");
+		assert.equal(await text(s.page, ".dep-none"), "Dependency graph: none of the 2 changed code files uses another.");
+		assert.equal(await s.page.locator(".dep-graph").count(), 0);
+		assert.equal(await s.page.locator(".files-changed.beside").count(), 0);
+	} finally {
+		await s.close();
+	}
+});
+
+test("22. one code file alone: nothing is said about a graph", async () => {
+	const s = await open({ files: { "pipeline/a.py": "x = 1\n", "README.md": "Nothing here.\n" } });
 	try {
 		await s.t.app.sync();
 		await new Promise((r) => setTimeout(r, 400));
-		assert.equal(await s.page.locator(".dep-graph").count(), 0);
+		assert.equal(await s.page.locator(".dep-graph, .dep-none").count(), 0);
 	} finally {
 		await s.close();
 	}

@@ -22,6 +22,14 @@ export interface PullRequest {
 	reviewDecision: ReviewDecision; // null: no review required
 	checks: Checks; // combined state of the head commit's checks
 	mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+	/** How much there is to review (SPEC 5); absent when GitHub did not say. */
+	size?: PrSize;
+}
+
+export interface PrSize {
+	files: number; // changed files
+	lines: number; // added + deleted lines, everything
+	read: number; // of those, the lines of code and documents: what a reviewer reads
 }
 
 export interface Issue {

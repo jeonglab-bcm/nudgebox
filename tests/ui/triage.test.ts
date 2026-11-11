@@ -18,10 +18,10 @@ after(closeBrowser);
 async function open(device = DESKTOP) {
 	const t = await start({ staleDays: 3 });
 	t.github.grant("hwan", LAB);
-	t.github.addPr({ repo: LAB, number: 1, author: "hwan", title: "Own ready PR", checks: "success", updatedAt: ago(1.5) });
-	t.github.addPr({ repo: LAB, number: 2, author: "kelly", title: "Old review", requestedReviewers: ["hwan"], reviewDecision: "REVIEW_REQUIRED", checks: "success", updatedAt: ago(5) });
-	t.github.addPr({ repo: LAB, number: 3, author: "kelly", title: "Failing review", requestedReviewers: ["hwan"], reviewDecision: "REVIEW_REQUIRED", checks: "failure", updatedAt: ago(0.1) });
-	t.github.addPr({ repo: LAB, number: 4, author: "kelly", title: "Someone else's approved PR", reviewDecision: "APPROVED", checks: "success", updatedAt: ago(0.5) });
+	t.github.addPr({ repo: LAB, number: 1, author: "hwan", title: "Own ready PR", checks: "success", updatedAt: ago(1.5), size: { files: 2, lines: 12, read: 12 } });
+	t.github.addPr({ repo: LAB, number: 2, author: "kelly", title: "Old review", requestedReviewers: ["hwan"], reviewDecision: "REVIEW_REQUIRED", checks: "success", updatedAt: ago(5), size: { files: 9, lines: 9400, read: 340 } });
+	t.github.addPr({ repo: LAB, number: 3, author: "kelly", title: "Failing review", requestedReviewers: ["hwan"], reviewDecision: "REVIEW_REQUIRED", checks: "failure", updatedAt: ago(0.1), size: { files: 31, lines: 2150, read: 2150 } });
+	t.github.addPr({ repo: LAB, number: 4, author: "kelly", title: "Someone else's approved PR", reviewDecision: "APPROVED", checks: "success", updatedAt: ago(0.5) }); // size not known
 	t.github.addIssue({ repo: LAB, number: 9, author: "kelly", title: "An issue", labels: ["bug"], comments: 2 });
 	await t.link("hyunhwanj", "hwan");
 	await t.app.sync();
@@ -225,6 +225,70 @@ test("13. Enter opens the selected PR's page in Nudgebox (SPEC 16); g opens it o
 		await s.page.keyboard.press("Enter");
 		await s.page.waitForSelector("#pr-page");
 		assert.match(s.page.url(), /#pr\/jeonglab-bcm\/labbot\/3$/);
+	} finally {
+		await s.close();
+	}
+});
+
+const order = (page: Page) => rows(page).evaluateAll((rs) => rs.map((r) => r.getAttribute("data-key")!.split("#")[1]));
+
+test("5. each PR row says how many lines there are to read", async () => {
+	const s = await open();
+	try {
+		// newest first: #3, #1, #2
+		assert.deepEqual(await rows(s.page).locator(".size").allTextContents(), ["2.2k lines", "12 lines", "340 lines"]);
+		assert.equal(await rows(s.page).nth(2).locator(".size").getAttribute("title"), "340 changed lines of code and documents in 9 files (9,400 lines with data and settings)");
+		assert.equal(await rows(s.page).nth(1).locator(".size").getAttribute("title"), "12 changed lines of code and documents in 2 files");
+		// opened, the row says it in words
+		await rows(s.page).nth(2).click();
+		assert.match((await s.page.locator(".row.open .facts").textContent())!, /340 lines to read in 9 files/);
+		// a PR whose size is not known says nothing, and an issue has no size
+		await s.page.keyboard.press("4");
+		assert.equal(await s.page.locator('.row[data-key$="#4"] .size').textContent(), "");
+		await s.page.keyboard.press("i");
+		assert.equal(await rows(s.page).locator(".size").first().textContent(), "");
+	} finally {
+		await s.close();
+	}
+});
+
+test("5. Easiest puts the PR with the fewest lines to read first, on every tab, and is kept", async () => {
+	const s = await open();
+	try {
+		assert.deepEqual(await order(s.page), ["3", "1", "2"]);
+		assert.equal(await s.page.locator("#order button.on").textContent(), "Newest");
+		await s.page.locator("#order button", { hasText: "Easiest" }).click();
+		assert.deepEqual(await order(s.page), ["1", "2", "3"]);
+		await s.page.keyboard.press("4"); // All: the PR of unknown size goes last
+		assert.deepEqual(await order(s.page), ["1", "2", "3", "4"]);
+		await s.page.reload();
+		await s.page.waitForSelector(".row");
+		assert.equal(await s.page.locator("#order button.on").textContent(), "Easiest");
+		assert.deepEqual(await order(s.page), ["1", "2", "3", "4"]);
+		// e switches, and back
+		await s.page.keyboard.press("e");
+		assert.equal(await s.page.locator("#order button.on").textContent(), "Newest");
+		assert.deepEqual(await order(s.page), ["3", "4", "1", "2"]);
+		await s.page.keyboard.press("e");
+		assert.deepEqual(await order(s.page), ["1", "2", "3", "4"]);
+		// issues have no size: no switch there
+		await s.page.keyboard.press("i");
+		assert.equal(await s.page.locator("#order").isVisible(), false);
+	} finally {
+		await s.close();
+	}
+});
+
+test("5. on a phone the size and the order switch fit, with no sideways scroll", async () => {
+	const s = await open(PHONE);
+	try {
+		assert.equal(await rows(s.page).nth(0).locator(".size").isVisible(), true);
+		assert.equal(await s.page.locator("#order").isVisible(), true);
+		await s.page.locator("#order button", { hasText: "Easiest" }).tap();
+		assert.deepEqual(await order(s.page), ["1", "2", "3"]);
+		const heights = await rows(s.page).locator(".line").evaluateAll((ls) => ls.map((l) => l.getBoundingClientRect().height));
+		assert.ok(heights.every((h) => h <= 72), `rows are ${heights} px tall`);
+		assert.ok(await s.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "page scrolls sideways");
 	} finally {
 		await s.close();
 	}

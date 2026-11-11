@@ -10,9 +10,10 @@
  */
 import { Readable } from "node:stream";
 import { App, Octokit } from "octokit";
+import { fileKind } from "./filekind.ts";
 import type {
 	ChangedFile, CheckRun, Checks, GitHubPort, Issue, ItemContent, MergeCommit, MergeInputs, MergeMethod, NewReviewComment, PrCommit, PrFiles, PrPage,
-	PullRequest, RepoOptions, ReviewDecision, ReviewThread, TimelineItem, UserTokens,
+	PrSize, PullRequest, RepoOptions, ReviewDecision, ReviewThread, TimelineItem, UserTokens,
 } from "./github.ts";
 
 export interface OctokitGitHubOptions {
@@ -34,7 +35,8 @@ const PR_FIELDS = `
 		... on User { login }
 		... on Team { slug organization { login } }
 	} } }
-	commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }`;
+	commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+	additions deletions changedFiles files(first: 100) { nodes { path additions deletions } }`;
 
 const ISSUE_FIELDS = `
 	number title url updatedAt state
@@ -65,6 +67,25 @@ function checksOf(state: string | undefined | null): Checks {
 	return "none";
 }
 
+/**
+ * SPEC 5: how much of a PR a reviewer reads. Settings, tables, pictures and lock files are
+ * changed lines too, but nobody reads them line by line. Files past the first hundred are
+ * not listed; their lines count as lines to read, so a huge PR is never called easy.
+ */
+function sizeOf(n: any): PrSize | undefined {
+	if (typeof n.additions !== "number" || typeof n.deletions !== "number") return undefined;
+	const lines = n.additions + n.deletions;
+	let listed = 0;
+	let read = 0;
+	for (const f of n.files?.nodes ?? []) {
+		if (!f?.path) continue;
+		const changed = (f.additions ?? 0) + (f.deletions ?? 0);
+		listed += changed;
+		if (fileKind(f.path) !== "other") read += changed;
+	}
+	return { files: n.changedFiles ?? n.files?.nodes?.length ?? 0, lines, read: read + Math.max(0, lines - listed) };
+}
+
 export function toPullRequest(n: any): PullRequest {
 	const reviewers: string[] = [];
 	const teams: string[] = [];
@@ -73,6 +94,7 @@ export function toPullRequest(n: any): PullRequest {
 		if (who?.login) reviewers.push(who.login);
 		else if (who?.slug) teams.push(`${who.organization?.login}/${who.slug}`);
 	}
+	const size = sizeOf(n);
 	return {
 		repo: n.repository.nameWithOwner,
 		number: n.number,
@@ -87,6 +109,7 @@ export function toPullRequest(n: any): PullRequest {
 		reviewDecision: (n.reviewDecision ?? null) as ReviewDecision,
 		checks: checksOf(n.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state),
 		mergeable: n.mergeable === "MERGEABLE" || n.mergeable === "CONFLICTING" ? n.mergeable : "UNKNOWN",
+		...(size ? { size } : {}),
 	};
 }
 

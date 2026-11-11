@@ -81,6 +81,12 @@ test("5. each row carries what the list shows", async () => {
 		for (const k of ["repo", "number", "title", "author", "url", "draft", "checks", "reviewDecision", "updatedAt"]) assert.ok(k in row, `row lacks ${k}`);
 		assert.equal(row.title, "Add email tools");
 		assert.equal(row.draft, true);
+		assert.equal("size" in row, false, "a PR whose size is not known carries none");
+		// the size comes with the sync and goes to the list as it is
+		t.github.addPr({ repo: LAB, number: 1, author: "kelly", title: "Add email tools", size: { files: 3, lines: 1300, read: 55 } });
+		await t.app.sync();
+		const sized = (await t.inbox("hyunhwanj")).sections.flatMap((s) => s.prs)[0] as Record<string, unknown>;
+		assert.deepEqual(sized.size, { files: 3, lines: 1300, read: 55 });
 	} finally {
 		await t.close();
 	}

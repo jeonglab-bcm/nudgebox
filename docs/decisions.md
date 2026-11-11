@@ -533,3 +533,25 @@ few, but to see where the file being read stands in the whole PR.
 - Still open: a closed or merged PR has no changed files in Nudgebox at all, so no
   tree either.
 
+## 2026-11-11: Easiest review first
+
+Dr. Jeong asked for "a function to sort which PR is easy to review" (#62). The list
+knew one order, newest activity, and a row did not say how big a PR is.
+
+- **Easy = little to read.** The measure is the changed lines of code and documents,
+  by the rule the "Code and docs" switch already uses. The total of GitHub is no use
+  here: of the open PRs that day lncFit#126 had 31,843 changed lines in 4 files, almost
+  all of it data. Counting only what is read puts it where it belongs.
+- Not the planner's opinion and not a score. A model's "this is easy" costs money per
+  PR, changes between runs and cannot be checked. A line count can be read off the
+  row and argued with.
+- **The row shows the number**, so the order explains itself, and the number is of use
+  in the Newest order too.
+- The size comes in the sync's one query (`additions deletions changedFiles
+  files(first: 100)`): no call per PR, and the cost of the query on GitHub's meter
+  stayed 1. A PR with more than 100 files has the rest counted as lines to read: it
+  is big in any case, and it must never be called easy by mistake.
+- The stored PRs get their size at the next sync after the deploy; until then they
+  show none and go last.
+- Checks, review state and conflicts do not enter the order: the tabs already sort by
+  them, and "easy" would stop meaning one thing.

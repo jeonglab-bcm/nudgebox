@@ -217,6 +217,34 @@ test("12. summary content is read with the App's token: description, diffs, revi
 	}
 });
 
+test("5. size: the changed lines of code and documents count as lines to read, the rest does not", () => {
+	const files = [
+		{ path: "pipeline/fit.py", additions: 40, deletions: 10 },
+		{ path: "README.md", additions: 5, deletions: 0 },
+		{ path: "params/run.json", additions: 900, deletions: 0 },
+		{ path: "uv.lock", additions: 300, deletions: 45 },
+	];
+	const pr = toPullRequest({ ...NODE, additions: 1245, deletions: 55, changedFiles: 4, files: { nodes: files } });
+	assert.deepEqual(pr.size, { files: 4, lines: 1300, read: 55 });
+	// more files than one query lists: what is not listed counts as lines to read
+	const big = toPullRequest({ ...NODE, additions: 2000, deletions: 0, changedFiles: 250, files: { nodes: files } });
+	assert.deepEqual(big.size, { files: 250, lines: 2000, read: 55 + (2000 - 1300) });
+	// an answer without sizes (an older stored PR) has none
+	assert.equal("size" in toPullRequest(NODE), false);
+});
+
+test("5. the sync asks GitHub for each PR's size in the same query", async () => {
+	const f = await fakeGitHub();
+	try {
+		await f.gh.openPullRequests();
+		const q: string = f.seen.find((s) => s.path === "/graphql")!.body.query;
+		assert.match(q, /additions deletions changedFiles/);
+		assert.match(q, /files\(first: 100\) \{ nodes \{ path additions deletions \} \}/);
+	} finally {
+		f.close();
+	}
+});
+
 test("statusCheckRollup states map to the four check states", () => {
 	const with_ = (state: string | null) => toPullRequest({ ...NODE, commits: { nodes: [{ commit: { statusCheckRollup: state && { state } } }] } }).checks;
 	assert.deepEqual(["SUCCESS", "FAILURE", "ERROR", "PENDING", "EXPECTED", null].map(with_), ["success", "failure", "failure", "pending", "pending", "none"]);

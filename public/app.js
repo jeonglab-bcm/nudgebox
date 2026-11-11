@@ -9,8 +9,8 @@ const main = $("#main");
 
 // view state; remembered per device (a convenience only, so failures are ignored)
 const saved = (() => { try { return JSON.parse(localStorage.getItem("ghd-view") || "{}"); } catch { return {}; } })();
-const view = { kind: saved.kind || "pr", tab: saved.tab || "needs_you", repo: saved.repo || "", sel: null, expanded: false, folds: {} };
-const remember = () => { try { localStorage.setItem("ghd-view", JSON.stringify({ kind: view.kind, tab: view.tab, repo: view.repo })); } catch {} };
+const view = { kind: saved.kind || "pr", tab: saved.tab || "needs_you", repo: saved.repo || "", order: saved.order === "easy" ? "easy" : "new", sel: null, expanded: false, folds: {} };
+const remember = () => { try { localStorage.setItem("ghd-view", JSON.stringify({ kind: view.kind, tab: view.tab, repo: view.repo, order: view.order })); } catch {} };
 let data = { pr: null, issue: null, login: "" };
 
 function el(tag, attrs = {}, ...kids) {
@@ -238,6 +238,25 @@ function cell(cls, text, label) {
 	return el("span", { class: cls, role: label ? "img" : null, "aria-label": label, title: label }, text);
 }
 
+// SPEC 5: how much of a PR there is to read: its changed lines of code and documents
+const count = (n, word) => `${n.toLocaleString("en-US")} ${word}${n === 1 ? "" : "s"}`;
+function short(n) {
+	if (n < 1000) return String(n);
+	return `${n < 9950 ? (Math.round(n / 100) / 10).toFixed(1) : Math.round(n / 1000)}k`;
+}
+function sizeCell(size) {
+	if (!size) return el("span", { class: "size" });
+	const all = size.lines !== size.read ? ` (${count(size.lines, "line")} with data and settings)` : "";
+	return el("span", { class: "size", title: `${count(size.read, "changed line")} of code and documents in ${count(size.files, "file")}${all}` },
+		`${short(size.read)} ${size.read === 1 ? "line" : "lines"}`);
+}
+/** Easiest first: the fewest lines to read; a PR of unknown size goes last. The order given is kept among equals. */
+function easiest(entries) {
+	const read = (e) => e.item.size?.read ?? Infinity;
+	const lines = (e) => e.item.size?.lines ?? Infinity;
+	return [...entries].sort((a, b) => (read(a) === read(b) ? (lines(a) === lines(b) ? 0 : lines(a) - lines(b)) : read(a) - read(b)));
+}
+
 function prLine(pr) {
 	const [cg, cl] = CHECKS[pr.checks] || CHECKS.none;
 	const rv = REVIEW[pr.reviewDecision];
@@ -245,6 +264,7 @@ function prLine(pr) {
 		el("span", { class: "flags" },
 			pr.draft ? el("span", { class: "flag" }, "draft") : null,
 			pr.mergeable === "CONFLICTING" ? el("span", { class: "flag bad" }, "conflicts") : null),
+		sizeCell(pr.size),
 		cell(`ci ci-${pr.checks}`, cg, cl),
 		rv ? cell(`rv rv-${pr.reviewDecision.toLowerCase()}`, rv[0], rv[1]) : cell("rv", "", null),
 	];
@@ -253,6 +273,7 @@ function prLine(pr) {
 function issueLine(i) {
 	return [
 		el("span", { class: "flags" }, i.labels.slice(0, 2).map((l) => el("span", { class: "flag label" }, l))),
+		sizeCell(null),
 		cell("ci", i.comments ? `${i.comments}` : "", i.comments ? `${i.comments} comment${i.comments > 1 ? "s" : ""}` : null),
 		cell("rv", "", null),
 	];
@@ -261,7 +282,8 @@ function issueLine(i) {
 function detail(entry) {
 	const { item: x, kind, hidden } = entry;
 	const facts = kind === "pr"
-		? [CHECKS[x.checks]?.[1], REVIEW[x.reviewDecision]?.[1], x.draft ? "draft" : null, x.mergeable === "CONFLICTING" ? "merge conflicts" : null, `updated ${age(x.updatedAt)} ago`]
+		? [CHECKS[x.checks]?.[1], REVIEW[x.reviewDecision]?.[1], x.draft ? "draft" : null, x.mergeable === "CONFLICTING" ? "merge conflicts" : null,
+			x.size ? `${count(x.size.read, "line")} to read in ${count(x.size.files, "file")}` : null, `updated ${age(x.updatedAt)} ago`]
 		: [x.assignees.length ? `assigned to ${x.assignees.join(", ")}` : "unassigned", x.comments ? `${x.comments} comments` : null, ...x.labels, `updated ${age(x.updatedAt)} ago`];
 	const btn = (key, label, name, cls = "") => el("button", { class: cls, onclick: busy(() => act(name, entry)) }, el("kbd", {}, key), label);
 	return el("div", { class: "detail" },
@@ -345,6 +367,8 @@ function renderPage() {
 	const kd = data[kind];
 	if (!kd) return;
 	for (const b of $("#kind").children) b.classList.toggle("on", b.dataset.k === kind);
+	$("#order").hidden = kind !== "pr"; // an issue has no size
+	for (const b of $("#order").children) b.classList.toggle("on", b.dataset.o === view.order);
 
 	// repo filter: every repo with something in this view (live, old or hidden)
 	const all = kind === "pr" ? [...kd.sections.flatMap((s) => s.prs), ...kd.old, ...kd.hidden] : [...kd.items, ...kd.old, ...kd.hidden];
@@ -352,12 +376,17 @@ function renderPage() {
 	if (view.repo && !repos.includes(view.repo)) view.repo = "";
 	$("#repo").replaceChildren(el("option", { value: "" }, "All repos"), ...repos.map((r) => el("option", { value: r, selected: r === view.repo }, r.split("/")[1])));
 
-	const wrap = (xs, extra = {}) => byRepo(xs).map((item) => ({ item, kind, key: `${kind}:${keyOf(item)}`, ...extra }));
+	const easy = kind === "pr" && view.order === "easy";
+	const wrap = (xs, extra = {}) => {
+		const entries = byRepo(xs).map((item) => ({ item, kind, key: `${kind}:${keyOf(item)}`, ...extra }));
+		return easy ? easiest(entries) : entries;
+	};
 	let live;
 	const tabs = $("#tabs");
 	if (kind === "pr") {
 		const per = Object.fromEntries(kd.sections.map((s) => [s.id, wrap(s.prs, { tone: TONE[s.id] })]));
 		per.all = kd.sections.flatMap((s) => per[s.id]).sort((a, b) => b.item.updatedAt.localeCompare(a.item.updatedAt));
+		if (easy) per.all = easiest(per.all);
 		if (!per[view.tab]) view.tab = "needs_you";
 		tabs.hidden = false;
 		tabs.replaceChildren(...PR_TABS.map(([id, name], i) =>
@@ -416,6 +445,7 @@ document.addEventListener("keydown", (e) => {
 	if (k === "Escape") return view.expanded && select(view.sel, { expand: false });
 	if (k === "/") return e.preventDefault(), $("#repo").focus();
 	if (k === "p" || k === "i") return switchKind(k === "p" ? "pr" : "issue");
+	if (k === "e" && view.kind === "pr") return setOrder(view.order === "easy" ? "new" : "easy");
 	if (view.kind === "pr" && /^[1-4]$/.test(k)) {
 		view.tab = PR_TABS[Number(k) - 1][0];
 		remember();
@@ -430,6 +460,14 @@ document.addEventListener("keydown", (e) => {
 function switchKind(k) {
 	if (k === view.kind) return;
 	view.kind = k;
+	remember();
+	render();
+}
+
+// SPEC 5: newest activity first, or the easiest review first
+function setOrder(o) {
+	if (o === view.order) return;
+	view.order = o;
 	remember();
 	render();
 }
@@ -480,6 +518,10 @@ async function unlink() {
 $("#kind").addEventListener("click", (e) => {
 	const k = e.target.closest("button")?.dataset.k;
 	if (k) switchKind(k);
+});
+$("#order").addEventListener("click", (e) => {
+	const o = e.target.closest("button")?.dataset.o;
+	if (o) setOrder(o);
 });
 $("#repo").addEventListener("change", (e) => {
 	view.repo = e.target.value;

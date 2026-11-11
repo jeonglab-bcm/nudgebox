@@ -51,7 +51,24 @@ PRs are grouped by status, shown as **tabs across the top**, each with a count:
 
 A PR belongs to the first status that matches. A **repo filter** next to the tabs
 narrows every tab to one repository. Each row shows repo, number, title, author,
-age, review state, checks state, and draft status. Newest activity first.
+age, review state, checks state, draft status and size.
+
+**Size and order.** The size of a PR is what a reviewer reads: its changed lines
+(added and deleted) of code and documents. Settings, tables, pictures and lock files
+do not count (the rule of section 15's "Code and docs" switch): a PR that adds a
+9,000-line JSON table is not a hard review. The row shows it ("340 lines", "2.2k
+lines"); the full count and the number of files are in its tooltip and in the opened
+row. The size comes with the sync, in the same GitHub query; nothing is asked per
+row. Only the first 100 files of a PR are listed there, so the lines of the files
+past them count as lines to read. A PR whose size is not known shows none.
+
+A switch beside the repo filter orders every tab and the Old and Hidden groups:
+
+- **Newest** (the default): newest activity first.
+- **Easiest**: the fewest lines to read first; among equals the fewest changed lines,
+  then the newest. A PR of unknown size goes last.
+
+The choice is kept in the browser. Issues have no size and no switch.
 
 **Old and hidden (both per person, both quiet):**
 
@@ -184,8 +201,9 @@ The inbox (sections 5 and 11) is a compact list for clearing a queue quickly, no
 stack of cards.
 
 - **One line per item** on a computer: repo and number, title (cut with … when long),
-  draft/conflict flags, checks, review state, age, author. On a phone each item takes
-  two lines (title and age; repo, checks and review). The page never scrolls sideways.
+  draft/conflict flags, size (section 5), checks, review state, age, author. On a phone
+  each item takes two lines (title and age; repo, size, checks and review). The page
+  never scrolls sideways.
 - **Checks and review are symbols** with a text label for screen readers: checks ✓
   passed, ✗ failed, ● running, – none; review ✓ approved, ✎ changes requested, ○
   review required.
@@ -217,6 +235,7 @@ stack of cards.
   | `h` | hide / unhide |
   | `1`–`4` | Needs you, WIP, CI failing, All |
   | `p` / `i` | PRs / Issues |
+  | `e` | easiest review first / newest first (section 5) |
   | `/` | repo filter |
   | `?` | list of keys |
 

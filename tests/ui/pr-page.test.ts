@@ -293,6 +293,49 @@ test("16. Files changed: threads under their line; Viewed ticks GitHub's and fol
 	}
 });
 
+test("16. merge box: Fix with Claude asks Claude on the PR, then says Claude is at it", async () => {
+	const s = await open({ page: { mergeable: "CONFLICTING", mergeState: "DIRTY" } });
+	try {
+		// not set up in the repository: said so, and nothing posted
+		await button(s.page, "Fix with Claude").click();
+		await s.page.waitForFunction(() => /Claude is not set up in jeonglab-bcm\/labbot/.test(document.querySelector("#toast")!.textContent!));
+		assert.equal(s.calls("comment").length, 0);
+
+		s.t.github.blobs.set(`${LAB}@HEAD:.github/workflows/claude-fix-conflicts.yml`, "name: Claude fixes conflicts\n");
+		await button(s.page, "Fix with Claude").click();
+		await until(() => s.calls("comment").length === 1, "the comment");
+		assert.equal(s.calls("comment")[0].body, "@claude fix the merge conflicts with `main`");
+		await s.page.waitForFunction(() => /Claude is fixing the conflicts/.test(document.querySelector("#toast")!.textContent!));
+
+		// once the comment is on the PR, the box says Claude is at it and does not offer to ask again
+		const page = s.t.github.pages.get(`${LAB}#4`)!;
+		const asked = { type: "comment" as const, id: "c9", author: "hwan", body: "@claude fix the merge conflicts with `main`", at: new Date().toISOString() };
+		s.t.github.pages.set(`${LAB}#4`, { ...page, timeline: [...page.timeline!, asked] });
+		await s.page.reload();
+		await s.page.waitForFunction(() => /Claude is fixing the conflicts/.test(document.querySelector(".merge-box .mb-branch")?.textContent ?? ""));
+		assert.equal(await button(s.page, "Fix with Claude").count(), 0);
+		assert.equal(await button(s.page, "Resolve conflicts").count(), 1); // still there, to do it by hand
+		assert.equal(await s.page.locator(".merge-btn:enabled").count(), 0);
+	} finally {
+		await s.close();
+	}
+});
+
+test("16. merge box: Fix with Claude fits beside Resolve conflicts on a phone", async () => {
+	const s = await open({ device: PHONE, page: { mergeable: "CONFLICTING", mergeState: "DIRTY" } });
+	try {
+		const box = (await s.page.locator(".merge-box .mb-branch").boundingBox())!;
+		for (const name of ["Resolve conflicts", "Fix with Claude"]) {
+			const b = (await button(s.page, name).boundingBox())!;
+			assert.ok(b.x >= box.x && b.x + b.width <= box.x + box.width + 0.5, `${name} is inside the box`);
+			assert.ok(b.height >= 32, `${name} is ${b.height}px tall`);
+		}
+		assert.equal(await s.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+	} finally {
+		await s.close();
+	}
+});
+
 test("16. Resolve conflicts: Accept current change, Mark as resolved, Commit merge", async () => {
 	const s = await open({ page: { mergeable: "CONFLICTING", mergeState: "DIRTY" } });
 	try {

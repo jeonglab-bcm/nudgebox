@@ -100,3 +100,18 @@ export async function planMerge(m: MergeInputs, read: ReadFile): Promise<Plan> {
 export function countConflicts(text: string): number {
 	return text.split("\n").filter((line) => line.startsWith("<<<<<<< ")).length;
 }
+
+/** SPEC 16: the workflow that answers, and the words that start it. Both are in the workflow file too. */
+export const CLAUDE_WORKFLOW = ".github/workflows/claude-fix-conflicts.yml";
+export const CLAUDE_ASK = "@claude fix the merge conflicts";
+const CLAUDE_WAIT_MS = 15 * 60_000;
+
+/**
+ * Whether Claude was asked and has not answered: the request is the last word on the PR
+ * (no comment or commit after it) and is recent. An old one nobody answered does not count.
+ */
+export function claudeAsked(timeline: { type: string; body?: string; at: string }[], now: number): boolean {
+	const said = timeline.filter((i) => i.type === "comment" || i.type === "commit");
+	const last = said[said.length - 1];
+	return !!last && last.type === "comment" && !!last.body?.startsWith(CLAUDE_ASK) && now - Date.parse(last.at) < CLAUDE_WAIT_MS;
+}

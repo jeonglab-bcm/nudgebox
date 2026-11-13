@@ -60,7 +60,7 @@ const busy = (fn) => async (e) => {
 async function doAction(pr, action, extra = {}) {
 	const { status, data: d } = await api(`/api/prs/${action}`, { repo: pr.repo, number: pr.number, ...extra });
 	if (status === 200) {
-		toast({ merge: "Merged", approve: "Approved", rerun: "Re-running failed checks", comment: "Comment posted" }[action]);
+		toast({ merge: "Merged", approve: "Approved", rerun: "Re-running failed checks", comment: "Comment posted", "ask-claude": CLAUDE_DONE }[action]);
 		setTimeout(load, 1500);
 	} else toast(d.error || `Failed (${status})`);
 }
@@ -191,6 +191,9 @@ const ACTIONS = {
 	approve: (x, k) => (k !== "pr" ? "Issues cannot be approved" : x.author.toLowerCase() === data.login.toLowerCase() ? "You cannot approve your own PR" : doAction(x, "approve")),
 	merge: (x, k) => (k !== "pr" ? "Issues cannot be merged" : confirm(`Merge ${keyOf(x)}?\n\n${x.title}`) ? doAction(x, "merge", { confirm: true }) : null),
 	rerun: (x, k) => (k !== "pr" || x.checks !== "failure" ? "No failed checks to re-run" : doAction(x, "rerun")),
+	// SPEC 16: hand the conflicts to Claude; it is a comment on the PR, so it asks first
+	claude: (x, k) => (k !== "pr" || x.mergeable !== "CONFLICTING" ? "No conflicts to fix"
+		: confirm(`Ask Claude to fix the conflicts in ${keyOf(x)}?\n\n${x.title}`) ? doAction(x, "ask-claude") : null),
 	comment: async (x, k) => {
 		if (k !== "pr") return "Comment on issues on GitHub";
 		const b = prompt(`Comment on ${keyOf(x)}`);
@@ -208,7 +211,15 @@ const ACTIONS = {
 		return setHidden(k, x, !hidden);
 	},
 };
-const KEYS = { f: "files", Enter: "open", o: "open", g: "github", a: "approve", m: "merge", r: "rerun", c: "comment", s: "summarize", h: "hide" };
+const KEYS = { f: "files", Enter: "open", o: "open", g: "github", a: "approve", m: "merge", r: "rerun", l: "claude", c: "comment", s: "summarize", h: "hide" };
+
+// SPEC 16: Claude was asked to fix the conflicts and has not answered (the server's rule, in src/conflicts.ts)
+const CLAUDE_DONE = "Claude is fixing the conflicts. It comments on the pull request when it is done.";
+function claudeAsked(timeline) {
+	const said = (timeline ?? []).filter((i) => i.type === "comment" || i.type === "commit");
+	const last = said[said.length - 1];
+	return !!last && last.type === "comment" && last.body.startsWith("@claude fix the merge conflicts") && Date.now() - Date.parse(last.at) < 15 * 60_000;
+}
 
 async function act(name, entry = selected()) {
 	if (!entry) return;
@@ -293,6 +304,7 @@ function detail(entry) {
 			// SPEC 13: Approve, Merge, Comment and Open are keys only (fewer buttons)
 			kind === "pr" ? btn("f", "Files", "files") : null,
 			kind === "pr" && x.checks === "failure" ? btn("r", "Re-run failed", "rerun") : null,
+			kind === "pr" && x.mergeable === "CONFLICTING" ? btn("l", "Fix conflicts with Claude", "claude") : null,
 			data[kind]?.summarize ? btn("s", "Summarize", "summarize") : null,
 			btn("h", hidden ? "Unhide" : "Hide", "hide")));
 }
@@ -2106,8 +2118,15 @@ function mergeBox(t, p) {
 	let branch;
 	if (p.draft) branch = el("div", { class: "mb-branch wait" }, el("p", {}, "This pull request is still a work in progress"),
 		el("button", { onclick: busy(() => prPost("draft", { draft: false }, "Ready for review")) }, "Ready for review"));
-	else if (conflicts) branch = el("div", { class: "mb-branch bad" }, el("p", {}, "This branch has conflicts that must be resolved"),
-		el("button", { onclick: () => (location.hash = prHash(t, "conflicts")) }, "Resolve conflicts"));
+	else if (conflicts) {
+		// by hand here, or handed to Claude (a comment its workflow in the repository answers)
+		const asked = claudeAsked(p.timeline);
+		branch = el("div", { class: "mb-branch bad" },
+			el("p", {}, "This branch has conflicts that must be resolved", asked ? el("span", { class: "mb-note" }, "Claude is fixing the conflicts. It comments here when it is done.") : null),
+			el("span", { class: "mb-btns" },
+				el("button", { onclick: () => (location.hash = prHash(t, "conflicts")) }, "Resolve conflicts"),
+				asked ? null : el("button", { onclick: busy(() => prPost("ask-claude", {}, CLAUDE_DONE)) }, "Fix with Claude")));
+	}
 	else if (p.mergeState === "BEHIND") branch = el("div", { class: "mb-branch wait" }, el("p", {}, "This branch is out-of-date with the base branch"),
 		el("button", { onclick: busy(() => prPost("update-branch", {}, "Updating the branch")) }, "Update branch"));
 	else if (p.mergeable === "UNKNOWN") branch = el("div", { class: "mb-branch" }, el("p", {}, "Checking for the ability to merge automatically…"));

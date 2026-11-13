@@ -542,7 +542,8 @@ textarea:focus, .merge-confirm input:focus { outline: 2px solid var(--accent); o
 .merge-box .ok::before, .merge-box .bad::before, .merge-box .wait::before { content: "●"; margin-right: 8px; }
 .merge-box .ok::before { color: var(--ok); } .merge-box .bad::before { color: var(--bad); } .merge-box .wait::before { color: var(--wait); }
 .merge-box.done > p { border: 0; color: var(--move); }
-.mb-branch::before { order: -1; } .mb-branch p { flex: 1; }
+.mb-branch::before { order: -1; } .mb-branch p { flex: 1 1 14rem; }
+.mb-btns { display: flex; flex-wrap: wrap; gap: 8px; } .mb-note { display: block; font-weight: 400; color: var(--muted); margin-top: 2px; }
 .mb-checks a { color: var(--muted); font-weight: 400; margin-left: 6px; }
 .merge-split { margin: 12px 16px 14px; }
 .merge-split button { padding: 7px 14px; font-weight: 600; font-size: 13.5px; }
@@ -853,6 +854,7 @@ button.use:hover, button.use:focus-visible { background: var(--faint); }
     <dt><kbd>a</kbd></dt><dd>approve</dd>
     <dt><kbd>m</kbd></dt><dd>merge (asks first)</dd>
     <dt><kbd>r</kbd></dt><dd>re-run failed checks</dd>
+    <dt><kbd>l</kbd></dt><dd>fix conflicts with Claude</dd>
     <dt><kbd>c</kbd></dt><dd>comment</dd>
     <dt><kbd>f</kbd></dt><dd>files changed (omnidiff)</dd>
     <dt><kbd>s</kbd></dt><dd>AI summary</dd>

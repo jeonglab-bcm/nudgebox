@@ -861,7 +861,7 @@ computer, above the files or the steps on a phone.
   line stands its full path, **Uses** and **Used by**. On Files changed, **Open file**
   opens its diff in the list; on Guided review the file carries its step's number and
   the button says **Open step N**. Where the file's own files are listed in another
-  place, **Go to its branch** goes there. A second tap lets go.
+  place, **Go to its branch** goes there. Above the files a second tap lets go.
 - **Beside the files** (Dr. Jeong, 2026-11-10). On Files changed, on a screen at least
   1100px wide, the tree is a column at the left and the files with their diffs are at
   the right; the page uses the width of the screen, up to 1600px.
@@ -870,6 +870,14 @@ computer, above the files or the steps on a phone.
   - **A tap on a file opens its diff at the right** and goes to it; there is no Open
     file button. The row with the open file's name stays at the top while its diff is
     read.
+  - **Every tap opens** (Dr. Jeong, 2026-11-12, issue 68: "selection is not working as
+    expected"). A second tap on the marked file opens it again; it does not let go.
+    The file is at the top of the page with its first line under its name, also when
+    it is the last of the list and the page only becomes long enough once its text
+    has arrived, and also when the page was further down, in another open file.
+  - **The tapped name stays where it is on the screen**, under the finger, while the
+    page goes to the file and takes the column along. It gives way only at the end of
+    the column, as far as what the tap says under it needs to be in view.
   - With the graph folded there is one column again. On a narrower screen and on a
     phone the tree is above the files.
   - With the code panel (section 21) open on a screen under 1500px the tree makes
@@ -880,7 +888,8 @@ computer, above the files or the steps on a phone.
     steps** on the page of the steps, and **beside the code in a step**, between the
     two bars. In a step the files of that step are marked.
   - **A tap on a file opens it in its step**: the page goes to that step if it is
-    another one, opens that file alone and goes to it.
+    another one, opens that file alone and goes to it. As beside the files: every tap
+    opens, and the tapped name stays where it is.
   - With the graph folded a step keeps the heading, above its files, to unfold it.
   - On a narrower screen and on a phone the tree is **above the steps**, and **Open
     step N** opens the file in its step. A step there is the code alone, with no tree.
@@ -888,12 +897,17 @@ computer, above the files or the steps on a phone.
   how many there are. A tree of more than 40 lines starts with only the top files'
   branches open. The heading folds the whole graph; folded stays folded, in this
   browser, for every PR.
-- **Under the tree.**
-  - **Not linked to the others**: code files with no link, as chips.
-  - **Documents**: the changed Markdown and other documents, each with how many
-    changed files it names. A tap shows which. Documents are not in the tree: a README
-    that names every file would be most of it. A code file that names a document is no
-    link.
+- **Documents are lines of the tree** (Dr. Jeong, 2026-11-12, issue 68: "the markdown
+  never been shown"). Under the code, after a line that says **Documents, and the
+  files they name**, each changed Markdown or other document has its own line, with
+  the changed files it names under it, dashed. A document starts folded, with how
+  many it names: a README that names every file would otherwise be most of the tree.
+  Documents that name none share the last line. A document's line is the same as a
+  code file's: it carries its step's number, is marked in its step, and a tap opens
+  it (Markdown rendered, section 15). A code file that names a document is no link,
+  and the count in the heading is of the code alone.
+- **Under the tree**, **Not linked to the others**: code files with no link, as
+  chips. What a tap on one says stands under the chips.
 - **Which files.** Code and documents as in section 15's switch; settings, data and
   pictures are not in it, nor are removed files. The files are read as they are at the
   PR's head.

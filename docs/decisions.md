@@ -555,3 +555,54 @@ knew one order, newest activity, and a row did not say how big a PR is.
   show none and go last.
 - Checks, review state and conflicts do not enter the order: the tabs already sort by
   them, and "easy" would stop meaning one thing.
+
+## 2026-11-12: Conflicts handed to Claude, with a comment
+
+Dr. Jeong asked for "a menu for fixing conflict to claude" (#64), and of the ways to
+hand them over chose the comment on GitHub: Nudgebox posts "@claude ..." on the PR as
+the person, and a workflow in the repository does the work.
+
+- **Not the stock `@claude` mention.** Read in the source of claude-code-action: in
+  mention mode Claude commits through its own file tools and never makes a merge
+  commit. The files would lose their markers and GitHub would still call the PR
+  conflicted. So the repositories get a workflow of their own
+  (`claude-fix-conflicts.yml`) that does the merge itself and gives Claude only the
+  editing. It answers only a comment that starts with "@claude fix the merge
+  conflicts". No repository of the lab has the stock Claude workflow today (searched).
+  One that gets it later would answer these words as well, since they hold "@claude",
+  and the two would push against each other: such a repository must leave PR comments
+  to this workflow.
+- **The merge is git's, the edits are Claude's.** The workflow starts the merge, lists
+  the files that conflict, and Claude may use Read, Edit, Write, search and read-only
+  git: no shell, no commit, no push. When Claude stops, a script checks that no marker
+  is left (and sends Claude back up to three times), makes the merge again from the two
+  commits, takes only those files from Claude, commits and pushes. The second merge is
+  needed: the action replaces `CLAUDE.md`, `.claude/` and a few more from the base
+  branch before Claude starts, which damages a merge in progress.
+- **All or nothing.** A conflict that is not text inside one file (delete against
+  change, rename, binary), or in a workflow file or one of those settings files, and
+  Claude is not started: half a merge leaves the PR as conflicted as before.
+- **Who may ask** is asked of GitHub (the commenter's permission on the repository),
+  not read off the comment: the comment's "author association" is wrong for members
+  whose membership is private.
+- **Two tokens.** The Claude app is installed on some of the lab's repositories only.
+  Where it is, its token pushes and the checks run. Where it is not, the action is run
+  again with the workflow's own token; GitHub starts no checks for such a push, and
+  the comment says so.
+- **The key** is a repository secret that only its owner enters
+  (`scripts/set-claude-secret.sh`, hidden prompt). The lab's organization is on the
+  free plan, which has no organization secrets for private repositories, hence one per
+  repository and a script.
+- **The comment back is fixed text** plus Claude's own last few sentences (cut to 1500
+  characters, mentions and anything shaped like a token removed). Output of git is
+  never posted.
+- Nudgebox posts nothing where nobody would answer: it looks for the workflow file on
+  the repository's default branch first.
+- **Tested / not tested.** The workflow's shell steps run in the tests on scratch
+  repositories with a stand-in for Claude (`tests/workflow/`). What cannot be tested
+  before a repository has the key: Claude's own step, and whether GitHub lets either
+  token push a merge that brings in a workflow-file change from the base (it refuses
+  such changes from apps; the comment has a sentence ready for it).
+- Rollout: nudgebox first. The other repositories get the file after it has worked
+  once there.
+

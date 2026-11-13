@@ -19,7 +19,7 @@ import { verifySignature } from "./webhook.ts";
 import type { LlmConfig, Prompt, Provider, Summarize } from "./llm.ts";
 import { issuePrompt, prPrompt, SUMMARY_FORMAT } from "./summary.ts";
 import type { Differ, DiffSide } from "./omnidiff.ts";
-import { hasMarkers, planMerge, type ReadFile } from "./conflicts.ts";
+import { CLAUDE_ASK, CLAUDE_WORKFLOW, claudeAsked, hasMarkers, planMerge, type ReadFile } from "./conflicts.ts";
 import { EXPLAIN_FORMAT, explainAskPrompt, explainPrompt } from "./explain.ts";
 import { CODE_KINDS, CodeError, type CodeIntel } from "./code.ts";
 import { fileKind, type FileKind } from "./filekind.ts";
@@ -499,6 +499,20 @@ export function createApp(opts: AppOptions): App {
 		});
 	}
 
+	/**
+	 * SPEC 16: hand a PR's conflicts to Claude. A comment, as the person, that the
+	 * repository's workflow answers; nothing is posted where nobody would answer.
+	 */
+	async function askClaude(t: string, repo: string, n: number) {
+		const page = await github.prPage(t, repo, n);
+		if (!page) throw new HttpError(404, "no such pull request");
+		if (page.state !== "OPEN" || !(page.mergeable === "CONFLICTING" || page.mergeState === "DIRTY")) throw new HttpError(409, "This pull request has no conflicts to fix.");
+		if (page.headRepo.toLowerCase() !== repo.toLowerCase()) throw new HttpError(409, "Claude cannot push to a branch in a fork. Resolve these conflicts here.");
+		if ((await github.fileAt(repo, "HEAD", CLAUDE_WORKFLOW)) === null) throw new HttpError(409, `Claude is not set up in ${repo}.`);
+		if (claudeAsked(page.timeline, opts.now().getTime())) throw new HttpError(409, "Claude was already asked a moment ago. It answers on the pull request.");
+		await github.comment(t, repo, n, `${CLAUDE_ASK} with \`${page.baseRef}\``);
+	}
+
 	async function act(req: IncomingMessage, lab: string, action: string) {
 		const ops: Record<string, (t: string, repo: string, n: number, b: any) => Promise<void>> = {
 			merge: (t, r, n, b) => {
@@ -534,6 +548,7 @@ export function createApp(opts: AppOptions): App {
 				return github.setState(t, r, n, "open");
 			},
 			"resolve-conflicts": resolveConflicts,
+			"ask-claude": askClaude,
 			approve: (t, r, n) => github.approve(t, r, n),
 			rerun: (t, r, n) => github.rerunFailedChecks(t, r, n),
 			comment: (t, r, n, b) => {

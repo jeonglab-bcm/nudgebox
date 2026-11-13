@@ -15,9 +15,10 @@ const ago = (days: number) => new Date(Date.now() - days * DAY).toISOString();
 after(closeBrowser);
 
 /** Inbox for hwan, newest first: Needs you = #3 (review asked, failing), #2 (review asked, 5 days), #1 (own, ready). */
-async function open(device = DESKTOP) {
+async function open(device = DESKTOP, more?: (t: Awaited<ReturnType<typeof start>>) => void) {
 	const t = await start({ staleDays: 3 });
 	t.github.grant("hwan", LAB);
+	more?.(t);
 	t.github.addPr({ repo: LAB, number: 1, author: "hwan", title: "Own ready PR", checks: "success", updatedAt: ago(1.5), size: { files: 2, lines: 12, read: 12 } });
 	t.github.addPr({ repo: LAB, number: 2, author: "kelly", title: "Old review", requestedReviewers: ["hwan"], reviewDecision: "REVIEW_REQUIRED", checks: "success", updatedAt: ago(5), size: { files: 9, lines: 9400, read: 340 } });
 	t.github.addPr({ repo: LAB, number: 3, author: "kelly", title: "Failing review", requestedReviewers: ["hwan"], reviewDecision: "REVIEW_REQUIRED", checks: "failure", updatedAt: ago(0.1), size: { files: 31, lines: 2150, read: 2150 } });
@@ -380,6 +381,37 @@ test("13. no Approve, Merge, Comment or Open buttons; Re-run failed only when ch
 		const names = await s.page.locator(".row.open .actions").locator("button, a").allTextContents();
 		assert.deepEqual(names, ["fFiles", "rRe-run failed", "sSummarize", "hHide"]);
 		assert.equal(await s.page.locator(".row.open .actions a").count(), 0);
+	} finally {
+		await s.close();
+	}
+});
+
+test("16. a PR with conflicts: l asks first, then hands them to Claude as you", async () => {
+	const s = await open(DESKTOP, (t) => {
+		t.github.addPr({ repo: LAB, number: 6, author: "kelly", title: "Conflicting review", requestedReviewers: ["hwan"], mergeable: "CONFLICTING", updatedAt: ago(0.01) });
+		t.github.blobs.set(`${LAB}@HEAD:.github/workflows/claude-fix-conflicts.yml`, "name: Claude fixes conflicts\n");
+	});
+	try {
+		await rows(s.page).nth(0).locator(".ref").click(); // #6, newest
+		const names = await s.page.locator(".row.open .actions button").allTextContents();
+		assert.deepEqual(names, ["fFiles", "lFix conflicts with Claude", "sSummarize", "hHide"]);
+		s.page.once("dialog", (d) => d.dismiss());
+		await s.page.keyboard.press("l");
+		await settle(s.page);
+		assert.equal(calls(s.t, "comment").length, 0);
+		s.page.once("dialog", (d) => d.accept());
+		await s.page.locator(".row.open .actions button", { hasText: "Fix conflicts with Claude" }).click();
+		await settle(s.page);
+		const [c] = calls(s.t, "comment");
+		assert.deepEqual({ repo: c.repo, number: c.number, body: c.body }, { repo: LAB, number: 6, body: "@claude fix the merge conflicts with `main`" });
+		assert.match((await s.page.locator("#toast").textContent())!, /Claude is fixing the conflicts/);
+
+		// a PR without conflicts has no such button, and the key says why
+		await s.page.keyboard.press("j"); // #3
+		await s.page.keyboard.press("l");
+		await settle(s.page);
+		assert.match((await s.page.locator("#toast").textContent())!, /no conflicts/i);
+		assert.equal(calls(s.t, "comment").length, 1);
 	} finally {
 		await s.close();
 	}

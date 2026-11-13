@@ -87,10 +87,12 @@ From a PR row, as the signed-in person:
 - **Approve**.
 - **Re-run failed checks** (GitHub Actions jobs that failed on the head commit).
 - **Comment**.
+- **Fix conflicts with Claude**, on a PR with conflicts: asks first, then hands them to
+  Claude (section 16).
 
 The PR page (section 16) adds more, all as the signed-in person: reviews with line
 comments, replies and resolving threads, merge with a chosen method, Update branch,
-resolving conflicts, Ready for review / Convert to draft, Viewed, reviewers,
+resolving conflicts (by hand, or handed to Claude), Ready for review / Convert to draft, Viewed, reviewers,
 assignees, labels and milestone, and **Close** (asks first) / **Reopen** (Dr. Jeong,
 2026-11-05).
 
@@ -211,8 +213,8 @@ stack of cards.
   as the stale digest) shows its age in the warning colour.
 - On the **All** tab, PRs that would be in **Needs you** carry a small "you" mark.
 - **One row is selected.** Its details (checks and review in words, AI summary) and its
-  buttons (Files for a PR (section 15), Re-run failed when checks failed, Summarize,
-  Hide/Unhide) show under it only
+  buttons (Files for a PR (section 15), Re-run failed when checks failed, Fix conflicts
+  with Claude when it has conflicts (section 16), Summarize, Hide/Unhide) show under it only
   when it is opened; other rows show no buttons. Approve, Merge, Comment and Open have
   no buttons (Dr. Jeong, 2026-11-04: fewer buttons); they stay on the keyboard, and a tap
   on the title of the selected row opens the PR page (section 16), or an issue on GitHub. A tap or click selects
@@ -229,6 +231,7 @@ stack of cards.
   | `a` | approve |
   | `m` | merge (still asks first) |
   | `r` | re-run failed checks |
+  | `l` | fix conflicts with Claude (asks first; section 16) |
   | `c` | comment |
   | `f` | the PR page on Files changed (sections 15, 16) |
   | `s` | AI summary |
@@ -403,7 +406,7 @@ Under the timeline, the **merge box**, as on GitHub:
 - Branch state, one of:
   - Draft: "This pull request is still a work in progress" and **Ready for review**.
   - Conflicts: "This branch has conflicts that must be resolved", the conflicting
-    files, and **Resolve conflicts** (below).
+    files, **Resolve conflicts** and **Fix with Claude** (both below).
   - Behind its base: "This branch is out-of-date with the base branch" and **Update
     branch** (merges the base into it, as GitHub does).
   - Otherwise: "This branch has no conflicts with the base branch".
@@ -468,6 +471,37 @@ conflict editor:
   command line" and Commit merge is not offered, as on GitHub.
 - If the branch moved while you were resolving, nothing is committed and the page says
   to reload.
+
+**Fix with Claude** hands the conflicts to Claude instead (Dr. Jeong, 2026-11-12). The
+button is in the merge box beside Resolve conflicts, and on an opened row of the list
+(key `l`, which asks first).
+
+- It posts one comment on the PR, as the person: "@claude fix the merge conflicts with
+  `<base>`". The repository's workflow `.github/workflows/claude-fix-conflicts.yml`
+  answers it; Nudgebox does nothing more. The same words typed on GitHub do the same.
+- While Claude is at it, the merge box says "Claude is fixing the conflicts. It comments
+  here when it is done." in place of the button: for 15 minutes, or until something is
+  said or pushed on the PR.
+- Nothing is posted, and the reason is shown, when: the PR has no conflicts; its branch
+  is in a fork; the repository has no such workflow ("Claude is not set up in
+  *repo*."); Claude was asked in the last 15 minutes and nothing was said since.
+- The workflow answers only someone who may push to the repository. It merges the base
+  into the PR's branch, gives Claude the files that conflict and nothing else to
+  change, and pushes one merge commit ("Merge branch '*base*' into *head*", by
+  claude[bot]), never forced. Then it comments: what was merged, the files, and in
+  Claude's words how each was resolved; or why nothing was pushed.
+- Claude gets a conflict only when it is text inside one file. With a file deleted or
+  renamed on one side, a binary file, a workflow file, or one of Claude's own settings
+  files (`CLAUDE.md`, `.claude/` and the like), the whole merge is left to a person and
+  the comment lists those files and why.
+- Whatever else Claude changes is thrown away: the merge is made again from the two
+  commits, and only the conflicting files are taken from Claude.
+- Where the Claude GitHub app is installed the push is the app's, and the PR's checks
+  run. Elsewhere the push is the workflow's own; GitHub starts no checks for it, and
+  the comment says so.
+- Each repository needs the workflow file (the same in all) and one secret:
+  `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` of a Claude subscription. The owner
+  sets it with `scripts/set-claude-secret.sh`, which takes the key at a hidden prompt.
 
 **Fresh.** After each action the page reads the PR again; it also does when the
 window comes back to the front.

@@ -95,3 +95,8 @@ export async function planMerge(m: MergeInputs, read: ReadFile): Promise<Plan> {
 	}
 	return plan;
 }
+
+/** Pilot only: how many conflict regions a text holds. */
+export function countConflicts(text: string): number {
+	return text.split("\n").filter((line) => line.startsWith("<<<<<<< ")).length;
+}

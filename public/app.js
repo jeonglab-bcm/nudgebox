@@ -358,6 +358,29 @@ function render() {
 	renderPage();
 	if (document.activeElement?.dataset?.draft !== focused) refocus(focused, caret);
 	renderTray();
+	landed();
+}
+
+// SPEC 22: a file opened from the tree is at the top of the page, and still is once its text
+// has arrived and made the page longer. The reader's own move ends it.
+let landing = null;
+const land = (path) => { landing = { path, until: Date.now() + 10000 }; };
+for (const ev of ["wheel", "touchstart", "keydown", "mousedown"]) addEventListener(ev, () => { landing = deps.hold = null; }, { capture: true, passive: true });
+function landed() {
+	if (!landing) return;
+	const { path, until } = landing;
+	const text = files.diffs?.get(path);
+	if (Date.now() > until || (text && (text.error || !isMd(path) || files.mdMode?.get(path) === "plain" || mdLib?.ready))) landing = null; // this is the last time
+	const row = [...main.querySelectorAll(".file[data-path]")].find((x) => x.dataset.path === path);
+	if (row) toFile(row);
+}
+
+/** Brings a file's row to the top of the page. An open row sticks to the top wherever the page is, so its place is taken from the text under it. */
+function toFile(row) {
+	const next = row.nextElementSibling;
+	const style = getComputedStyle(row);
+	if (style.position !== "sticky" || !next || next.matches(".file")) return row.scrollIntoView({ block: "start" });
+	window.scrollBy(0, next.getBoundingClientRect().top - (parseFloat(style.top) || 0) - row.offsetHeight);
 }
 
 function renderPage() {
@@ -2410,6 +2433,27 @@ function keepSide() {
 	if (was) requestAnimationFrame(() => { const side = main.querySelector(".files-side"); if (side) side.scrollTop = was; });
 }
 
+/**
+ * After a tap in the tree's own column: the tapped name stays where the finger is, also while
+ * the page goes to the opened file and takes the column along, and what the tap says comes
+ * into view under it. Only the column is moved here, never the page.
+ */
+function holdSide() {
+	const h = deps.hold;
+	if (landing?.path !== h?.path) deps.hold = null; // while the page still goes to the file, the name is held again
+	const side = main.querySelector(".files-side");
+	if (!h || !side) return;
+	const at = [...side.querySelectorAll(".dep-node, .dep-chip")].find((x) => x.dataset.path === h.path && (x.closest(".dep-row")?.dataset.row ?? null) === h.at);
+	if (!at) return;
+	const top = () => at.getBoundingClientRect().top;
+	side.scrollTop += top() - h.top;
+	const col = side.getBoundingClientRect();
+	const edge = 8;
+	if (top() < col.top + edge) side.scrollTop -= col.top + edge - top();
+	const low = Math.max(at.getBoundingClientRect().bottom, side.querySelector(".dep-pick")?.getBoundingClientRect().bottom ?? 0);
+	if (low > col.bottom - edge) side.scrollTop += Math.min(low - col.bottom + edge, Math.max(0, top() - col.top - edge));
+}
+
 const isTree = (card) => Boolean(card?.classList.contains("dep-graph") && !card.classList.contains("folded"));
 
 function depsCard(t, o) {
@@ -2422,9 +2466,22 @@ function depsCard(t, o) {
 		return code > 1 ? el("p", { class: "hint dep-none" }, el("b", {}, "Dependency graph: "), `none of the ${code} changed code files uses another.`) : null;
 	}
 	const kind = T.kind;
-	// a big tree starts with only the tops' own branches open
-	if (!deps.shut) deps.shut = new Set(depsRows(T, new Set()).length > 40 ? T.drawn.filter((p) => T.home.get(p) !== null && T.uses.get(p).length) : []);
-	const rows = depsRows(T, deps.shut);
+	// what a file touches: for code the files it uses, for a document the files it names
+	const usesOf = (p) => g.links.filter((l) => l.from === p).map((l) => l.to);
+	const docs = g.nodes.filter((n) => n.kind === "doc").map((n) => n.path);
+	const naming = docs.filter((p) => usesOf(p).length);
+	const bare = docs.filter((p) => !usesOf(p).length);
+	// a big tree starts with only the tops' own branches open; a document starts folded
+	if (!deps.shut) deps.shut = new Set([...(depsRows(T, new Set()).length > 40 ? T.drawn.filter((p) => T.home.get(p) !== null && T.uses.get(p).length) : []), ...naming]);
+	// under the code the documents: each with the files it names under it, the ones that name none on one line
+	const docRows = naming.flatMap((p) => {
+		const open = !deps.shut.has(p);
+		const own = { id: `own:${p}`, trail: [], items: [{ path: p, how: null }], own: p, kids: usesOf(p).length, open };
+		return open ? [own, { id: `twigs:${p}`, trail: [true], items: usesOf(p).map((to) => ({ path: to, how: "mention", again: (T.uses.get(to)?.length ?? 0) > 0 })) }] : [own];
+	});
+	if (bare.length) docRows.push({ id: "docs:bare", trail: [], items: bare.map((p) => ({ path: p, how: null })) });
+	const code = depsRows(T, deps.shut);
+	const rows = [...code, ...docRows];
 
 	// a name is the shortest end of the path that no other file here shares
 	const short = new Map();
@@ -2438,16 +2495,19 @@ function depsCard(t, o) {
 	const shortName = (p) => short.get(p) ?? baseName(p);
 
 	const pick = deps.pick && kind.has(deps.pick) ? deps.pick : null;
-	const setPick = (p, at = null) => {
+	const setPick = (p, at, from) => {
 		const same = deps.pick === p && deps.at === at;
-		deps.pick = same ? null : p;
-		deps.at = same ? null : at;
-		deps.reveal = !same && !!o.tap;
-		if (!same && o.tap) o.tap(p); // beside the code: the tap opens the file there
-		else render();
+		if (!o.tap) { // above the files a tap only marks, and a second tap lets go
+			deps.pick = same ? null : p;
+			deps.at = same ? null : at;
+			return render();
+		}
+		// beside the code every tap opens the file there, and the tapped name stays where it is
+		deps.pick = p;
+		deps.at = at;
+		deps.hold = from.closest(".files-side") ? { path: p, at, top: from.getBoundingClientRect().top } : null;
+		o.tap(p);
 	};
-	// what the picked file touches: for code what it uses and what uses it, for a document the files it names
-	const usesOf = (p) => g.links.filter((l) => l.from === p).map((l) => l.to);
 	const usersOf = (p) => T.links.filter((l) => l.to === p).map((l) => l.from);
 	// its branches show what a file uses; the marks show what uses it (for a document, what it names)
 	const near = new Set(!pick ? [] : kind.get(pick) === "doc" ? usesOf(pick) : usersOf(pick));
@@ -2490,9 +2550,9 @@ function depsCard(t, o) {
 		const file = (x) => {
 			const mark = o.badge(x.path);
 			const where = !x.again ? null : !ownAt.has(x.path) ? "…" : ownAt.get(x.path) < i ? "↑" : "↓";
-			return el("button", { class: `dep-node${x.how === "mention" ? " named" : ""}${x.path === pick ? " picked" : ""}${near.has(x.path) ? " near" : ""}${o.cur?.(x.path) ? " here" : ""}`, "data-path": x.path,
+			return el("button", { class: `dep-node${kind.get(x.path) === "doc" ? " doc" : ""}${x.how === "mention" ? " named" : ""}${x.path === pick ? " picked" : ""}${near.has(x.path) ? " near" : ""}${o.cur?.(x.path) ? " here" : ""}`, "data-path": x.path,
 				title: `${x.path}${x.how === "mention" ? "\nRun or read by its name, not imported" : ""}${where ? "\nIts own files are listed in another place" : ""}`,
-				"aria-pressed": String(x.path === pick), onclick: () => setPick(x.path, r.id) },
+				"aria-pressed": String(x.path === pick), onclick: (e) => setPick(x.path, r.id, e.currentTarget) },
 				mark ? el("span", { class: "dep-step" }, mark) : null,
 				el("span", { class: "dep-name" }, shortName(x.path)),
 				where ? el("span", { class: "dep-again", "aria-label": "its own files are listed in another place" }, where) : null);
@@ -2507,7 +2567,11 @@ function depsCard(t, o) {
 				deps.shut.has(r.own) ? deps.shut.delete(r.own) : deps.shut.add(r.own);
 				render();
 			} }, r.open ? "▾" : `▸ ${r.kids}`) : null);
-		return here === r.id ? [line, el("li", { class: "dep-pick-row" }, picked())] : [line];
+		return [
+			i === code.length ? el("li", { class: "dep-sep" }, naming.length ? "Documents, and the files they name" : "Documents") : null,
+			line,
+			here === r.id ? el("li", { class: "dep-pick-row" }, picked()) : null,
+		].filter(Boolean);
 	}));
 	if (deps.goto) {
 		const id = deps.goto;
@@ -2516,21 +2580,15 @@ function depsCard(t, o) {
 		requestAnimationFrame(() => [...document.querySelectorAll(".dep-row")].find((x) => x.dataset.row === id)?.scrollIntoView({ block: o.tap ? "nearest" : "center" }));
 	}
 
-	if (deps.reveal) { // in its own column the tree scrolls by itself: what the tap says must be in view
-		deps.reveal = false;
-		requestAnimationFrame(() => document.querySelector(".files-side .dep-pick")?.scrollIntoView({ block: "nearest" }));
-	}
+	if (deps.hold) requestAnimationFrame(holdSide); // after keepSide has put the column back
 
-	const chip = (p, extra = null) => el("button", { class: `dep-chip${p === pick ? " picked" : ""}`, "aria-pressed": String(p === pick), title: p, onclick: () => setPick(p) }, shortName(p), extra);
+	const chip = (p) => el("button", { class: `dep-chip${p === pick ? " picked" : ""}`, "aria-pressed": String(p === pick), "data-path": p, title: p, onclick: (e) => setPick(p, null, e.currentTarget) }, shortName(p));
 	const alone = g.nodes.filter((n) => n.kind === "code" && !T.drawn.includes(n.path));
-	const docs = g.nodes.filter((n) => n.kind === "doc");
 	return el("section", { class: "dep-graph" }, head,
 		el("p", { class: "hint dep-how" }, `Under each file: the files it uses. Dashed: run or read by its name, not imported. ${o.tap ? "Tap a file to open it." : "Tap a file to see what uses it."}`),
 		tree,
-		pick && !here ? picked() : null,
 		alone.length ? el("p", { class: "dep-alone" }, el("span", { class: "hint" }, "Not linked to the others: "), alone.map((n) => chip(n.path))) : null,
-		docs.length ? el("p", { class: "dep-docs" }, el("span", { class: "hint" }, "Documents: "),
-			docs.map((n) => chip(n.path, usesOf(n.path).length ? el("span", { class: "n" }, ` names ${usesOf(n.path).length}`) : null))) : null);
+		pick && !here ? picked() : null); // under the names, so a tapped name does not move
 }
 
 // -- only code and docs (SPEC 15): a switch on Files changed and on the guided review -----
@@ -2614,10 +2672,10 @@ function filesChangedView(t, p) {
 		const f = files.data.files.find((x) => x.path === path);
 		if (f) {
 			files.open.add(path);
+			land(path);
 			if (!files.diffs.has(path)) { files.diffs.set(path, null); loadDiff(files, t.repo, f); }
 		}
-		render();
-		[...main.querySelectorAll("li.file")].find((li) => li.dataset.path === path)?.scrollIntoView({ block: "start" });
+		render(); // and the page goes to the file (landed)
 	};
 	// with room for two columns the tree stands beside the files, and a tap on it opens the file
 	const beside = roomy.matches && depsOpen;
@@ -3045,14 +3103,14 @@ function guideTree(t, d, k = null) {
 function guideFile(k, path) {
 	const g = prv.guide;
 	if (k < 0) return render();
+	land(path);
 	if (guideAt() !== k) {
 		g.want = path;
 		return guideTo(k);
 	}
 	g.open.add(path);
 	g.cur = path;
-	render();
-	fileRow(path)?.scrollIntoView({ block: "start" });
+	render(); // and the page goes to the file (landed)
 }
 
 /** On entering a step: a small step opens whole, a big one at its first file to read, data stays folded. */

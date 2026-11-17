@@ -606,3 +606,32 @@ the person, and a workflow in the repository does the work.
 - Rollout: nudgebox first. The other repositories get the file after it has worked
   once there.
 
+## 2026-11-12: Documents in the tree, and a tap that holds still
+
+Issue 68 (Dr. Jeong: "selection is not working as expected", "the markdown never been
+shown"), on a PR with 77 files.
+
+- **Documents were chips under the tree**, by the decision of 2026-11-10 that a README
+  naming every file would be most of the tree. Under a long tree nobody finds them, and
+  they had no step number. Now each document is a line of the tree, after the code,
+  **folded** with the count of the files it names: the reason for the old decision is
+  kept by the fold, not by leaving them out.
+- **What made a tap look broken**, measured on that PR:
+  - The page goes to the opened file, the tree's column goes along until it sticks,
+    and the tapped name ended 250px from the finger. Now the column is scrolled back by
+    as much, and again each time the page moves while the file is loading. Kept as the
+    name's place on the screen, not as the column's scroll position: that is what the
+    eye is on.
+  - A second tap let go of the file and opened nothing. Beside the code a tap now
+    always opens; letting go has no use where the mark is "the file that is open".
+    Above the files (narrow screen, phone) a tap only marks, so there it still lets go.
+  - The last file of a list could not come to the top until its text was there. The
+    page now goes to the file again when its text, and for Markdown the renderer, have
+    arrived. The reader's own wheel, touch, key or click ends that.
+  - An open file's row sticks to the top wherever the page is, so the browser took a
+    file above the page's place for "already there" and did not move. The place is now
+    taken from the text under the row.
+- What a tap says about a chip stands under the chips, not between the tree and them,
+  so the chip is not pushed away from the finger.
+- Not done: a document's line does not show which code names it (nothing reads code
+  for document names), and a code file's box does not list the documents naming it.

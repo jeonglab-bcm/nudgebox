@@ -9,6 +9,7 @@ import type { Prompt } from "./llm.ts";
 import type { DiffResult } from "./omnidiff.ts";
 import { earlierTurns, MAX_QUESTION, unify, type AskTurn } from "./explain.ts";
 import { MAX_PROMPT } from "./summary.ts";
+import { STYLE, STYLE_IN_JSON } from "./style.ts";
 
 /** Bumped when a prepared review's shape or prompts change, so old ones are made again. */
 export const REVIEW_FORMAT = "r2";
@@ -126,6 +127,9 @@ For each step write a short title (at most 6 words) and one sentence (at most 25
 that says what the step does. Also write one sentence that says what the whole pull
 request does.
 
+${STYLE}
+${STYLE_IN_JSON}
+
 ${JSON_ONLY} The form is:
 {"summary": "...", "steps": [{"title": "...", "summary": "...", "skim": false, "files": ["path", ...]}]}
 
@@ -214,6 +218,9 @@ change your mind while writing, leave the draft out. At most ${MAX_DRAFTS_PER_ST
 
 Also write one sentence (at most 25 words) that says what the step does, and for each
 file shown one note (at most 15 words) that says what changes in that file.
+
+${STYLE}
+${STYLE_IN_JSON}
 
 ${JSON_ONLY} The form is:
 {"summary": "...", "notes": [{"path": "...", "note": "..."}], "drafts": [{"path": "...", "side": "RIGHT", "line": 15, "body": "..."}]}
@@ -323,8 +330,9 @@ export { MAX_QUESTION };
 
 const ASK = `You answer a reviewer's question about one step of a GitHub pull request. The
 reviewer is a busy lab member who reads this step's changes now.
-Answer the question first, in plain English: at most 5 short sentences, or a short list
-when the answer is a list. Write no greeting, no praise, and do not repeat the question.
+Answer the question first: at most 5 short sentences, or a short list when the answer
+is a list. Do not repeat the question.
+${STYLE}
 Put file, function and variable names in \`backticks\`.
 
 Each changed line has a label. "R15 +" is new line 15, "R16  " an unchanged line and
@@ -395,8 +403,9 @@ export function askPrompt(
 
 const ASK_PR = `You answer a reviewer's question about a GitHub pull request. The reviewer is a
 busy lab member who decides how to review it.
-Answer the question first, in plain English: at most 6 short sentences, or a short list
-when the answer is a list. Write no greeting, no praise, and do not repeat the question.
+Answer the question first: at most 6 short sentences, or a short list when the answer
+is a list. Do not repeat the question.
+${STYLE}
 Put file, function and variable names in \`backticks\`.
 
 Each changed line has a label. "R15 +" is new line 15, "R16  " an unchanged line and

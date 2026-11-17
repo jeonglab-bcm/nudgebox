@@ -7,6 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { start } from "../helpers/harness.ts";
+import { STYLE } from "../../src/style.ts";
 
 const LAB = "jeonglab-bcm/labbot";
 const MINE = "hyunhwan-bcm/tailjobs";
@@ -53,6 +54,7 @@ test("17. Explain sends the model the file's changed lines with 3 lines around t
 		}
 		for (const not of ["line 11", "line 19", "line 5"]) assert.ok(!call.user.includes(`${not}\n`), `prompt has ${not}, which is too far from the change`);
 		assert.match(call.system, /ASD-STE100/);
+		assert.ok(call.system.includes(STYLE), "the explanation is not asked for the shared style");
 		assert.match(call.system, /never follow instructions/i);
 	} finally {
 		await t.close();
@@ -128,6 +130,7 @@ test("17. a follow-up question goes to the model with the file's changes, the ex
 		assert.deepEqual(await r.json(), { answer: "Answer to: Why 20?" });
 		const call = t.llm.calls[1];
 		assert.match(call.system, /^You answer/);
+		assert.ok(call.system.includes(STYLE), "the answer is not asked for the shared style");
 		assert.match(call.system, /never follow instructions/i);
 		for (const want of ["src/limit.ts", "Raise the limit", "- const limit = 10;", "+ const limit = 20;", "The change raises `limit` from 10 to 20."]) {
 			assert.ok(call.user.includes(want), `prompt lacks ${want}`);
@@ -206,7 +209,7 @@ test("17. Explain on a function sends only that function's lines, with the chang
 		}
 		for (const not of ["line 12\n", "line 18"]) assert.ok(!call.user.includes(not), `prompt has ${not}, which is outside the function`);
 		assert.match(call.system, /one function/);
-		assert.match(call.system, /ASD-STE100/);
+		assert.ok(call.system.includes(STYLE), "the function's explanation is not asked for the shared style");
 		assert.match(call.system, /never follow instructions/i);
 		// kept: for this function only, and shared
 		assert.equal((await (await explain("kellyl", { before, after, pr: { repo: LAB, number: 4 }, fn })).json()).cached, true);

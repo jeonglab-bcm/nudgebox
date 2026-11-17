@@ -4,18 +4,14 @@
  */
 import type { Issue, ItemContent, PullRequest } from "./github.ts";
 import type { Prompt } from "./llm.ts";
+import { STYLE } from "./style.ts";
 
 export const MAX_PROMPT = 48_000; // chars, ~12k tokens: fast on the lab model
 /** Bumped when the answer's format changes, so kept summaries in the old one are made again. */
-export const SUMMARY_FORMAT = "v3";
+export const SUMMARY_FORMAT = "v4";
 
 const SYSTEM = `You summarize one GitHub pull request or issue for a busy lab member.
-Write in ASD-STE100 Simplified Technical English:
-- One topic in each sentence. Each sentence has at most 25 words.
-- Use the active voice and the simple present or simple past tense.
-- Use "the" and "a". Do not use idioms, slang or phrasal verbs.
-- Use one term for one thing, and use the same term each time.
-- Keep names exactly as written: files, functions, datasets, numbers, @names.
+${STYLE}
 Give the facts that a reader needs: results and numbers, the files that change, decisions,
 and open questions. Do not repeat the title.
 

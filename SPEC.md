@@ -178,9 +178,7 @@ acting on issues.
 - What the model reads: **PR**: title, description, changed files and their diffs,
   review and conversation comments. **Issue**: title, description, comments. Input is
   cut to a fixed size so very large PRs still work.
-- What it writes, in ASD-STE100 Simplified Technical English (one topic per sentence,
-  at most 25 words, active voice, simple tenses, no idioms, one term for one meaning):
-  **What** it is about (1 or 2 sentences); **Key points**: 2 to 4 concrete facts
+- What it writes, in the one style of every AI text (12.1): **What** it is about (1 or 2 sentences); **Key points**: 2 to 4 concrete facts
   (results and numbers, files, decisions, open questions); **Status** (checks,
   reviews, blockers); **Next**: who has to do what, by @name. Shown as labelled rows,
   key points as a list, plain text, readable on a phone. (Summaries kept in an older
@@ -196,6 +194,29 @@ acting on issues.
   grows line by line. A kept summary appears at once. Two people asking for the same
   summary at the same time share one model call and both see it grow.
 - The item's text is treated as data, never as instructions to the model.
+
+### 12.1 One style for every AI text
+
+Every text that the model writes for a reader follows the **STE80 Humanizer** rules
+(Dr. Jeong, 2026-11-17, issue 74; github.com/Dodaios/ste80-humanizer, MIT): the summary,
+Explain for a file and for a function (section 17), the plan, notes and draft comments
+of Guided review (section 19), and every answer to a question.
+
+- The answer is first. There is no greeting, no praise, no line about what comes next,
+  and no closing line.
+- One idea in each sentence, at most 25 words. Active voice, simple tenses, the
+  condition first.
+- Plain words, and one term for one thing. No stock AI words ("delve", "leverage",
+  "robust", "seamless", "crucial"), no "not X, but Y", no list of three for its sound,
+  and no claim that a thing is important in place of the fact.
+- No em dash, en dash or semicolon.
+- Each fact, number and name stays exactly as it is in the data. Nothing is added, and
+  doubt stays doubt.
+- The rules are part of the instructions to the model. Nudgebox does not rewrite what
+  the model returns, so a model can still break a rule.
+- Summaries and explanations kept from before are made again in this style on the next
+  click. A Guided review already prepared stays, and the next push to the PR gets the
+  style.
 
 ## 13. Triage list
 
@@ -540,7 +561,7 @@ and Compare.
   it, cut to a fixed size. Nudgebox reads both versions of the file from GitHub itself;
   the page only names the repo, the two versions and the path. Only for repos you can
   see (section 4). Not for binary files.
-- What it writes: 2 to 4 sentences in ASD-STE100 Simplified Technical English: what
+- What it writes: 2 to 4 sentences in the style of every AI text (12.1): what
   the file's changes do, and their effect. Plain text with `code` names, shown above the
   diff.
 - Streamed as it is written, like the summary. An explanation is kept per file version

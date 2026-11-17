@@ -6,18 +6,14 @@
 import type { Prompt } from "./llm.ts";
 import type { DiffResult, Hunk } from "./omnidiff.ts";
 import { MAX_PROMPT } from "./summary.ts";
+import { STYLE } from "./style.ts";
 
 /** Bumped when the answer's format changes, so kept explanations in the old one are made again. */
-export const EXPLAIN_FORMAT = "e1";
+export const EXPLAIN_FORMAT = "e2";
 const CONTEXT = 3;
 
 const SYSTEM = `You explain the changes to one file in a GitHub pull request for a busy lab member.
-Write in ASD-STE100 Simplified Technical English:
-- One topic in each sentence. Each sentence has at most 25 words.
-- Use the active voice and the simple present or simple past tense.
-- Use "the" and "a". Do not use idioms, slang or phrasal verbs.
-- Use one term for one thing, and use the same term each time.
-- Keep names exactly as written: files, functions, variables, numbers.
+${STYLE}
 Write 2 to 4 sentences: what the changes do, and their effect. Do not describe each line.
 Write no list, no headings and no bold. Put file, function and variable names in \`backticks\`.
 
@@ -94,7 +90,7 @@ export function explainPrompt(path: string, prTitle: string | null, before: stri
 // -- one function of the file (SPEC 17) -----------------------------------------------------
 
 /** Bumped when the answer's format changes, so kept explanations of functions in the old one are made again. */
-export const EXPLAIN_FN_FORMAT = "f1";
+export const EXPLAIN_FN_FORMAT = "f2";
 /** A function of one side of the diff: its first and last row in that side's file. */
 export type FnPart = { side: "before" | "after"; from: number; to: number };
 const MAX_FN_LINES = 3000;
@@ -110,12 +106,7 @@ export function fnPart(x: any, before: string | null, after: string | null): FnP
 }
 
 const FN_SYSTEM = `You explain one function, or one class, of a file in a GitHub pull request for a busy lab member.
-Write in ASD-STE100 Simplified Technical English:
-- One topic in each sentence. Each sentence has at most 25 words.
-- Use the active voice and the simple present or simple past tense.
-- Use "the" and "a". Do not use idioms, slang or phrasal verbs.
-- Use one term for one thing, and use the same term each time.
-- Keep names exactly as written: files, functions, variables, numbers.
+${STYLE}
 First write 2 or 3 sentences: what the function does, what it gets, and what it gives back or changes.
 Then, only when lines are marked with "+ " or "- ", write 1 or 2 sentences: what the pull
 request changes in the function, and the effect. When no line is marked, write nothing about changes.
@@ -161,8 +152,9 @@ export function earlierTurns(earlier: AskTurn[]): string[] {
 
 const ASK = `You answer a reader's question about the changes to one file in a GitHub pull request.
 The reader is a busy lab member who reads these changes now.
-Answer the question first, in plain English: at most 5 short sentences, or a short list
-when the answer is a list. Write no greeting, no praise, and do not repeat the question.
+Answer the question first: at most 5 short sentences, or a short list when the answer
+is a list. Do not repeat the question.
+${STYLE}
 Put file, function and variable names in \`backticks\`.
 
 The changes are lines of the file: "- " is a removed line, "+ " is an added line, and

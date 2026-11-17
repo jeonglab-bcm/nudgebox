@@ -684,3 +684,23 @@ explain one function (#72).
   the answer is about it. Kept on its own key, so the file's explanation is as before.
 - Not done: follow-up questions on a function's explanation, and folds that survive a
   reload.
+
+## 2026-11-17: One writing style for every AI text (STE80 Humanizer)
+
+Dr. Jeong: use the STE80 Humanizer skill for every AI message; the text is tiring (#74).
+
+- **One block, `src/style.ts`, in eight instructions**: summary, Explain (file, function,
+  question), Guided review (plan, step review, question on a step, question on the PR).
+  Three of them had five ASD-STE100 lines each, and the answers to questions had none.
+- **A short form of the skill, not its whole text.** The skill is about 29,000
+  characters with its references, and a prompt has 48,000 for everything. The block
+  (about 1,600 characters) keeps the rules that show in a short answer.
+- **In the instructions, not a second pass.** The skill can also rewrite a finished
+  text. That is one more model call for each answer, and the reader waits for it. Not
+  done. The cost: the lab model can still break a rule.
+- **The check of a draft comment has no style block.** It answers true or false, and
+  its reason is not shown.
+- **Kept texts.** `SUMMARY_FORMAT` and `EXPLAIN_FORMAT` go up, so an old summary or
+  explanation is made again on the next click. `REVIEW_FORMAT` stays: raising it
+  prepares every open PR again with the model.
+- The skill's MIT notice is in `docs/third-party/ste80-humanizer-LICENSE`.

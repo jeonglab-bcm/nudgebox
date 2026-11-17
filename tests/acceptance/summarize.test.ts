@@ -6,6 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { start } from "../helpers/harness.ts";
+import { STYLE } from "../../src/style.ts";
 
 const LAB = "jeonglab-bcm/AURORA";
 const MINE = "hyunhwan-bcm/tailjobs";
@@ -187,6 +188,7 @@ test("12. the model is asked for ASD-STE100 English in What, Key points, Status,
 		const { system } = t.llm.calls[0];
 		for (const label of ["What:", "Key points:", "Status:", "Next:"]) assert.ok(system.includes(label), `no ${label} in the instructions`);
 		assert.match(system, /ASD-STE100/);
+		assert.ok(system.includes(STYLE), "the summary is not asked for the shared style");
 		assert.match(system, /25 words/);
 	} finally {
 		await t.close();

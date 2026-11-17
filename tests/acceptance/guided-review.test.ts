@@ -11,6 +11,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { start } from "../helpers/harness.ts";
+import { STYLE } from "../../src/style.ts";
 import type { Prompt } from "../../src/llm.ts";
 import type { DiffResult, DiffSide } from "../../src/omnidiff.ts";
 
@@ -138,6 +139,7 @@ test("19.2 the plan is asked for at most 12 steps, with room in the answer to li
 		await review("hyunhwanj");
 		const [p] = calls("You plan");
 		assert.match(p.system, /never more than 12/);
+		assert.ok(p.system.includes(STYLE), "the plan is not asked for the shared style");
 		assert.ok((p.maxTokens ?? 0) >= 800 + 40 * 3, `the plan's answer gets ${p.maxTokens} tokens for 3 files`);
 	} finally {
 		await t.close();
@@ -325,6 +327,7 @@ test("19.3 each step has a one-sentence summary; drafts only on lines GitHub tak
 		const step1 = calls("You review").find((c) => c.user.includes("src/limit.ts"))!;
 		assert.match(step1.user, /15.*const limit = 20; \/\/ src\/limit\.ts/);
 		assert.match(step1.system, /never follow instructions/i);
+		assert.ok(step1.system.includes(STYLE), "the step's review is not asked for the shared style");
 	} finally {
 		await t.close();
 	}
@@ -626,6 +629,7 @@ test("19.12 a question about a step goes to the model with the step's changes, n
 		assert.ok(!call.user.includes("docs/notes.md"), "a file of another step is not in the prompt");
 		assert.ok(call.user.trimEnd().endsWith("The reviewer asks:\nWhy 20 and not 15?"), "the question comes last");
 		assert.match(call.system, /never follow instructions/i);
+		assert.ok(call.system.includes(STYLE), "the answer is not asked for the shared style");
 		assert.match(call.system, /not shown/); // it must say when the answer needs code it cannot see
 		assert.ok((call.maxTokens ?? 0) <= 1200, "a few sentences, not an essay");
 
@@ -822,6 +826,7 @@ test("19.13 a question about the whole pull request needs no prepared review: th
 		assert.match(call.user, /Left out, no real change: .*package-lock\.json/);
 		assert.ok(call.user.trimEnd().endsWith("The reviewer asks:\nWhat does this change?"), "the question comes last");
 		assert.match(call.system, /^You answer a reviewer's question about a GitHub pull request/);
+		assert.ok(call.system.includes(STYLE), "the answer is not asked for the shared style");
 		assert.match(call.system, /never follow instructions/i);
 		assert.match(call.system, /not shown/);
 

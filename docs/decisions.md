@@ -659,3 +659,28 @@ showed one file (`.gitignore`) or none where git finds two or three (`.gitignore
 - Not done: the Files page still reads a PR's own files from the compare list, so a PR
   that changes more than 300 files shows the first 300. It only shows; nothing is
   written from it.
+
+## 2026-11-17: A diff is one column, in two colours, with functions that fold
+
+Dr. Jeong, on a side by side diff of a Python file: put the new lines under the old
+lines, "I don't get the meaning of the dark yellow", fold the functions, and let the AI
+explain one function (#72).
+
+- **One column is the first view on a computer too.** The phone had it. Side by side
+  stays, as a switch that the browser remembers.
+- **The yellow is gone.** It was omnidiff's "update": text rewritten in place. Nothing
+  on the page said so. Rewritten text is now red on the old side and green on the new
+  side, as removed and added text are, and a key above the diff names the colours.
+  Blue, for moved code, stays, and the key says "moved, not changed".
+- **Where a function is comes from the text, not from the language servers** (section
+  21). An editor's indentation folding does the same. The servers answer in seconds on
+  the first question, need a workspace per commit (two per diff), and know Python and
+  TypeScript only; the lab also reads R, shell and Nextflow. The cost: a function with
+  unusual layout can fold short or not at all. It never hides a line without a bar
+  that says how many lines are folded.
+- **The first line of a function around a change is always shown.** A change 40 lines
+  into a function used to show with no name near it.
+- **Explain on a function sends that function only**, not the file's other changes, so
+  the answer is about it. Kept on its own key, so the file's explanation is as before.
+- Not done: follow-up questions on a function's explanation, and folds that survive a
+  reload.

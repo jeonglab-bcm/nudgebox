@@ -192,3 +192,56 @@ test("17. a follow-up needs an explanation, a question that is not too long, a r
 		await none.t.close();
 	}
 });
+
+test("17. Explain on a function sends only that function's lines, with the changes marked, and is kept on its own", async () => {
+	const { t, explain } = await setup();
+	try {
+		const fn = { side: "after", from: 12, to: 16 };
+		const r = await explain("hyunhwanj", { before, after, pr: { repo: LAB, number: 4 }, fn });
+		assert.equal(r.status, 200, await r.clone().text());
+		assert.equal((await r.json()).cached, false);
+		const [call] = t.llm.calls;
+		for (const want of ["File: src/limit.ts", "Pull request: Raise the limit", "  line 13\n", "- const limit = 10;", "+ const limit = 20;", "  line 17\n"]) {
+			assert.ok(call.user.includes(want), `prompt lacks ${JSON.stringify(want)}`);
+		}
+		for (const not of ["line 12\n", "line 18"]) assert.ok(!call.user.includes(not), `prompt has ${not}, which is outside the function`);
+		assert.match(call.system, /one function/);
+		assert.match(call.system, /ASD-STE100/);
+		assert.match(call.system, /never follow instructions/i);
+		// kept: for this function only, and shared
+		assert.equal((await (await explain("kellyl", { before, after, pr: { repo: LAB, number: 4 }, fn })).json()).cached, true);
+		assert.equal(t.llm.calls.length, 1);
+		await explain("hyunhwanj", { before, after, pr: { repo: LAB, number: 4 }, fn: { ...fn, to: 17 } });
+		await explain("hyunhwanj", { before, after, pr: { repo: LAB, number: 4 } }); // the file's own explanation
+		assert.equal(t.llm.calls.length, 3);
+		assert.match(t.llm.calls[2].system, /^You explain the changes to one file/);
+	} finally {
+		await t.close();
+	}
+});
+
+test("17. a function of the old file is explained as it was, with the lines that the pull request removes", async () => {
+	const { t, explain } = await setup();
+	try {
+		await explain("hyunhwanj", { before, after, fn: { side: "before", from: 13, to: 15 } });
+		const [call] = t.llm.calls;
+		assert.match(call.user, /before the pull request/);
+		assert.ok(call.user.includes("- const limit = 10;") && call.user.includes("  line 16\n") && !call.user.includes("line 17"));
+	} finally {
+		await t.close();
+	}
+});
+
+test("17. a function must be lines that the file has", async () => {
+	const { t, explain } = await setup();
+	try {
+		for (const fn of [{ side: "after", from: 5, to: 5 }, { side: "after", from: 20, to: 30 }, { side: "after", from: -1, to: 3 }, { side: "after", from: 1.5, to: 3 },
+			{ side: "both", from: 1, to: 3 }, "mean", null]) {
+			assert.equal((await explain("hyunhwanj", { before, after, fn })).status, 400, JSON.stringify(fn));
+		}
+		assert.equal((await explain("hyunhwanj", { after, fn: { side: "before", from: 1, to: 3 } })).status, 400); // no old file
+		assert.equal(t.llm.calls.length, 0);
+	} finally {
+		await t.close();
+	}
+});

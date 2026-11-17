@@ -4,7 +4,7 @@
  */
 import { createServer, request, type OutgoingHttpHeaders, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { chromium, type Browser, type BrowserContextOptions } from "playwright-core";
+import { chromium, type Browser, type BrowserContext, type BrowserContextOptions } from "playwright-core";
 import { ORIGIN } from "./harness.ts";
 
 /** Forwards to `base` as lab user `as`: identity headers always, the public origin on POSTs. */
@@ -24,6 +24,11 @@ export async function sidecar(base: string, as: string, port = 0): Promise<{ url
 
 export const DESKTOP: BrowserContextOptions = { viewport: { width: 1280, height: 820 } };
 export const PHONE: BrowserContextOptions = { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true };
+
+/** A computer shows a diff as one column unless the reader chose side by side (SPEC 15): the choice, made. */
+export async function sideBySide(ctx: BrowserContext) {
+	await ctx.addInitScript(() => localStorage.setItem("ghd-diff", "split"));
+}
 
 let shared: Browser | null = null;
 export async function browser() {

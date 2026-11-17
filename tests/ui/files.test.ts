@@ -6,7 +6,7 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import type { BrowserContextOptions } from "playwright-core";
 import { start } from "../helpers/harness.ts";
-import { sidecar, browser, closeBrowser, DESKTOP, PHONE } from "../helpers/browser.ts";
+import { sidecar, browser, closeBrowser, DESKTOP, PHONE, sideBySide } from "../helpers/browser.ts";
 
 const LAB = "jeonglab-bcm/labbot";
 after(closeBrowser);
@@ -38,6 +38,7 @@ async function open(device: BrowserContextOptions = DESKTOP) {
 	await t.app.sync();
 	const side = await sidecar(t.base, "hyunhwanj");
 	const ctx = await (await browser()).newContext(device);
+	await sideBySide(ctx); // these tests read the two panes
 	await ctx.route("https://github.com/**", (r) => r.fulfill({ body: "github" }));
 	const page = await ctx.newPage();
 	await page.goto(side.url);

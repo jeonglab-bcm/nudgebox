@@ -953,7 +953,7 @@ function markLines(side, text, hunks) {
 			if (row === h.to.row && row !== h.from.row && end === 0) continue; // a range that ends at the start of a row
 			const title = h.op === "move" && h.target
 				? side === "before" ? `moved to line ${h.target.from.row + 1}` : `moved from line ${h.target.from.row + 1}`
-				: { insert: "added", delete: "removed", update: "changed" }[h.op];
+				: { insert: "added", delete: "removed", move: "moved, not changed", update: side === "before" ? "removed" : "added" }[h.op]; // rewritten text: the old is removed, the new is added
 			marks[row].push({ start, end: Math.max(end, start), op: h.op, title });
 		}
 	}
@@ -1075,6 +1075,87 @@ function codeParts(line, marks, toks) {
 	return parts;
 }
 
+// -- functions in code (SPEC 15): where each starts and ends, read from the text ---------
+// As an editor folds code with no language server: a line that starts a function, and the
+// lines under it that are indented more. It is there at once, on both sides, in every language.
+const FN_C = /^\s*(?:[A-Za-z_][\w:<>,*&\[\]\s]*?[\s*&])?(?!(?:if|for|while|switch|catch|return|else|do|new|throw|sizeof|using|delete)\b)([A-Za-z_~][\w:~]*)\s*\([^;{}]*\)\s*(?:const\s*|noexcept\s*|override\s*|throws\s+[\w.,\s]+)*\{?\s*$/;
+const FN_JS = [
+	/^\s*(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)/,
+	/^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+)?(class)\s+([A-Za-z_$][\w$]*)/,
+	/^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:async\s+)?(?:function\b|.*=>\s*\{?\s*$|\($)/,
+	/^\s*(?:(?:public|private|protected|static|async|override|readonly|get|set)\s+)*(?!(?:if|for|while|switch|catch|function|return|else|do|try|with)\b)([A-Za-z_$#][\w$]*)\s*(?:<[^>]*>)?\([^)]*\)\s*(?::\s*[^{;]+)?\{\s*$/,
+];
+const FN_LANG = {
+	python: [/^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)/, /^\s*(class)\s+([A-Za-z_]\w*)/],
+	r: [/^\s*([A-Za-z.][\w.]*)\s*(?:<<?-|=)\s*function\s*\(/],
+	javascript: FN_JS, typescript: FN_JS,
+	bash: [/^\s*function\s+([A-Za-z_][\w:.-]*)/, /^\s*([A-Za-z_][\w:.-]*)\s*\(\)\s*\{?\s*$/],
+	groovy: [/^\s*(?:process|workflow|def)\s+([A-Za-z_]\w*)/, /^\s*(class)\s+([A-Za-z_]\w*)/],
+	julia: [/^\s*(?:function|macro)\s+([\w.!]+)/], matlab: [/^\s*function\s+(?:[^=]*=\s*)?([A-Za-z_]\w*)/],
+	go: [/^func\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)/], rust: [/^\s*(?:pub(?:\([^)]*\))?\s+)?(?:(?:const|async|unsafe)\s+)*fn\s+([A-Za-z_]\w*)/],
+	ruby: [/^\s*def\s+([\w.?!=]+)/, /^\s*(class)\s+([A-Za-z_][\w:]*)/], perl: [/^\s*sub\s+(\w+)/], lua: [/^\s*(?:local\s+)?function\s+([\w.:]+)/],
+	php: [/^\s*(?:(?:public|private|protected|static|final|abstract)\s+)*function\s+&?(\w+)/, /^\s*(?:(?:final|abstract)\s+)*(class)\s+(\w+)/],
+	kotlin: [/^\s*(?:[a-z]+\s+)*fun\s+(?:<[^>]*>\s*)?([\w.]+)/, /^\s*(?:[a-z]+\s+)*(class)\s+(\w+)/], swift: [/^\s*(?:[a-z@]+\s+)*func\s+(\w+)/, /^\s*(?:[a-z]+\s+)*(class)\s+(\w+)/],
+	c: [FN_C], cpp: [FN_C, /^\s*(class|struct)\s+([A-Za-z_]\w*)[^;]*$/], java: [FN_C, /^\s*(?:[a-z]+\s+)*(class)\s+(\w+)/], csharp: [FN_C, /^\s*(?:[a-z]+\s+)*(class)\s+(\w+)/],
+};
+const indentOf = (line) => /^[ \t]*/.exec(line)[0].replace(/\t/g, "    ").length;
+const fnCache = new Map(); // text -> its functions
+
+/** The functions and classes of a file: { from, to (rows), name, q (the name with those around it), kind }, in file order. */
+function fnRanges(text, path) {
+	const tests = FN_LANG[path ? langOf(path) : null];
+	if (!tests || text.length > HL_MAX) return [];
+	const key = `${langOf(path)}\n${text}`;
+	if (fnCache.has(key)) return fnCache.get(key);
+	const lines = text.split("\n");
+	const out = [];
+	lines.forEach((line, from) => {
+		const m = line.length < 400 && tests.map((t) => t.exec(line)).find(Boolean);
+		if (!m) return;
+		const base = indentOf(line);
+		let to = from, body = false;
+		for (let k = from + 1; k < lines.length; k++) {
+			if (!lines[k].trim()) continue;
+			const ind = indentOf(lines[k]);
+			if (ind > base) { to = k; body = true; continue; }
+			// at the function's own indent: the end of a long signature, or the line that closes the body
+			if (ind < base || !(/^\s*(?:[)\]}]|end\b)/.test(lines[k]) || (!body && /^\s*\{\s*$/.test(lines[k])))) break;
+			to = k;
+			if (body && /^\s*(?:\}|end\b)/.test(lines[k])) break;
+		}
+		if (to - from < 2) return; // nothing to fold
+		const around = out.findLast((f) => f.to >= to && f.from < from);
+		const kind = m[2] !== undefined ? "class" : "function", name = m[2] ?? m[1];
+		out.push({ from, to, name, kind, q: around ? `${around.q}.${name}` : name });
+	});
+	fnCache.set(key, out);
+	if (fnCache.size > 40) fnCache.delete(fnCache.keys().next().value);
+	return out;
+}
+
+const fnFolds = new Set(); // the folded functions: "path\nname", so one fold holds on both sides of a diff
+const fnKey = (fx, fn) => `${fx.path}\n${fn.q}`;
+const fnWhat = (fn) => `${fn.kind} ${fn.name}`;
+
+/** On a function's first line: Fold, and Explain (AI). `fx`: { path, r, pr, canExplain } of the diff. */
+function fnTools(fx, fn, side, canFold) {
+	const key = fnKey(fx, fn), folded = fnFolds.has(key);
+	const part = { side, from: fn.from, to: fn.to };
+	return el("span", { class: "fn-tools" },
+		canFold ? el("button", { class: "fn-fold", "aria-expanded": String(!folded), "aria-label": `${folded ? "Unfold" : "Fold"} ${fnWhat(fn)}`, title: `${folded ? "Show" : "Hide"} the lines of this ${fn.kind}`,
+			onclick: (e) => { e.stopPropagation(); if (folded) fnFolds.delete(key); else fnFolds.add(key); render(); } },
+			el("span", { "aria-hidden": "true" }, folded ? "▸" : "▾"), el("span", { class: "word" }, folded ? "Unfold" : "Fold")) : null,
+		fx.canExplain ? el("button", { class: "fn-explain", disabled: explaining.has(explainKey(fx.r, part)), "aria-label": `Explain ${fnWhat(fn)} (AI)`, title: `Explain this ${fn.kind} (AI)`,
+			onclick: (e) => { e.stopPropagation(); explain(fx.r, fx.pr, part); } },
+			el("span", { class: "spark", "aria-hidden": "true" }, "✦"), el("span", { class: "word" }, "Explain")) : null);
+}
+
+/** Under a folded function's first line: how much is folded; a click shows it again. */
+function fnFoldBar(fx, fn, n, changes) {
+	return el("button", { class: "fold fn-folded", title: "Show these lines", onclick: (e) => { e.stopPropagation(); fnFolds.delete(fnKey(fx, fn)); render(); } },
+		`${plural(n, "line")} folded`, changes ? el("span", { class: "fn-changes" }, " · changes inside") : null);
+}
+
 // a line number; where GitHub takes a comment, tapping it opens the comment box (SPEC 16)
 function lineNo(n, sideKey, review) {
 	const can = review && inRanges(review.commentable?.[sideKey === "LEFT" ? "left" : "right"], n);
@@ -1083,13 +1164,20 @@ function lineNo(n, sideKey, review) {
 		onclick: (e) => { e.stopPropagation(); review.onAdd(sideKey, n); } }, n);
 }
 
-function pane(side, ref, text, hunks, label, review, path, nav = null) {
+function pane(side, ref, text, hunks, label, review, path, nav = null, fx = null) {
 	const { lines, marks } = markLines(side, text, hunks);
 	const toks = hlLines(text, path);
 	const show = lines.map(() => false);
 	marks.forEach((m, row) => {
 		if (m.length) for (let r = Math.max(0, row - 3); r <= Math.min(lines.length - 1, row + 3); r++) show[r] = true;
 	});
+	// the first line of each function around a change is shown: the reader sees where the change is
+	const fns = fx ? fnRanges(text, path) : [];
+	const changes = [0];
+	marks.forEach((m) => changes.push(changes.at(-1) + (m.length ? 1 : 0)));
+	const changesIn = (fn) => changes[Math.min(fn.to, lines.length - 1) + 1] - changes[fn.from + 1];
+	for (const fn of fns) if (changesIn(fn)) show[fn.from] = true;
+	const fnAt = new Map(fns.map((fn) => [fn.from, fn]));
 	const sideKey = side === "before" ? "LEFT" : "RIGHT";
 	const threadsAt = new Map();
 	for (const th of review?.threads ?? []) {
@@ -1105,7 +1193,9 @@ function pane(side, ref, text, hunks, label, review, path, nav = null) {
 		if (hidden) out.push(el("div", { class: "fold" }, `${hidden} unchanged line${hidden > 1 ? "s" : ""}`));
 		hidden = 0;
 	};
+	let foldedTo = -1; // the last row of the folded function being passed over
 	lines.forEach((line, row) => {
+		if (row <= foldedTo) return;
 		if (!show[row]) return void hidden++;
 		fold();
 		const parts = codeParts(line, marks[row], toks?.[row]);
@@ -1113,9 +1203,19 @@ function pane(side, ref, text, hunks, label, review, path, nav = null) {
 		const add = review && inRanges(review.commentable?.[sideKey === "LEFT" ? "left" : "right"], n)
 			? el("button", { class: "add-comment", "aria-label": `Comment on line ${n}`, title: "Comment on this line",
 				onclick: (e) => { e.stopPropagation(); review.onAdd(sideKey, n); } }, "+") : null;
-		out.push(el("div", { class: `code-line${marks[row].length ? " changed" : ""}`, "data-row": row }, add, lineNo(n, sideKey, review), el("span", { class: "code" }, parts)));
+		const fn = fnAt.get(row);
+		const canFold = fn && show.slice(fn.from + 1, fn.to + 1).some(Boolean);
+		out.push(el("div", { class: `code-line${marks[row].length ? " changed" : ""}${fn ? " fn-head" : ""}`, "data-row": row }, add, lineNo(n, sideKey, review), el("span", { class: "code" }, parts),
+			fn ? fnTools(fx, fn, side, canFold) : null));
 		for (const th of threadsAt.get(n) ?? []) out.push(threadView(th, "files"));
 		if (form && form.line === n) out.push(commentForm(form));
+		if (!fn) return;
+		out.push(explainBox(fx.r, { side, from: fn.from, to: fn.to }));
+		// a comment being written inside it keeps a function open
+		if (canFold && fnFolds.has(fnKey(fx, fn)) && !(form && form.line - 1 > fn.from && form.line - 1 <= fn.to)) {
+			out.push(fnFoldBar(fx, fn, fn.to - fn.from, changesIn(fn)));
+			foldedTo = fn.to;
+		}
 	});
 	fold();
 	return el("section", { class: `pane ${side}`, ...navAttrs(nav) },
@@ -1387,20 +1487,22 @@ const explained = new Map(); // diff key -> text so far
 const explaining = new Map(); // diff key -> "reading" | "writing" while the model works
 const sideRef = (x) => x && { repo: x.repo, ref: x.ref, path: x.path };
 const diffKey = (r) => JSON.stringify([sideRef(r.before), sideRef(r.after)]);
+// `fn`: one function of the diff, { side, from, to }; without it, the file's changes
+const explainKey = (r, fn = null) => (fn ? `${diffKey(r)}|${fn.side}:${fn.from}-${fn.to}` : diffKey(r));
 let explainFrame = 0;
 const repaint = () => { explainFrame ||= requestAnimationFrame(() => { explainFrame = 0; render(); }); };
 
-async function explain(r, pr) {
-	const k = diffKey(r);
+async function explain(r, pr, fn = null) {
+	const k = explainKey(r, fn);
 	if (explaining.has(k)) return;
 	explaining.set(k, "reading");
 	explained.set(k, "");
 	render();
 	try {
-		await streamPost("/api/explain", { before: sideRef(r.before), after: sideRef(r.after), ...(pr ? { pr } : {}) }, (event, data) => {
+		await streamPost("/api/explain", { before: sideRef(r.before), after: sideRef(r.after), ...(pr ? { pr } : {}), ...(fn ? { fn } : {}) }, (event, data) => {
 			if (event === "stage") explaining.set(k, data.stage);
 			else if (event === "message") explained.set(k, explained.get(k) + data.delta);
-			else if (event === "done") explained.set(k, data.explanation), explainAsks.set(k, data.asks ?? []), explaining.delete(k);
+			else if (event === "done") explained.set(k, data.explanation), fn || explainAsks.set(k, data.asks ?? []), explaining.delete(k);
 			repaint();
 		});
 		if (explaining.has(k)) throw new Error("The explanation stopped before the end; try again");
@@ -1413,14 +1515,15 @@ async function explain(r, pr) {
 	}
 }
 
-function explainBox(r) {
-	const k = diffKey(r);
+function explainBox(r, fn = null) {
+	const k = explainKey(r, fn);
 	const text = explained.get(k);
 	const stage = explaining.get(k);
 	if (!text && !stage) return null;
 	const live = stage ? " streaming" : "";
-	return el("div", { class: `explain${live}`, role: "status" },
-		text ? el("p", {}, inline(text)) : el("p", { class: "pending" }, stage === "reading" ? "Reading the changes…" : "Writing…"));
+	return el("div", { class: `explain${live}${fn ? " fn-explained" : ""}`, role: "status", ...(fn ? { onclick: (e) => e.stopPropagation() } : {}) },
+		text ? el("p", {}, inline(text)) : el("p", { class: "pending" }, stage === "reading" ? (fn ? "Reading the function…" : "Reading the changes…") : "Writing…"),
+		fn && !stage ? el("button", { class: "quiet fn-explained-close", "aria-label": "Hide the explanation", title: "Hide", onclick: () => { explained.delete(k); render(); } }, "✕") : null);
 }
 
 // Questions under an explanation: yours only, answered from the same changes and kept with it.
@@ -1488,27 +1591,54 @@ function diffView(f, r, github, modes = files.mdMode, labels = {}, review = null
 	const rendered = md && modes.get(f.path) !== "plain";
 	const lib = rendered ? loadMd() : null;
 	const choose = (mode) => (e) => { e.stopPropagation(); modes.set(f.path, mode); render(); };
+	const canExplain = Boolean(data.pr?.summarize);
+	const fx = rendered ? null : { path: f.path, r, pr, canExplain }; // code: its functions fold and can be explained
 	const side = (name) => r[name] && (rendered
 		? mdPane(name, r[name].ref, r[name].text, r.result[name].hunks, lib, labels[name])
-		: pane(name, r[name].ref, r[name].text, r.result[name].hunks, labels[name], review, r[name].path ?? f.path, name === "after" ? r.after : null)); // SPEC 21: the new code's names can be asked about
-	const canExplain = Boolean(data.pr?.summarize);
-	return el("div", { class: `diff${r.before && r.after ? "" : " one-side"}` }, // a new or deleted file: nothing to compare
-		md || canExplain ? el("div", { class: "diff-tools" },
+		: pane(name, r[name].ref, r[name].text, r.result[name].hunks, labels[name], review, r[name].path ?? f.path, name === "after" ? r.after : null, fx)); // SPEC 21: the new code's names can be asked about
+	const both = Boolean(r.before && r.after);
+	const small = phone();
+	const column = !rendered && (small || (both && diffLayout === "column")); // a new or deleted file has one side: one pane
+	const lay = (to) => (e) => { e.stopPropagation(); setDiffLayout(to); };
+	// every function of the file folds at once; a class stays open, so its functions are still listed
+	const fnKeys = fx ? [...new Set(["before", "after"].flatMap((n) => (r[n] ? fnRanges(r[n].text, r[n].path ?? f.path) : [])).filter((fn) => fn.kind === "function").map((fn) => fnKey(fx, fn)))] : [];
+	const allFolded = fnKeys.length > 0 && fnKeys.every((k) => fnFolds.has(k));
+	const ops = rendered ? new Set() : new Set(["before", "after"].flatMap((n) => r.result[n]?.hunks ?? []).map((h) => h.op));
+	return el("div", { class: `diff${both ? "" : " one-side"}` }, // a new or deleted file: nothing to compare
+		el("div", { class: "diff-tools" },
 			md ? el("div", { class: "md-switch seg", role: "group", "aria-label": "Show" },
 				el("button", { "aria-pressed": String(rendered), class: rendered ? "on" : "", onclick: choose("rendered") }, "Rendered"),
 				el("button", { "aria-pressed": String(!rendered), class: rendered ? "" : "on", onclick: choose("plain") }, "Plain diff")) : null,
+			!rendered && both && !small ? el("div", { class: "layout-switch seg", role: "group", "aria-label": "Layout" },
+				el("button", { "aria-pressed": String(column), class: column ? "on" : "", title: "The new lines under the old lines", onclick: lay("column") }, "One column"),
+				el("button", { "aria-pressed": String(!column), class: column ? "" : "on", title: "Before on the left, after on the right", onclick: lay("split") }, "Side by side")) : null,
+			fnKeys.length ? el("button", { class: "fold-all", title: allFolded ? "Show the lines of every function" : "Hide the lines of every function",
+				onclick: (e) => { e.stopPropagation(); for (const k of fnKeys) if (allFolded) fnFolds.delete(k); else fnFolds.add(k); render(); } },
+				el("span", { "aria-hidden": "true" }, allFolded ? "▸" : "▾"), allFolded ? "Unfold all" : "Fold all") : null,
 			canExplain ? el("button", { class: "explain-btn", disabled: explaining.has(diffKey(r)), title: "Explain this file's changes (AI)",
-				onclick: (e) => { e.stopPropagation(); explain(r, pr); } }, el("span", { class: "spark", "aria-hidden": "true" }, "✦"), "Explain") : null) : null,
+				onclick: (e) => { e.stopPropagation(); explain(r, pr); } }, el("span", { class: "spark", "aria-hidden": "true" }, "✦"), "Explain") : null,
+			// what the marks in the code mean, for the marks this diff has
+			both && ops.size ? el("span", { class: "diff-key", "aria-label": "What the colours mean" },
+				ops.has("delete") || ops.has("update") ? el("span", { class: "m-delete" }, "removed") : null,
+				ops.has("insert") || ops.has("update") ? el("span", { class: "m-insert" }, "added") : null,
+				ops.has("move") ? el("span", { class: "m-move" }, "moved, not changed") : null) : null),
 		explainBox(r), explainAskBox(r, pr),
 		note ? el("p", { class: "note" }, note) : null,
 		rendered && review && (review.threads.length || review.commentable) ? el("p", { class: "note" }, "Line comments are on the Plain diff.") : null,
 		rendered && !lib ? el("p", { class: "pending" }, "Rendering…")
-			: !rendered && phone() ? unifiedView(r, labels, review)
+			: column ? unifiedView(r, labels, review, fx)
 			: el("div", { class: "panes" }, side("before"), side("after")));
 }
 
-// -- the diff on a phone (SPEC 15): one unified column ----------------------------------
+// -- the diff as one column (SPEC 15): the new lines under the old ones -----------------
 const phone = () => matchMedia("(max-width: 720px)").matches;
+// on a computer the reader chooses: one column (the default) or before and after side by side
+let diffLayout = (() => { try { return localStorage.getItem("ghd-diff") === "split" ? "split" : "column"; } catch { return "column"; } })();
+function setDiffLayout(to) {
+	diffLayout = to;
+	try { localStorage.setItem("ghd-diff", to); } catch {}
+	render();
+}
 
 // before and after as one sequence: unchanged lines once, then each run of removed
 // lines followed by the added lines that replace them
@@ -1528,16 +1658,17 @@ function unify(a, b) {
 	return rows;
 }
 
-function uLine(row, a, b, review) {
+function uLine(row, a, b, review, tools = null) {
 	const old = row.i !== undefined ? row.i + 1 : null, now = row.j !== undefined ? row.j + 1 : null;
 	const del = row.t === "del";
 	const k = del ? row.i : row.j;
 	const { lines, marks, toks } = del ? a : b;
-	return el("div", { class: `u-line u-${row.t}`, "data-row": del ? null : row.j },
+	const moved = marks[k].length > 0 && marks[k].every((m) => m.op === "move"); // the line is the same, at another place
+	return el("div", { class: `u-line u-${row.t}${moved ? " u-moved" : ""}${tools ? " fn-head" : ""}`, "data-row": del ? null : row.j },
 		del ? lineNo(old, "LEFT", review) : el("span", { class: "ln old" }, old ?? ""),
 		del ? el("span", { class: "ln new" }) : lineNo(now, "RIGHT", review),
 		el("span", { class: "sign", "aria-hidden": "true" }, { del: "−", add: "+", ctx: "" }[row.t]),
-		el("span", { class: "code" }, codeParts(lines[k], marks[k], toks?.[k])));
+		el("span", { class: "code" }, codeParts(lines[k], marks[k], toks?.[k])), tools);
 }
 
 function uExtras(row, review) {
@@ -1550,20 +1681,55 @@ function uExtras(row, review) {
 	return out;
 }
 
-function unifiedView(r, labels, review) {
+function unifiedView(r, labels, review, fx = null) {
 	const side = (name) => (r[name] ? { ...markLines(name, r[name].text, r.result[name].hunks), toks: hlLines(r[name].text, r[name].path) } : { lines: [], marks: [] });
 	const a = side("before"), b = side("after");
 	const rows = unify(a, b);
 	const changed = rows.map((x) => x.t !== "ctx");
 	const near = (k) => changed.slice(Math.max(0, k - 3), k + 4).some(Boolean);
-	const show = rows.map((x, k) => near(k) || uExtras(x, review).length > 0);
+	const extras = rows.map((x) => uExtras(x, review));
+	const show = rows.map((x, k) => near(k) || extras[k].length > 0);
+	// the functions, as runs of rows: a function of the new file from its first line to its last
+	// (the removed lines between them are in it), and a function that is removed as a whole
+	const rowOfI = [], rowOfJ = [];
+	rows.forEach((x, k) => { if (x.i !== undefined) rowOfI[x.i] = k; if (x.j !== undefined) rowOfJ[x.j] = k; });
+	const fns = (name) => (fx && r[name] ? fnRanges(r[name].text, r[name].path) : []);
+	const oldAt = new Map(fns("before").map((fn) => [rowOfI[fn.from], fn]));
+	const heads = new Map(); // a function's first row -> { fn, side, last: its last row }
+	for (const fn of fns("after")) {
+		const k = rowOfJ[fn.from], old = oldAt.get(k);
+		let last = rowOfJ[Math.min(fn.to, b.lines.length - 1)];
+		while (old && rows[last + 1]?.t === "del" && rows[last + 1].i <= old.to) last++; // the removed end of the same function
+		if (k !== undefined && last > k) heads.set(k, { fn, side: "after", last });
+	}
+	for (const [k, fn] of oldAt) {
+		const last = rowOfI[Math.min(fn.to, a.lines.length - 1)];
+		if (k !== undefined && !heads.has(k) && rows.slice(k, last + 1).every((x) => x.t === "del")) heads.set(k, { fn, side: "before", last });
+	}
+	const changes = [0];
+	changed.forEach((c) => changes.push(changes.at(-1) + (c ? 1 : 0)));
+	const changesIn = (k, h) => changes[h.last + 1] - changes[k + 1];
+	// the first line of each function around a change is shown: the reader sees where the change is
+	for (const [k, h] of heads) if (changesIn(k, h)) show[k] = true;
+	const formAt = extras.findIndex((x) => x.some((n) => n.classList?.contains("comment-form")));
 	const out = [];
 	let hidden = 0;
 	const fold = () => { if (hidden) out.push(el("div", { class: "fold" }, `${hidden} unchanged line${hidden > 1 ? "s" : ""}`)); hidden = 0; };
+	let foldedTo = -1; // the last row of the folded function being passed over
 	rows.forEach((x, k) => {
+		if (k <= foldedTo) return;
 		if (!show[k]) return void hidden++;
 		fold();
-		out.push(uLine(x, a, b, review), ...uExtras(x, review));
+		const h = heads.get(k);
+		const canFold = h && show.slice(k + 1, h.last + 1).some(Boolean);
+		out.push(uLine(x, a, b, review, h ? fnTools(fx, h.fn, h.side, canFold) : null), ...extras[k]);
+		if (!h) return;
+		out.push(explainBox(fx.r, { side: h.side, from: h.fn.from, to: h.fn.to }));
+		// a comment being written inside it keeps a function open
+		if (canFold && fnFolds.has(fnKey(fx, h.fn)) && !(formAt > k && formAt <= h.last)) {
+			out.push(fnFoldBar(fx, h.fn, h.side === "after" ? h.fn.to - h.fn.from : h.last - k, changesIn(k, h)));
+			foldedTo = h.last;
+		}
 	});
 	fold();
 	const head = (name, word) => (r[name] ? el("span", {}, labels[name] ?? word, " ", el("span", { class: "sha" }, r[name].ref.slice(0, 7))) : el("span", {}, name === "before" ? "New file" : "Deleted"));

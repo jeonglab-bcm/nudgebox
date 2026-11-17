@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import type { BrowserContextOptions, Page } from "playwright-core";
 import { start } from "../helpers/harness.ts";
 import type { PrPage } from "../../src/github.ts";
-import { sidecar, browser, closeBrowser, DESKTOP, PHONE } from "../helpers/browser.ts";
+import { sidecar, browser, closeBrowser, DESKTOP, PHONE, sideBySide } from "../helpers/browser.ts";
 
 const LAB = "jeonglab-bcm/labbot";
 const PR = `#pr/${LAB}/4`;
@@ -64,6 +64,7 @@ async function open(o: { device?: BrowserContextOptions; page?: Partial<PrPage>;
 	await t.app.sync();
 	const side = await sidecar(t.base, "hyunhwanj");
 	const ctx = await (await browser()).newContext(o.device ?? DESKTOP);
+	await sideBySide(ctx); // these tests read the two panes
 	await ctx.route("https://github.com/**", (r) => r.fulfill({ body: "github" }));
 	const page = await ctx.newPage();
 	await page.goto(side.url + (o.hash ?? PR));

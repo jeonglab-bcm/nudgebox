@@ -6,7 +6,7 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import type { Page } from "playwright-core";
 import { start } from "../helpers/harness.ts";
-import { sidecar, browser, closeBrowser, DESKTOP } from "../helpers/browser.ts";
+import { sidecar, browser, closeBrowser, DESKTOP, sideBySide } from "../helpers/browser.ts";
 
 const LAB = "jeonglab-bcm/labbot";
 const OTHER = "jeonglab-bcm/AURORA";
@@ -29,6 +29,7 @@ async function open() {
 	await t.app.sync();
 	const side = await sidecar(t.base, "hyunhwanj");
 	const ctx = await (await browser()).newContext(DESKTOP);
+	await sideBySide(ctx); // these tests read the two panes
 	const page = await ctx.newPage();
 	await page.goto(side.url);
 	await page.waitForSelector(".row");

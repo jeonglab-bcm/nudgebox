@@ -302,15 +302,31 @@ is kept in the browser, for every PR. The same switch is on Guided review (secti
 A file opens its diff, made by **omnidiff** (github.com/ivankovic/omnidiff, a pinned
 release run on the server) from the file's two whole versions:
 
-- **Only the changed parts are marked**, not whole lines: removed (before), added
-  (after), changed (both), and **moved** code marked as moved, with the line it moved
-  to or from. Unchanged lines more than 3 lines from a change fold into "N unchanged
-  lines".
-- **Before and after** side by side on a computer. **On a phone, one unified column**
-  (Dr. Jeong, 2026-11-06): unchanged lines once, each run of removed lines (red, old line
-  number) directly above the lines that replace it (green, new line number), with
-  omnidiff's marks inside the lines. A rendered Markdown file and a binary file keep
-  their own views.
+- **Only the changed parts are marked**, not whole lines, in **two colours** (Dr. Jeong,
+  2026-11-17): red is text that the change removes, green is text that it adds. Text
+  rewritten in place is the old text in red and the new text in green; there is no
+  third colour for it. **Moved** code, which did not change, is in a blue dashed box,
+  with the line it moved to or from. A key above the diff names each colour that the
+  diff has: removed, added, "moved, not changed". Unchanged lines more than 3 lines
+  from a change fold into "N unchanged lines".
+- **One column** (Dr. Jeong, 2026-11-06 for a phone, 2026-11-17 for a computer):
+  unchanged lines once, each run of removed lines (red, old line number) directly above
+  the lines that replace it (green, new line number), with omnidiff's marks inside the
+  lines. On a computer a switch above the diff, **One column / Side by side**, puts
+  before and after next to each other; the choice is kept in the browser. A phone has
+  one column only. A rendered Markdown file and a binary file keep their own views.
+- **Functions fold** (issue 72). The first line of each function or class that holds a
+  change is always shown, however far above the change it is, so each change says
+  where it is. That line has a **Fold** button: the function's body becomes one bar,
+  "N lines folded", with "changes inside" when it hides a change. The bar, or
+  **Unfold**, opens it. A fold holds in both layouts and on both sides. **Fold all**
+  above the diff folds every function and leaves classes open; **Unfold all** opens
+  them. Folds last until the page is loaded again.
+  - Where a function is comes from the file's text: a line that starts a function in
+    the file's language, and the more indented lines under it, up to the line that
+    closes it. Python, R, JavaScript and TypeScript, shell, Nextflow, Julia, MATLAB, C
+    and C++, Go, Rust, Java, Ruby, Perl, Lua, PHP, Kotlin, Swift and C#. A file in
+    another language has no folds. A function of 1 or 2 lines has none.
 - A note when omnidiff names the shape of the change: only whitespace, only comments,
   only moved code, a new file, a deleted file.
 - **Code is coloured by its language** (issue 44): keywords, strings, numbers, comments
@@ -531,6 +547,19 @@ and Compare.
   pair (they never change), shared by everyone who can see it; asking again shows the
   kept one. If the LLM fails, the error is shown and nothing is kept.
 - The file's text is data, never instructions to the model.
+
+**Explain a function** (issue 72). The first line of a function or class in a diff
+(section 15) has an **Explain** button of its own, on a computer and a phone.
+
+- The model reads the path, the PR's title, and that function only: all its lines, with
+  the lines that the PR removes and adds marked. It does not read the rest of the file.
+- It writes 2 or 3 sentences: what the function does, what it gets, and what it gives
+  back. When the PR changes the function, 1 or 2 more: what changes, and the effect.
+- The explanation shows under the function's first line, and ✕ puts it away. It is
+  streamed, kept per function and file version pair, and shared, like the file's.
+- A function of the old file, as on the Before side or one that the PR removes, is
+  explained as it was.
+- No questions box here: questions are about the whole file's changes.
 
 **Questions about it** (issue 43). Under an explanation is a box to ask about the file's
 changes, and your questions with their answers above it, the newest last. On a computer

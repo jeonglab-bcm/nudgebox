@@ -7,7 +7,7 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import type { Page } from "playwright-core";
 import { start } from "../helpers/harness.ts";
-import { sidecar, browser, closeBrowser, DESKTOP, PHONE } from "../helpers/browser.ts";
+import { sidecar, browser, closeBrowser, DESKTOP, PHONE, sideBySide } from "../helpers/browser.ts";
 import type { Prompt } from "../../src/llm.ts";
 
 const LAB = "jeonglab-bcm/labbot";
@@ -53,6 +53,7 @@ async function open(o: { slowMs?: number; step?: number; phone?: boolean; llm?: 
 	await t.app.sync();
 	const side = await sidecar(t.base, "hyunhwanj");
 	const ctx = await (await browser()).newContext(o.phone ? PHONE : DESKTOP);
+	await sideBySide(ctx); // these tests read the two panes
 	await ctx.route("https://github.com/**", (r) => r.fulfill({ body: "github" }));
 	const page = await ctx.newPage();
 	await page.goto(side.url + GUIDE + (o.step ? `/${o.step}` : ""));

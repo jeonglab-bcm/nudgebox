@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import type { BrowserContextOptions } from "playwright-core";
 import { start } from "../helpers/harness.ts";
 import type { DiffResult } from "../../src/omnidiff.ts";
-import { sidecar, browser, closeBrowser, DESKTOP, PHONE } from "../helpers/browser.ts";
+import { sidecar, browser, closeBrowser, DESKTOP, PHONE, sideBySide } from "../helpers/browser.ts";
 
 const LAB = "jeonglab-bcm/labbot";
 after(closeBrowser);
@@ -64,6 +64,7 @@ async function open(o: { device?: BrowserContextOptions; theme?: "dark"; hash?: 
 	await t.app.sync();
 	const side = await sidecar(t.base, "hyunhwanj");
 	const ctx = await (await browser()).newContext({ ...(o.device ?? DESKTOP), ...(o.theme ? { colorScheme: o.theme } : {}) });
+	await sideBySide(ctx); // these tests read the two panes
 	const page = await ctx.newPage();
 	const asked: string[] = [];
 	page.on("request", (r) => asked.push(r.url()));

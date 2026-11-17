@@ -20,7 +20,7 @@ import type { LlmConfig, Prompt, Provider, Summarize } from "./llm.ts";
 import { issuePrompt, prPrompt, SUMMARY_FORMAT } from "./summary.ts";
 import type { Differ, DiffSide } from "./omnidiff.ts";
 import { CLAUDE_ASK, CLAUDE_WORKFLOW, claudeAsked, hasMarkers, planMerge, type ReadFile } from "./conflicts.ts";
-import { EXPLAIN_FORMAT, explainAskPrompt, explainPrompt } from "./explain.ts";
+import { EXPLAIN_FN_FORMAT, EXPLAIN_FORMAT, explainAskPrompt, explainFnPrompt, explainPrompt, fnPart } from "./explain.ts";
 import { CODE_KINDS, CodeError, type CodeIntel } from "./code.ts";
 import { fileKind, type FileKind } from "./filekind.ts";
 import { links, type Link } from "./depgraph.ts";
@@ -784,19 +784,25 @@ export function createApp(opts: AppOptions): App {
 		const { repos } = await viewOf(linked(lab));
 		const pr = b.pr && typeof b.pr.repo === "string" && Number.isInteger(b.pr.number) ? store.pr(b.pr.repo, b.pr.number) : undefined;
 		const title = pr && repos.has(pr.repo.toLowerCase()) ? pr.title : null;
-		const key = `explain:${JSON.stringify(sides.map((s) => s && [s.repo.toLowerCase(), s.ref, s.path]))}`;
-		const version = `${EXPLAIN_FORMAT}|${title ?? ""}`;
-		return { key, version, path: (sides[1] ?? sides[0])!.path, title, before, after, result: d.result };
+		// `fn`: one function of the diff, by its rows on one side; its explanation is kept on its own
+		const fn = b.fn === undefined ? null : fnPart(b.fn, before, after);
+		if (b.fn !== undefined && !fn) bad("fn must name lines of one side of the diff");
+		const pair = JSON.stringify(sides.map((s) => s && [s.repo.toLowerCase(), s.ref, s.path]));
+		const key = fn ? `explain-fn:${pair}:${fn.side}:${fn.from}-${fn.to}` : `explain:${pair}`;
+		const version = `${fn ? EXPLAIN_FN_FORMAT : EXPLAIN_FORMAT}|${title ?? ""}`;
+		return { key, version, path: (sides[1] ?? sides[0])!.path, title, before, after, result: d.result, fn };
 	}
 
 	/** SPEC 17: Explain a file's diff. The kept explanation, or the run making it, and this person's questions under it. */
 	async function explainFor(req: IncomingMessage, lab: string): Promise<({ kept: string } | { run: SummaryRun }) & { asks: object[] }> {
 		if (!ai()) throw new HttpError(503, "AI explanations are not set up");
-		const x = await explainTarget(await json(req), lab);
+		const b = await json(req);
+		const x = await explainTarget(b, lab);
 		const asks = store.asks(lab, x.key).map(({ question, answer, at }) => ({ question, answer, at }));
 		const kept = store.summary(x.key, x.version);
 		if (kept !== undefined) return { kept, asks };
-		return { run: modelRun(x.key, x.version, async () => explainPrompt(x.path, x.title, x.before, x.after, x.result)), asks };
+		const path = x.fn?.side === "before" ? (await sidesOf(b, lab))[0]!.path : x.path; // an old function is in the old file
+		return { run: modelRun(x.key, x.version, async () => (x.fn ? explainFnPrompt(path, x.title, x.fn, x.before, x.after, x.result) : explainPrompt(x.path, x.title, x.before, x.after, x.result))), asks };
 	}
 
 	/**
@@ -807,7 +813,7 @@ export function createApp(opts: AppOptions): App {
 	async function explainAskFor(req: IncomingMessage, lab: string): Promise<SummaryRun> {
 		if (!ai()) throw new HttpError(503, "AI answers are not set up");
 		const b = await json(req);
-		const x = await explainTarget(b, lab);
+		const x = await explainTarget({ ...b, fn: undefined }, lab); // a question is about the file's changes
 		const question = typeof b.question === "string" ? b.question.trim() : "";
 		if (!question) bad("the question is empty");
 		if (question.length > MAX_QUESTION) bad(`the question is too long (at most ${MAX_QUESTION} characters)`);

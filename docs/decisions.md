@@ -635,3 +635,27 @@ shown"), on a PR with 77 files.
   so the chip is not pushed away from the finger.
 - Not done: a document's line does not show which code names it (nothing reads code
   for document names), and a code file's box does not list the documents naming it.
+
+## 2026-11-17: A merge reads the whole tree
+
+Found on fossil (#70): 14 open PRs, all with conflicts, and the Resolve conflicts page
+showed one file (`.gitignore`) or none where git finds two or three (`.gitignore`,
+`README.md`, `site/index.html`).
+
+- **Cause.** What each side changed came from GitHub's compare list, which stops at
+  300 files. fossil's `main` had moved by 314 to 863 files for these PRs.
+- **What it would have done.** The merge commit keeps the PR's copy of every file past
+  the cut and leaves out the files `main` added there: 13 to 561 files wrong per PR
+  (measured on a copy of fossil's history against git's own merge). Merging such a PR
+  takes those files back out of `main`. No such commit was made: every "merge main
+  into a branch" commit in fossil is git's.
+- **Fix.** The three commits' whole file trees (GitHub's tree listing, recursive) say
+  what each side changed. Measured the same way: the same conflicts as git on all 14,
+  and no other file differs.
+- **Renames** are no longer named by GitHub; a renamed file is one removed and one
+  added. A rename against a change is still refused, now as "deleted in one branch and
+  changed in the other".
+- **A tree GitHub cuts short** (over 100,000 entries) is refused, not merged in part.
+- Not done: the Files page still reads a PR's own files from the compare list, so a PR
+  that changes more than 300 files shows the first 300. It only shows; nothing is
+  written from it.

@@ -164,6 +164,19 @@ function toChangedFile(f: RestFile): ChangedFile {
 	};
 }
 
+/**
+ * SPEC 16: the files that differ between two commits' trees (path → mode and blob), by path.
+ * No renames: a renamed file is one removed and one added, which merges the same way.
+ */
+function changedBetween(from: Map<string, string>, to: Map<string, string>): ChangedFile[] {
+	const out: ChangedFile[] = [];
+	for (const path of [...new Set([...from.keys(), ...to.keys()])].sort()) {
+		const [a, b] = [from.get(path), to.get(path)];
+		if (a !== b) out.push({ path, status: a === undefined ? "added" : b === undefined ? "removed" : "modified", additions: 0, deletions: 0 });
+	}
+	return out;
+}
+
 // -- SPEC 16: the PR page -------------------------------------------------------------
 
 const ACTOR = "actor { login } createdAt";
@@ -598,13 +611,20 @@ export class OctokitGitHub implements GitHubPort {
 			const { data: pr } = await o.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", { owner, repo: name, pull_number: number });
 			const { data: ref } = await o.request(`GET /repos/{owner}/{repo}/git/ref/${refPath(pr.base.ref)}`, { owner, repo: name });
 			const baseSha = ref.object.sha;
-			const compare = (basehead: string) => o.request("GET /repos/{owner}/{repo}/compare/{basehead}", { owner, repo: name, basehead, per_page: 300 });
-			const [{ data: head }, { data: base }] = await Promise.all([compare(`${baseSha}...${pr.head.sha}`), compare(`${pr.head.sha}...${baseSha}`)]);
+			// Only the merge base comes from compare: its list of files stops at 300, and a merge
+			// planned from a list cut short leaves the rest of the base out. Each side's changes
+			// are read from the commits' whole file trees instead.
+			const { data: cmp } = await o.request("GET /repos/{owner}/{repo}/compare/{basehead}", { owner, repo: name, basehead: `${baseSha}...${pr.head.sha}`, per_page: 1 });
+			const mergeBase = cmp.merge_base_commit.sha;
+			const files = async (sha: string) => {
+				const { data } = await o.request("GET /repos/{owner}/{repo}/git/trees/{tree_sha}", { owner, repo: name, tree_sha: sha, recursive: "1" });
+				if (data.truncated) fail(422, "this repository is too large to merge here; resolve on the command line");
+				return new Map(data.tree.filter((e) => e.type !== "tree").map((e) => [e.path, `${e.mode} ${e.sha}`]));
+			};
+			const [origin, head, base] = await Promise.all([files(mergeBase), files(pr.head.sha), files(baseSha)]);
 			return {
-				headRepo: pr.head.repo?.full_name ?? repo, headRef: pr.head.ref, headSha: pr.head.sha, baseRef: pr.base.ref, baseSha,
-				mergeBase: head.merge_base_commit.sha,
-				headFiles: (head.files ?? []).map((f) => toChangedFile({ ...f, patch: undefined })),
-				baseFiles: (base.files ?? []).map((f) => toChangedFile({ ...f, patch: undefined })),
+				headRepo: pr.head.repo?.full_name ?? repo, headRef: pr.head.ref, headSha: pr.head.sha, baseRef: pr.base.ref, baseSha, mergeBase,
+				headFiles: changedBetween(origin, head), baseFiles: changedBetween(origin, base),
 			};
 		} catch (e) {
 			if ((e as { status?: number }).status === 404) return null;

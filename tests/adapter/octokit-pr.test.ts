@@ -51,7 +51,15 @@ const PAGE = {
 	},
 };
 
-async function fakeGitHub(opts: { pending?: boolean } = {}) {
+// SPEC 16: the three commits' file trees. The base has moved by 400 files and a few more:
+// more than GitHub's compare list ever returns (300).
+const blob = (path: string, sha: string, mode = "100644") => ({ path, mode, type: "blob", sha });
+const MB_TREE = [{ path: "docs", mode: "040000", type: "tree", sha: "t-docs" }, blob("docs/a.md", "a0"), blob("keep.txt", "k0"), blob("old.txt", "o0"), blob("run.sh", "r0"), blob("src/mail.ts", "m0")];
+const HEAD_TREE = [{ path: "docs", mode: "040000", type: "tree", sha: "t-docs" }, blob("docs/a.md", "a0"), blob("keep.txt", "k0"), blob("old.txt", "o0"), blob("run.sh", "r0"), blob("src/mail.ts", "m1"), blob("src/new.ts", "n1")];
+const BASE_TREE = [{ path: "docs", mode: "040000", type: "tree", sha: "t-docs2" }, blob("docs/b.md", "a0"), blob("keep.txt", "k0"), blob("run.sh", "r0", "100755"), blob("src/mail.ts", "m0"),
+	...Array.from({ length: 400 }, (_, i) => blob(`data/f${i}.csv`, `d${i}`))];
+
+async function fakeGitHub(opts: { pending?: boolean; cut?: boolean } = {}) {
 	const seen: Seen[] = [];
 	const server = createServer((req, res) => {
 		let raw = "";
@@ -94,8 +102,11 @@ async function fakeGitHub(opts: { pending?: boolean } = {}) {
 				case `GET ${R}/labels`: return ok([{ name: "bug", color: "d73a4a", description: "Broken" }, { name: "docs", color: "0075ca", description: null }]);
 				case `GET ${R}/milestones`: return ok([{ number: 2, title: "v1.0" }]);
 				case `GET ${R}/git/ref/heads/main`: return ok({ object: { sha: "base-tip" } });
+				// the compare list is cut short, as GitHub's is: only the merge base is taken from it
 				case `GET ${R}/compare/base-tip...abc123`: return ok({ merge_base_commit: { sha: "mb" }, files: [{ filename: "src/mail.ts", status: "modified", additions: 1, deletions: 0 }] });
-				case `GET ${R}/compare/abc123...base-tip`: return ok({ merge_base_commit: { sha: "mb" }, files: [{ filename: "docs/b.md", previous_filename: "docs/a.md", status: "renamed", additions: 0, deletions: 0 }] });
+				case `GET ${R}/git/trees/mb`: return ok({ truncated: false, tree: MB_TREE });
+				case `GET ${R}/git/trees/abc123`: return ok({ truncated: false, tree: HEAD_TREE });
+				case `GET ${R}/git/trees/base-tip`: return ok({ truncated: !!opts.cut, tree: BASE_TREE });
 				// commitMerge
 				case `GET ${R}/git/commits/abc123`: return ok({ sha: "abc123", tree: { sha: "head-tree" } });
 				case `GET ${R}/git/commits/base-tip`: return ok({ sha: "base-tip", tree: { sha: "base-tree" } });
@@ -275,15 +286,29 @@ test("16. the sidebar's choices come from the repo, read as the person", async (
 	}
 });
 
-test("16. what resolving conflicts reads: both sides since the merge base, with the App's token", async () => {
+test("16. what resolving conflicts reads: every file each side changed since the merge base, with the App's token", async () => {
 	const f = await fakeGitHub();
 	try {
 		const m = (await f.gh.mergeInputs("jeonglab-bcm/labbot", 12))!;
-		assert.deepEqual({ ...m, headFiles: m.headFiles.map((x) => x.path), baseFiles: m.baseFiles.map((x) => `${x.previous}>${x.path}`) }, {
+		const line = (x: { path: string; status: string }) => `${x.status} ${x.path}`;
+		assert.deepEqual({ ...m, headFiles: m.headFiles.map(line), baseFiles: m.baseFiles.filter((x) => !x.path.startsWith("data/")).map(line) }, {
 			headRepo: "jeonglab-bcm/labbot", headRef: "feat/mail", headSha: "abc123", baseRef: "main", baseSha: "base-tip", mergeBase: "mb",
-			headFiles: ["src/mail.ts"], baseFiles: ["docs/a.md>docs/b.md"],
+			headFiles: ["modified src/mail.ts", "added src/new.ts"],
+			// a rename is a file gone and a file new; a file whose mode alone changed counts; folders do not
+			baseFiles: ["removed docs/a.md", "added docs/b.md", "removed old.txt", "modified run.sh"],
 		});
+		// all 400, not the first 300
+		assert.equal(m.baseFiles.filter((x) => x.path.startsWith("data/") && x.status === "added").length, 400);
 		assert.ok(f.seen.filter((s) => !s.path.startsWith("/app/")).every((s) => s.auth === "token inst-tok"));
+	} finally {
+		f.close();
+	}
+});
+
+test("16. a repository GitHub cannot list in full is refused, not merged in part", async () => {
+	const f = await fakeGitHub({ cut: true });
+	try {
+		await assert.rejects(f.gh.mergeInputs("jeonglab-bcm/labbot", 12), (e: any) => e.status === 422 && /too large to merge here/.test(e.message));
 	} finally {
 		f.close();
 	}

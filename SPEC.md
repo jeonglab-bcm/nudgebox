@@ -471,6 +471,11 @@ conflict editor:
   command line" and Commit merge is not offered, as on GitHub.
 - If the branch moved while you were resolving, nothing is committed and the page says
   to reload.
+- Every file each side changed is read, however far the base has moved: from the whole
+  file trees of the three commits (merge base, PR head, base tip), not from GitHub's
+  compare list, which stops at 300 files. A repository GitHub cannot list in full is
+  refused ("too large to merge here; resolve on the command line"), never merged in
+  part. A rename is read as one file removed and one added.
 
 **Fix with Claude** hands the conflicts to Claude instead (Dr. Jeong, 2026-11-12). The
 button is in the merge box beside Resolve conflicts, and on an opened row of the list
